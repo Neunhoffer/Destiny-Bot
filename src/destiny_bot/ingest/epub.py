@@ -32,7 +32,7 @@ from .html import HtmlContent, parse_html
 # Font obfuscation is not DRM: it only scrambles embedded fonts.
 _FONT_OBFUSCATION = frozenset({"http://www.idpf.org/2008/embedding", "http://ns.adobe.com/pdf/enc#RC"})
 _DRM_MESSAGE = (
-    "This e-book is DRM-protected, so it can't be opened. Destiny Bot can only read DRM-free books. "
+    "This e-book is DRM-protected, so it can't be opened. Athena can only read DRM-free books. "
     "Check whether the store or your school offers a DRM-free EPUB or a PDF of this textbook."
 )
 _BROKEN_MESSAGE = "This EPUB file couldn't be opened. It may be damaged or not really an EPUB e-book."
@@ -215,9 +215,7 @@ def load_epub(path: Path, *, source_name: str, progress: ProgressFn | None = Non
         documents.append(item)
     if not documents:
         documents = [
-            item
-            for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT)
-            if not isinstance(item, epub.EpubNav)
+            item for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT) if not isinstance(item, epub.EpubNav)
         ]
 
     # Table of contents, grouped by the document each entry points at.
@@ -294,9 +292,7 @@ def load_epub(path: Path, *, source_name: str, progress: ProgressFn | None = Non
     if unreadable:
         warnings_out.append(f"{unreadable} part(s) of this e-book couldn't be read and were skipped.")
     if not any(block.kind != BlockKind.FIGURE for sec in builder.sections for block in sec.blocks):
-        warnings_out.append(
-            "No readable text was found in this e-book. It may contain only pictures of pages."
-        )
+        warnings_out.append("No readable text was found in this e-book. It may contain only pictures of pages.")
     if progress:
         progress(1.0, "Done")
     return Document(

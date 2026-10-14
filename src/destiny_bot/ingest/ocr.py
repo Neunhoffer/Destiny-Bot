@@ -24,7 +24,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from PIL.Image import Image
 
 # How long a failed check is remembered. A short time lets the user install
-# Tesseract and try again without restarting Destiny Bot.
+# Tesseract and try again without restarting the app.
 _NEGATIVE_TTL_SECONDS = 30.0
 # Seconds Tesseract may spend on one image before we give up.
 _OCR_TIMEOUT_SECONDS = 300
@@ -98,12 +98,16 @@ def _check() -> tuple[bool, str]:
         import pytesseract
     except ImportError:
         return False, (
-            "The OCR helper isn't installed (run 'pip install pytesseract pillow'). " + install_instructions()
+            "Part of the app's OCR support is missing: reinstall the app with OCR included "
+            "(or run 'pip install pytesseract pillow'). " + install_instructions()
         )
     try:
         import PIL  # noqa: F401
     except ImportError:
-        return False, "The Pillow image library isn't installed (run 'pip install pillow'). " + install_instructions()
+        return False, (
+            "Part of the app's OCR support is missing: reinstall the app with OCR included "
+            "(or run 'pip install pillow'). " + install_instructions()
+        )
 
     _locate_tesseract(pytesseract)
     try:

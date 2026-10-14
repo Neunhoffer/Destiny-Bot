@@ -170,7 +170,11 @@ def test_html_to_blocks_maps_structure():
         (K.FOOTNOTE, "1. First footnote text."),
     ]
     assert [b.level for b in blocks if b.kind == K.HEADING] == [1, 2]
-    assert next(b for b in blocks if b.kind == K.TABLE).rows == [["Organelle", "Function"], ["Nucleus", "Stores DNA"], ["Ribosome", "Makes proteins"]]
+    assert next(b for b in blocks if b.kind == K.TABLE).rows == [
+        ["Organelle", "Function"],
+        ["Nucleus", "Stores DNA"],
+        ["Ribosome", "Makes proteins"],
+    ]
     nested = next(b for b in blocks if b.text == "Nested bullet")
     assert nested.meta["list_level"] == 2
     assert all(b.page is None for b in blocks)
@@ -186,7 +190,8 @@ def test_html_page_numbers_and_parse_details():
 def test_html_div_text_and_inline_spans_do_not_split():
     html = (
         "<body><div><span>One</span> <span>sentence</span> <a href='x'>with</a> <b>many</b> spans.</div>"
-        "<div><div>Nested <i>div</i> text.</div></div><section>Loose section text.<p>Para.</p></section></body>"
+        "<div><div>Nested <i>div</i> text.</div></div><section>Loose section text.<p>Para.</p></section>"
+        "<p>She said <q>cells divide</q>.</p></body>"
     )
     blocks, _ = html_to_blocks(html)
     assert pairs(blocks) == [
@@ -194,6 +199,7 @@ def test_html_div_text_and_inline_spans_do_not_split():
         (K.PARAGRAPH, "Nested div text."),
         (K.PARAGRAPH, "Loose section text."),
         (K.PARAGRAPH, "Para."),
+        (K.PARAGRAPH, "She said “cells divide”."),
     ]
 
 
@@ -244,6 +250,12 @@ def test_html_mathml_without_alttext_is_linearised():
     <msub><mi>y</mi><mn>0</mn></msub></mrow></math></p></body>"""
     blocks, _ = html_to_blocks(html)
     assert pairs(blocks) == [(K.EQUATION, "x^2 + (a + b)/2 = y_0")]
+    # Placeholder alt text is ignored; wide spaces separate side-by-side expressions.
+    html = """<body><math alttext="Alternative text not available"><mtable><mtr><mtd><mi>x</mi></mtd>
+    <mtd><mo>=</mo><mn>1</mn><mspace width="2em"/></mtd><mtd><mi>y</mi></mtd><mtd><mo>=</mo><mn>2</mn></mtd>
+    </mtr></mtable></math><div class="related-links"><a href="next.html">Next topic</a></div></body>"""
+    blocks, _ = html_to_blocks(html)
+    assert pairs(blocks) == [(K.EQUATION, "x = 1; y = 2")]
 
 
 def test_html_charset_detection():
@@ -253,7 +265,7 @@ def test_html_charset_detection():
     latin1_label = b'<html><head><meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1"></head>'
     blocks, _ = html_to_blocks(latin1_label + b"<body><p>\x93Smart\x94</p></body></html>")
     assert blocks[0].text == "“Smart”"  # browsers treat latin-1 labels as Windows-1252
-    blocks, _ = html_to_blocks("<p>Grüße — naïve</p>".encode("utf-8"))
+    blocks, _ = html_to_blocks("<p>Grüße — naïve</p>".encode())
     assert blocks[0].text == "Grüße — naïve"
     blocks, _ = html_to_blocks("<p>UTF-16 text</p>".encode("utf-16"))
     assert blocks[0].text == "UTF-16 text"
@@ -283,6 +295,12 @@ def test_html_old_style_breaks_and_external_note_links():
         (K.FIGURE, "Plant cell"),
         (K.FIGURE, "Animal cell"),
     ]
+
+
+def test_html_absurdly_deep_nesting_falls_back_to_flat_reading():
+    html = "<body><h1>Title</h1>" + "<div>" * 3000 + "<p>Deep text.</p><p>More <b>bold</b> text.</p>" + "</div>" * 3000
+    blocks, _ = html_to_blocks(html + "</body>")
+    assert pairs(blocks) == [(K.HEADING, "Title"), (K.PARAGRAPH, "Deep text."), (K.PARAGRAPH, "More bold text.")]
 
 
 def test_load_html_title_sections_and_dispatch(tmp_path):
@@ -363,7 +381,10 @@ def build_epub(path: Path, *, with_nav: bool = True, with_toc: bool = True) -> P
         book.add_item(item)
     if with_toc:
         book.toc = [
-            (epub.Section("Chapter 1: Cells", href="text/ch1.xhtml"), [epub.Link("text/ch1.xhtml#membranes", "1.2 Membranes", "m")]),
+            (
+                epub.Section("Chapter 1: Cells", href="text/ch1.xhtml"),
+                [epub.Link("text/ch1.xhtml#membranes", "1.2 Membranes", "m")],
+            ),
             epub.Link("text/ch2.xhtml", "Chapter 2: Energy", "c2"),
             epub.Link("text/ch3.xhtml", "Chapter 3: Genetics", "c3"),
         ]
@@ -420,7 +441,12 @@ def test_epub_uses_toc_sections_and_html_mapping(tmp_path):
 def test_epub2_ncx_table_of_contents(tmp_path):
     doc = load_document(build_epub(tmp_path / "ncx.epub", with_nav=False))
     assert_sane(doc)
-    assert [s.title for s in doc.sections] == ["Chapter 1: Cells", "1.2 Membranes", "Chapter 2: Energy", "Chapter 3: Genetics"]
+    assert [s.title for s in doc.sections] == [
+        "Chapter 1: Cells",
+        "1.2 Membranes",
+        "Chapter 2: Energy",
+        "Chapter 3: Genetics",
+    ]
 
 
 def test_epub_without_toc_splits_by_headings(tmp_path):
@@ -529,7 +555,9 @@ def build_docx(path: Path) -> Path:
     p.add_run(".")
 
     p = d.add_paragraph("Mitochondria ")
-    p._p.append(parse_xml(f'<w:del {nsdecls("w")} w:id="1" w:author="x"><w:r><w:delText>destroy</w:delText></w:r></w:del>'))
+    p._p.append(
+        parse_xml(f'<w:del {nsdecls("w")} w:id="1" w:author="x"><w:r><w:delText>destroy</w:delText></w:r></w:del>')
+    )
     p._p.append(parse_xml(f'<w:ins {nsdecls("w")} w:id="2" w:author="x"><w:r><w:t>make</w:t></w:r></w:ins>'))
     p.add_run(" energy.")
 
@@ -550,7 +578,7 @@ def build_docx(path: Path) -> Path:
     p.add_run(" stays constant.")
 
     footnotes = (
-        f'<w:footnotes {nsdecls("w")}>'
+        f"<w:footnotes {nsdecls('w')}>"
         '<w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>'
         '<w:footnote w:id="1"><w:p><w:r><w:footnoteRef/></w:r>'
         '<w:r><w:t xml:space="preserve"> Hooke first saw cells in cork.</w:t></w:r></w:p></w:footnote>'
@@ -736,8 +764,9 @@ def build_pptx(path: Path) -> Path:
     chart.chart_title.text_frame.text = "Cell counts"
 
     s4 = prs.slides.add_slide(prs.slide_layouts[6])
-    s4.shapes.add_picture(io.BytesIO(png_bytes()), Inches(1), Inches(5)).\
-        _element.nvPicPr.cNvPr.set("descr", "Microscope photo of cheek cells")
+    s4.shapes.add_picture(io.BytesIO(png_bytes()), Inches(1), Inches(5))._element.nvPicPr.cNvPr.set(
+        "descr", "Microscope photo of cheek cells"
+    )
     group = s4.shapes.add_group_shape()
     group.shapes.add_textbox(Inches(5), Inches(2), Inches(3), Inches(1)).text_frame.text = "Right column"
     group.shapes.add_textbox(Inches(0.5), Inches(2.1), Inches(3), Inches(1)).text_frame.text = "Left column"
@@ -927,7 +956,9 @@ def test_markdown_blocks():
 
 
 def test_markdown_indented_code_and_html_lines():
-    blocks = markdown_blocks("# T\n\nPara one.\n\n    indented code\n    more\n\n<div align=\"center\">\n\nCentered text\n\n</div>\n")
+    blocks = markdown_blocks(
+        '# T\n\nPara one.\n\n    indented code\n    more\n\n<div align="center">\n\nCentered text\n\n</div>\n'
+    )
     assert pairs(blocks) == [
         (K.HEADING, "T"),
         (K.PARAGRAPH, "Para one."),
@@ -1045,7 +1076,9 @@ def test_text_file_windows_line_endings_and_title(tmp_path):
 
 def test_markdown_file_title_and_type(tmp_path):
     path = tmp_path / "notes.md"
-    path.write_text("# Cell Theory\n\nAll living things are made of cells.\n\n## History\n\nHooke, 1665.\n", encoding="utf-8")
+    path.write_text(
+        "# Cell Theory\n\nAll living things are made of cells.\n\n## History\n\nHooke, 1665.\n", encoding="utf-8"
+    )
     doc = load_document(path)
     assert_sane(doc)
     assert doc.source_type == "md" and doc.title == "Cell Theory"
@@ -1095,7 +1128,7 @@ def test_document_from_text_paste():
 # --------------------------------------------------------------------------- OCR and images
 
 
-def render_text_image(lines: list[str], *, size: int = 40, width: int = 1300) -> "Image.Image":
+def render_text_image(lines: list[str], *, size: int = 40, width: int = 1300):
     from PIL import Image, ImageDraw, ImageFont
 
     font = ImageFont.load_default(size=size)
@@ -1135,7 +1168,9 @@ def test_ocr_image_bytes_reads_rendered_text(fresh_ocr_cache):
     from PIL import Image, ImageDraw, ImageFont
 
     small = Image.new("RGBA", (420, 60), (0, 0, 0, 0))
-    ImageDraw.Draw(small).text((10, 15), "Tiny transparent text", fill=(0, 0, 0, 255), font=ImageFont.load_default(size=18))
+    ImageDraw.Draw(small).text(
+        (10, 15), "Tiny transparent text", fill=(0, 0, 0, 255), font=ImageFont.load_default(size=18)
+    )
     assert "Tiny transparent text" in ocr_module.ocr_image_bytes(_image_bytes(small))
 
 

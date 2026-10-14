@@ -34,7 +34,8 @@ _QUOTE_STYLES = frozenset({"quote", "intense quote", "block text"})
 _CODE_STYLES = frozenset({"source code", "html preformatted", "code", "macro text"})
 _FALSE = frozenset({"0", "false", "off"})
 _INLINE_CONTAINERS = frozenset(
-    _W + name for name in ("hyperlink", "ins", "moveTo", "smartTag", "customXml", "fldSimple", "bdo", "dir", "sdtContent")
+    _W + name
+    for name in ("hyperlink", "ins", "moveTo", "smartTag", "customXml", "fldSimple", "bdo", "dir", "sdtContent")
 )
 _XML_PARSER = etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=True)
 
@@ -71,9 +72,7 @@ def omml_text(element) -> str:
 
     def children() -> str:
         return "".join(
-            omml_text(child)
-            for child in element
-            if isinstance(child.tag, str) and not _local(child.tag).endswith("Pr")
+            omml_text(child) for child in element if isinstance(child.tag, str) and not _local(child.tag).endswith("Pr")
         )
 
     def prop(container: str, tag: str, default: str) -> str:

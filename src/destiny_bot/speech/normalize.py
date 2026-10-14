@@ -237,17 +237,19 @@ _LOCWORD = (
     r"|nn?|notes?|fn|footnotes?|ll?|lines?|cols?|pages?)"
 )
 _LOCNUM = r"[\dIVXLCivxlc]+[a-z]?(?:\s*[-–—]\s*[\dIVXLCivxlc]+[a-z]?)?"
+# Each repetition below starts with a distinct token so the regex never has two ways to read
+# the same text (which would make a near-miss take exponential time).
 _LOCATOR = (
-    rf"(?:\s*[,:]\s*(?:{_LOCWORD}\.?\s*)?{_LOCNUM}(?:\s*(?:,|and|&)\s*{_LOCNUM})*"
+    rf"(?:\s*[,:]\s*(?:{_LOCWORD}\.?\s*)?{_LOCNUM}|\s*(?:and|&)\s*{_LOCNUM}"
     r"|\s*,\s*(?i:emphasis|italics)\s+(?i:added|in\s+original|mine|ours))*"
 )
 _PREFIX = (
-    r"(?:(?i:see\s+also|see|e\.\s?g\.|i\.\s?e\.|cf\.?|but\s+see|compare|contra|for\s+(?:a\s+)?(?:recent\s+)?"
-    r"reviews?,?\s+see|for\s+example|for\s+instance|as\s+cited\s+in|cited\s+in|quoted\s+in|reviewed\s+in|"
-    r"adapted\s+from|modified\s+from|reprinted\s+from|redrawn\s+from|reproduced\s+from|data\s+from|"
-    r"based\s+on|sources?\s*:|also)\s*,?\s*)"
+    r"(?:(?i:see(?:\s+also)?|e\.\s?g\.|i\.\s?e\.|cf\.?|but\s+see|compare|contra|"
+    r"for\s+(?:a\s+)?(?:recent\s+)?reviews?,?\s+see|for\s+example|for\s+instance|as\s+cited\s+in|cited\s+in|"
+    r"quoted\s+in|reviewed\s+in|adapted\s+from|modified\s+from|reprinted\s+from|redrawn\s+from|"
+    r"reproduced\s+from|data\s+from|based\s+on|sources?\s*:)(?:\s*,\s*|\s+))"
 )
-_ITEM = rf"{_PREFIX}*{_AUTHORS}(?:\s*,\s*|\s+){_YEARS}{_LOCATOR}"
+_ITEM = rf"{_PREFIX}{{0,2}}{_AUTHORS}(?:\s*,\s*|\s+){_YEARS}{_LOCATOR}"
 _ITEM_SEP = r"(?:\s*;\s*|\s*,\s*(?=(?i:see|cf|as\s+cited|cited|quoted|reviewed)\b))"
 _CITE_CONTENT = re.compile(rf"\s*{_ITEM}(?:{_ITEM_SEP}{_ITEM})*\s*[.;,]?\s*")
 _YEARISH = re.compile(r"(?:1[5-9]|20)\d\d|n\.\s?d\.|(?i:in\s+press|forthcoming|preparation|under\s+review|submitted|unpublished)")
@@ -950,9 +952,9 @@ _NUMBER_TOKEN = re.compile(r"^[-−]?(?:\d[\d,]*(?:\.\d+)?|\.\d+)%?$")
 
 def _is_operand(token: str) -> bool:
     """A number, a single-letter variable, a Greek-letter name, or a bracketed expression."""
+    token = token.strip("$£€")
     if not token:
         return False
-    token = token.strip("$£€")
     if _NUMBER_TOKEN.match(token):
         return True
     core = token.strip("'′")
@@ -1009,7 +1011,7 @@ def _spaced_hyphen(m: re.Match[str]) -> str:
     right = _right_token(m.string, m.end())
     left_num, right_num = _NUMBER_TOKEN.match(left), _NUMBER_TOKEN.match(right)
     if left_num and right_num:
-        if "=" in m.string:
+        if "=" in m.string or " equals " in m.string:
             return " minus "
         try:
             rising = float(left.replace(",", "").rstrip("%")) < float(right.replace(",", "").rstrip("%"))
@@ -1282,7 +1284,6 @@ _TIDY_STEPS = _steps(
     (r"[,;:]\s*([.!?])", r"\1", ""),
     (r",(?=\S)(?!\d)", ", ", ","),
     (r"^[\s,;:.)\]}]+", "", ""),
-    (r"[\s,;:]+$", "", ""),
 )
 
 
@@ -1409,9 +1410,12 @@ class _MathItem:
 
 
 class _MathParser:
+    MAX_DEPTH = 40  # deeper nesting is read flat (and keeps us far from Python's recursion limit)
+
     def __init__(self, source: str) -> None:
-        self.toks = [t for t in _MATH_TOKEN.findall(source)]
+        self.toks = _MATH_TOKEN.findall(source)
         self.i = 0
+        self.depth = 0
 
     # -- token helpers
     def peek(self, skip_space: bool = True) -> str | None:
@@ -1462,14 +1466,22 @@ class _MathParser:
     # -- grammar
     def parse(self, stops: frozenset[str] = frozenset()) -> tuple[str, bool]:
         items: list[_MathItem] = []
-        while True:
-            tok = self.peek()
-            if tok is None or tok in stops:
-                break
-            item = self.item()
-            if item is not None:
-                items.append(item)
+        self.depth += 1
+        try:
+            while True:
+                tok = self.peek()
+                if tok is None or tok in stops:
+                    break
+                item = self.item()
+                if item is not None:
+                    items.append(item)
+        finally:
+            self.depth -= 1
         return _join_math(items)
+
+    @property
+    def too_deep(self) -> bool:
+        return self.depth > self.MAX_DEPTH
 
     def arg(self) -> tuple[str, bool]:
         """One argument: a {group}, a (group), or a single (possibly signed) token."""
@@ -1484,7 +1496,13 @@ class _MathParser:
             return (item.words, item.complex) if item else ("", False)
         if tok in ("-", "+"):
             self.take()
-            words, _ = self.arg()
+            if self.too_deep:
+                return "", False
+            self.depth += 1
+            try:
+                words, _ = self.arg()
+            finally:
+                self.depth -= 1
             return ("minus " if tok == "-" else "plus ") + words, True
         item = self.item(postfix=False)
         if item is None:
@@ -1503,6 +1521,8 @@ class _MathParser:
         return item
 
     def primary(self, tok: str) -> _MathItem | None:
+        if self.too_deep and tok in ("{", "(", "[", "|", "\\{", "\\lbrace", "\\|"):
+            return None
         if tok == "{":
             words, cx = self.parse(frozenset({"}"}))
             self.take()
@@ -1590,16 +1610,20 @@ class _MathParser:
         if name == "sqrt":
             index = self.optional_bracket()
             body, cx = self.arg()
-            root = _MATH_ROOTS.get(index or "2", f"{index}-th" if index else "square")
+            if index is None or index in _MATH_ROOTS:
+                root = _MATH_ROOTS.get(index or "2", "square")
+            else:
+                index_words, _ = _MathParser(index).parse()
+                root = f"{index_words}-th" if re.fullmatch(r"\w+", index_words) else "nth"
             return _MathItem(f"the {root} root of {body}" + ("," if cx else ""), "atom", True)
         if name == "binom":
             n, _ = self.arg()
             k, _ = self.arg()
             return _MathItem(f"{n} choose {k}", "atom", True)
         if name in _MATH_TEXT:
-            return _MathItem(self.raw_group().strip())
+            return _MathItem(re.sub(r"\\[A-Za-z]*|[{}$^_]", " ", self.raw_group()).strip())
         if name == "mathbb":
-            raw = self.raw_group().strip()
+            raw = re.sub(r"[\\{}]", "", self.raw_group()).strip()
             return _MathItem(_MATH_SETS.get(raw, raw))
         if name in _MATH_FONTS:
             if self.peek() == "{":
@@ -1756,9 +1780,12 @@ def verbalize_math(text: str) -> str:
         src = _SUB_RUN.sub(lambda m: "_{" + m.group().translate(_SUB_MAP) + "}", src)
         src = "".join(_MATH_UNICODE.get(ch) or _GREEK_TO_CMD.get(ch) or ch for ch in src)
     src = _LINEAR_FUNCS.sub(r"\\\1 ", src)
-    words, _ = _MathParser(src).parse()
+    try:
+        words, _ = _MathParser(src).parse()
+    except RecursionError:  # pathological nesting: read the symbols that are there
+        words = re.sub(r"[\\{}^_]", " ", src)
     words = _WS.sub(" ", words)
     words = re.sub(r"\s+([,;.])", r"\1", words)
     words = re.sub(r"([,;])(?:\s*[,;])+", r"\1", words)
-    words = re.sub(r"^[\s,;]+|[\s,;]+$", "", words)
-    return words if _SPEAKABLE.search(words) else ""
+    words = re.sub(r"^[\s,;]+|[\s,;]+$", "", words.replace("\\", " "))
+    return _WS.sub(" ", words).strip() if _SPEAKABLE.search(words) else ""

@@ -30,10 +30,29 @@ from destiny_bot.tts.base import AudioClip, EngineUnavailable, TTSError
 from destiny_bot.tts.browser_engine import BrowserEngine
 from destiny_bot.tts.cache import AudioCache
 from destiny_bot.tts.edge_engine import NETWORK_ERROR, EdgeEngine
+from destiny_bot.tts.kokoro_engine import NO_MODEL_REASON, NO_PACKAGE_REASON, KokoroEngine
 from destiny_bot.tts.piper_engine import NO_VOICE_REASON, PiperEngine
 from destiny_bot.tts.system_engine import SystemEngine
 
 HAS_ESPEAK = bool(shutil.which("espeak-ng") or shutil.which("espeak"))
+
+
+@pytest.fixture(autouse=True)
+def no_bundled_voices(monkeypatch):
+    """Tests opt in to bundled voice folders explicitly."""
+    monkeypatch.delenv(catalog.EXTRA_DIRS_ENV, raising=False)
+
+
+@pytest.fixture
+def kokoro_model_dir() -> Path:
+    """A folder with a real Kokoro model + voices-v1.0.bin, or skip.
+
+    Set DESTINY_TEST_KOKORO_DIR to run the real Kokoro tests.
+    """
+    value = os.environ.get("DESTINY_TEST_KOKORO_DIR")
+    if not value or catalog.find_kokoro_model(Path(value)) is None:
+        pytest.skip("set DESTINY_TEST_KOKORO_DIR to a folder with a Kokoro model to run this test")
+    return Path(value)
 
 
 # --------------------------------------------------------------------------- helpers
@@ -124,13 +143,15 @@ def fake_piper(monkeypatch):
 
 
 def test_get_engine_singletons_and_unknown():
-    assert registry.ENGINE_NAMES == ("piper", "system", "edge", "browser")
+    assert registry.ENGINE_NAMES == ("kokoro", "piper", "system", "edge", "browser")
+    assert registry.AUTO_ORDER == ("kokoro", "piper", "system", "browser")
     assert registry.get_engine("piper") is registry.get_engine("piper")
     assert [e.name for e in registry.all_engines()] == list(registry.ENGINE_NAMES)
     with pytest.raises(KeyError):
         registry.get_engine("nope")
     labels = {e.name: (e.label, e.online) for e in registry.all_engines()}
     assert labels == {
+        "kokoro": ("Kokoro (most natural, offline)", False),
         "piper": ("Piper (natural, offline)", False),
         "system": ("System voice (offline)", False),
         "edge": ("Microsoft online voices", True),
@@ -141,7 +162,7 @@ def test_get_engine_singletons_and_unknown():
 @pytest.fixture
 def availability(monkeypatch):
     """Control each engine's is_available() through a dict."""
-    state = {"piper": True, "system": True, "edge": True, "browser": True}
+    state = {"kokoro": False, "piper": True, "system": True, "edge": True, "browser": True}
     for name in registry.ENGINE_NAMES:
         engine = registry.get_engine(name)
         monkeypatch.setattr(engine, "is_available", lambda n=name: (state[n], "" if state[n] else "nope"))
@@ -171,6 +192,15 @@ def test_resolve_explicit_and_fallbacks(availability):
     assert registry.resolve_engine("edge", online_allowed=True).name == "system"
 
 
+def test_resolve_prefers_kokoro_when_installed(availability):
+    availability["kokoro"] = True
+    assert registry.resolve_engine("auto", online_allowed=False).name == "kokoro"
+    assert registry.resolve_engine("piper", online_allowed=False).name == "piper"  # an explicit choice is kept
+    assert registry.resolve_engine("edge", online_allowed=False).name == "kokoro"
+    availability["kokoro"] = False
+    assert registry.resolve_engine("kokoro", online_allowed=False).name == "piper"
+
+
 def test_resolve_survives_broken_engine(availability, monkeypatch):
     def boom():
         raise RuntimeError("broken")
@@ -180,7 +210,7 @@ def test_resolve_survives_broken_engine(availability, monkeypatch):
 
 
 def test_resolve_real_auto_without_voices():
-    # No Piper voice in the fresh data folder: auto skips Piper.
+    # No Kokoro pack or Piper voice in the fresh data folder: auto skips both.
     engine = registry.resolve_engine("auto", online_allowed=False)
     assert engine.name == ("system" if HAS_ESPEAK else "browser")
 
@@ -390,6 +420,216 @@ def test_piper_real_concurrent(piper_voice_path):
         t.join()
     assert not errors and len(results) == 4
     assert all(wav_seconds(c.data) > 0.5 for c in results)
+
+
+# --------------------------------------------------------------------------- kokoro
+
+
+def write_fake_kokoro(folder: Path, voices: tuple[str, ...] = ("af_heart", "bm_george", "af_bella", "qq_odd"),
+                      variant: str = "int8") -> tuple[Path, Path]:
+    """A fake Kokoro install: a (non-ONNX) model file and a real .npz voice table."""
+    np = pytest.importorskip("numpy")
+    folder.mkdir(parents=True, exist_ok=True)
+    model = folder / catalog.KOKORO_FILES[variant].name
+    model.write_bytes(b"fake onnx model")
+    table = folder / catalog.KOKORO_FILES["voices"].name
+    with open(table, "wb") as fh:
+        np.savez(fh, **{v: np.zeros((510, 1, 256), dtype=np.float32) for v in voices})
+    return model, table
+
+
+class FakeKokoro:
+    """Stands in for kokoro_onnx.Kokoro: speech is a 0.5 s / speed tone."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, float, str]] = []
+        self.active = 0
+        self.max_active = 0
+        self._guard = threading.Lock()
+
+    def create(self, text, voice, speed=1.0, lang="en-us"):
+        import numpy as np
+
+        if not any(ch.isalnum() for ch in text):
+            raise ValueError(f"Nothing to synthesize, {text!r} produced no phonemes")
+        with self._guard:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        time.sleep(0.01)
+        self.calls.append((text, voice, speed, lang))
+        n = int(24000 * 0.5 / speed)
+        samples = 0.5 * np.sin(2 * np.pi * 200 * np.arange(n) / 24000)
+        with self._guard:
+            self.active -= 1
+        return samples.astype(np.float32), 24000
+
+
+@pytest.fixture
+def fake_kokoro(monkeypatch):
+    write_fake_kokoro(config.voices_dir() / "kokoro")
+    fake = FakeKokoro()
+    loads: list[tuple[Path, Path]] = []
+
+    def load(self, model, voices):
+        loads.append((model, voices))
+        return fake
+
+    monkeypatch.setattr(KokoroEngine, "_load", load)
+    engine = KokoroEngine()
+    engine.fake = fake  # type: ignore[attr-defined]
+    engine.loads = loads  # type: ignore[attr-defined]
+    return engine
+
+
+def test_kokoro_unavailable_reasons(monkeypatch):
+    engine = KokoroEngine()
+    assert engine.is_available() == (False, NO_MODEL_REASON)
+    assert "Settings → Voices" in NO_MODEL_REASON and "115 MB" in NO_MODEL_REASON
+    assert engine.list_voices() == [] and engine.default_voice() is None
+    with pytest.raises(EngineUnavailable, match="Kokoro voice pack"):
+        engine.synthesize("Hello")
+    write_fake_kokoro(config.voices_dir() / "kokoro")
+    assert engine.is_available() == (True, "")
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", None)  # package missing
+    fresh = KokoroEngine()
+    assert fresh.is_available() == (False, NO_PACKAGE_REASON)
+    with pytest.raises(EngineUnavailable, match="kokoro-onnx"):
+        fresh.synthesize("Hello")
+
+
+def test_kokoro_lists_curated_voices(fake_kokoro):
+    voices = fake_kokoro.list_voices()
+    assert [v.id for v in voices] == ["af_heart", "af_bella", "bm_george"]  # curated order, odd ones hidden
+    assert voices[0].name == "Heart (US English, female)" and voices[0].language == "en-US"
+    assert voices[2].language == "en-GB" and voices[2].gender == "male"
+    assert all(v.engine == "kokoro" and not v.online for v in voices)
+    assert fake_kokoro.default_voice() == "af_heart"
+
+
+def test_kokoro_speed_and_languages(fake_kokoro):
+    fake = fake_kokoro.fake
+    normal = fake_kokoro.synthesize("Hello there.")
+    assert normal.mime == "audio/wav" and normal.sample_rate == 24000
+    assert wav_seconds(normal.data) == pytest.approx(0.5, abs=0.001)
+    durations = {}
+    for rate in (0.25, 0.5, 1.5, 2.0, 3.0, 4.0):
+        durations[rate] = wav_seconds(fake_kokoro.synthesize("Hello there.", "bm_george", rate).data)
+    speeds = [c[2] for c in fake.calls[1:]]
+    assert speeds == [0.5, 0.5, 1.5, 2.0, 2.0, 2.0]  # Kokoro's own range is 0.5-2.0
+    assert {c[3] for c in fake.calls[1:]} == {"en-gb"} and fake.calls[0][1:] == ("af_heart", 1.0, "en-us")
+    # Outside 0.5-2.0 the rest is a pitch-preserving time-stretch, so speed stays exact.
+    assert durations[0.25] == pytest.approx(2.0, abs=0.002)
+    assert durations[3.0] == pytest.approx(0.5 / 3, abs=0.002)
+    assert durations[4.0] == pytest.approx(0.125, abs=0.002)
+    assert fake_kokoro.loads == [(config.voices_dir() / "kokoro" / "kokoro-v1.0.int8.onnx",
+                                  config.voices_dir() / "kokoro" / "voices-v1.0.bin")]  # fmt: skip
+
+
+def test_kokoro_errors(fake_kokoro):
+    with pytest.raises(EngineUnavailable, match="isn't available"):
+        fake_kokoro.synthesize("Hello", "af_missing")
+    with pytest.raises(EngineUnavailable):
+        fake_kokoro.synthesize("Hello", "qq_odd")  # in the table, but no known language
+    with pytest.raises(TTSError):
+        fake_kokoro.synthesize("   ")
+    pause = fake_kokoro.synthesize("...")
+    assert wav_seconds(pause.data) == pytest.approx(0.2, abs=0.001)
+
+
+def test_kokoro_thread_safe_single_load(fake_kokoro):
+    errors: list[BaseException] = []
+    results: list[AudioClip] = []
+
+    def work():
+        try:
+            for _ in range(4):
+                results.append(fake_kokoro.synthesize("Hello there.", rate=1.0))
+        except BaseException as exc:  # pragma: no cover
+            errors.append(exc)
+
+    threads = [threading.Thread(target=work) for _ in range(5)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors and len(results) == 20
+    assert len(fake_kokoro.loads) == 1 and fake_kokoro.fake.max_active == 1
+
+
+def test_kokoro_reloads_when_files_change(fake_kokoro):
+    fake_kokoro.synthesize("Hi")
+    model = config.voices_dir() / "kokoro" / "kokoro-v1.0.int8.onnx"
+    model.write_bytes(b"a different fake model")
+    fake_kokoro.synthesize("Hi")
+    assert len(fake_kokoro.loads) == 2
+
+
+def test_kokoro_damaged_model_is_friendly():
+    write_fake_kokoro(config.voices_dir() / "kokoro")
+    with pytest.raises(EngineUnavailable, match="damaged"):
+        KokoroEngine().synthesize("Hello")
+
+
+def test_physical_cores(monkeypatch):
+    from destiny_bot.tts import kokoro_engine
+
+    cores = kokoro_engine.physical_cores()
+    assert 1 <= cores <= (os.cpu_count() or 1)
+    monkeypatch.setattr(sys, "platform", "sunos5")
+    monkeypatch.setattr(os, "cpu_count", lambda: 8)
+    assert kokoro_engine.physical_cores() == 4  # unknown OS: assume hyper-threading
+    monkeypatch.setattr(os, "cpu_count", lambda: 2)
+    assert kokoro_engine.physical_cores() == 2
+
+
+def test_kokoro_real_synthesis(kokoro_model_dir, monkeypatch):
+    np = pytest.importorskip("numpy")
+    monkeypatch.setenv(catalog.EXTRA_DIRS_ENV, str(kokoro_model_dir.parent))
+    if kokoro_model_dir.name != "kokoro":
+        engine = KokoroEngine(kokoro_model_dir)
+    else:
+        engine = KokoroEngine()
+    assert engine.is_available() == (True, "")
+    assert engine.default_voice() == "af_heart"
+    assert {"af_heart", "am_michael", "bf_emma", "bm_george"} <= {v.id for v in engine.list_voices()}
+    text = "The mitochondria release energy from food during cellular respiration."
+    clip = engine.synthesize(text)
+    pcm, rate, channels, width = audio.read_wav(clip.data)
+    assert clip.mime == "audio/wav" and (clip.sample_rate, rate, channels, width) == (24000, 24000, 1, 2)
+    samples = np.frombuffer(pcm, dtype="<i2").astype(float)
+    normal = len(samples) / rate
+    assert 2.0 < normal < 8.0
+    assert 3000 < np.abs(samples).max() < 32767  # loud enough, never clipped
+    assert np.mean(np.abs(samples) >= 32766) == 0
+    # Most energy sits in the speech band, and there is no DC offset.
+    spectrum = np.abs(np.fft.rfft(samples)) ** 2
+    freqs = np.fft.rfftfreq(len(samples), 1 / rate)
+    assert spectrum[(freqs > 80) & (freqs < 4000)].sum() / spectrum.sum() > 0.8
+    assert abs(samples.mean()) < 50
+    durations = [wav_seconds(engine.synthesize(text, rate=r).data) for r in (0.5, 2.0, 3.0)]
+    assert durations[0] > normal * 1.6 and durations[1] < normal * 0.7
+    assert durations[2] == pytest.approx(durations[1] * 2 / 3, rel=0.15)  # 2.0 native, then stretched
+    british = engine.synthesize("Hello from London.", "bm_george")
+    assert wav_seconds(british.data) > 0.5
+
+
+def test_kokoro_real_concurrent(kokoro_model_dir):
+    engine = KokoroEngine(kokoro_model_dir)
+    results: list[AudioClip] = []
+    errors: list[BaseException] = []
+
+    def work(i: int) -> None:
+        try:
+            results.append(engine.synthesize(f"This is sentence number {i}."))
+        except BaseException as exc:  # pragma: no cover
+            errors.append(exc)
+
+    threads = [threading.Thread(target=work, args=(i,)) for i in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors and len(results) == 3 and all(wav_seconds(c.data) > 0.8 for c in results)
 
 
 # --------------------------------------------------------------------------- system: Linux (real espeak-ng)
@@ -788,9 +1028,12 @@ def test_catalog_entries():
     assert all(catalog.is_valid_voice_id(i) for i in ids)
     lessac = catalog.catalog_voice("en_US-lessac-medium")
     assert lessac is not None and lessac.recommended and 55 < lessac.size_mb < 70
-    assert [v.id for v in catalog.CATALOG if v.recommended] == ["en_US-lessac-medium"]
+    assert [v.id for v in catalog.CATALOG if v.recommended] == ["kokoro-v1.0", "en_US-lessac-medium"]
+    kokoro = catalog.catalog_voice("kokoro-v1.0")
+    assert kokoro is not None and kokoro.engine == "kokoro" and 115 < kokoro.size_mb < 125
+    assert all(v.engine == "piper" for v in catalog.CATALOG if v.id != "kokoro-v1.0")
     assert {"es_ES-davefx-medium", "es_MX-ald-medium", "en_GB-cori-high"} <= set(ids)
-    assert all(v.description and v.language.count("-") == 1 for v in catalog.CATALOG)
+    assert all(v.description and v.language.count("-") == 1 for v in catalog.CATALOG if v.engine == "piper")
 
 
 def test_voice_urls_match_piper_downloader():
@@ -939,6 +1182,128 @@ def test_download_network_failure():
     with pytest.raises(catalog.VoiceDownloadError) as info:
         catalog.download_piper_voice("en_US-amy-medium", base_url=f"http://127.0.0.1:{port}")
     assert str(info.value) == "Couldn't download the voice. Check your internet connection."
+
+
+# --------------------------------------------------------------------------- bundled voice folders
+
+
+def test_extra_voice_dirs_for_piper(tmp_path, monkeypatch):
+    bundle_a, bundle_b = tmp_path / "bundle-a", tmp_path / "bundle-b"
+    for bundle, vid in ((bundle_a, "en_US-amy-medium"), (bundle_b, "en_US-joe-medium"), (bundle_b, "en_US-lessac-medium")):
+        folder = bundle / "piper"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"{vid}.onnx").write_bytes(b"bundled")
+        (folder / f"{vid}.onnx.json").write_text('{"language": {"code": "en_US"}}')
+    monkeypatch.setenv(catalog.EXTRA_DIRS_ENV, os.pathsep.join([str(bundle_a), "", str(tmp_path / "missing"), str(bundle_b)]))
+    assert catalog.extra_voice_dirs() == [bundle_a, tmp_path / "missing", bundle_b]
+    downloaded = install_fake_voice("en_US-amy-medium")  # same id as a bundled voice: the download wins
+    found = catalog.installed_piper_voices()
+    assert found == [downloaded, bundle_b / "piper" / "en_US-joe-medium.onnx", bundle_b / "piper" / "en_US-lessac-medium.onnx"]
+    assert catalog.installed_piper_voices(piper_dir()) == [downloaded]  # an explicit folder is searched alone
+    engine = PiperEngine()
+    assert engine.is_available() == (True, "") and engine.default_voice() == "en_US-lessac-medium"
+    assert [v.id for v in engine.list_voices()] == ["en_US-lessac-medium", "en_US-amy-medium", "en_US-joe-medium"]
+    assert catalog.installed_catalog_ids() == {"en_US-amy-medium", "en_US-joe-medium", "en_US-lessac-medium"}
+    # Bundled voices count as installed: no download needed (and no network touched).
+    assert catalog.download_piper_voice("en_US-joe-medium", base_url="http://127.0.0.1:9") == bundle_b / "piper" / "en_US-joe-medium.onnx"
+    # The read-only bundle is never written to.
+    assert sorted(p.name for p in (bundle_b / "piper").iterdir()) == [
+        "en_US-joe-medium.onnx", "en_US-joe-medium.onnx.json", "en_US-lessac-medium.onnx", "en_US-lessac-medium.onnx.json"]  # fmt: skip
+
+
+def test_extra_voice_dirs_for_kokoro(tmp_path, monkeypatch):
+    bundle = tmp_path / "bundle"
+    bundled_model, bundled_table = write_fake_kokoro(bundle / "kokoro")
+    monkeypatch.setenv(catalog.EXTRA_DIRS_ENV, str(bundle))
+    assert catalog.find_kokoro_model() == (bundled_model, bundled_table)
+    assert "kokoro-v1.0" in catalog.installed_catalog_ids()
+    assert KokoroEngine().is_available() == (True, "")
+    # A downloaded model wins over the bundled one, whatever its variant.
+    user_model, user_table = write_fake_kokoro(config.voices_dir() / "kokoro", variant="fp32")
+    assert catalog.find_kokoro_model() == (user_model, user_table)
+    # Inside one folder the default (int8) variant is preferred unless one is asked for.
+    int8_model, _ = write_fake_kokoro(config.voices_dir() / "kokoro", variant="int8")
+    assert catalog.find_kokoro_model() == (int8_model, user_table)
+    assert catalog.find_kokoro_model(variant="fp32") == (user_model, user_table)
+    # A model without its voice table doesn't count.
+    user_table.unlink()
+    assert catalog.find_kokoro_model() == (bundled_model, bundled_table)
+    assert catalog.download_kokoro_model(base_url="http://127.0.0.1:9") == bundled_model  # already there
+
+
+# --------------------------------------------------------------------------- kokoro downloader
+
+
+@pytest.fixture
+def kokoro_release(voice_server, monkeypatch):
+    """Fake release files on the local server, with KOKORO_FILES pointing at their hashes."""
+    contents = {"voices": os.urandom(300_000), "int8": os.urandom(700_000), "fp32": os.urandom(1_100_000)}
+    files = {}
+    for key, data in contents.items():
+        name = catalog.KOKORO_FILES[key].name
+        (voice_server.root / name).write_bytes(data)
+        files[key] = catalog.KokoroFile(name, len(data), hashlib.sha256(data).hexdigest())
+    monkeypatch.setattr(catalog, "KOKORO_FILES", files)
+    return contents
+
+
+def test_kokoro_download_success(voice_server, kokoro_release):
+    events: list[tuple[float, str]] = []
+    model = catalog.download_kokoro_model(base_url=voice_server.url, progress=lambda f, m: events.append((f, m)))
+    folder = config.voices_dir() / "kokoro"
+    assert model == folder / "kokoro-v1.0.int8.onnx" and model.read_bytes() == kokoro_release["int8"]
+    assert (folder / "voices-v1.0.bin").read_bytes() == kokoro_release["voices"]
+    assert _leftovers(folder) == ["kokoro-v1.0.int8.onnx", "voices-v1.0.bin"]
+    fractions = [f for f, _ in events]
+    assert fractions == sorted(fractions) and fractions[-1] == 1.0
+    assert any(m.startswith("Downloading Kokoro voice pack: ") and m.endswith("of 1.0 MB") for _, m in events)
+    assert voice_server.requests == ["/voices-v1.0.bin", "/kokoro-v1.0.int8.onnx"]
+    assert catalog.find_kokoro_model() == (model, folder / "voices-v1.0.bin")
+    # Installed now: nothing is fetched again.
+    assert catalog.download_kokoro_model(base_url=voice_server.url) == model
+    # Adding the fp32 model reuses the voice table.
+    fp32 = catalog.download_kokoro_model(base_url=voice_server.url, variant="fp32")
+    assert fp32.read_bytes() == kokoro_release["fp32"] and voice_server.requests[2:] == ["/kokoro-v1.0.onnx"]
+    with pytest.raises(ValueError):
+        catalog.download_kokoro_model(base_url=voice_server.url, variant="fp64")
+
+
+def test_kokoro_download_through_catalog_flow(voice_server, kokoro_release):
+    # The UI's catalog flow calls download_piper_voice with the catalog id.
+    assert catalog.is_valid_voice_id("kokoro-v1.0")
+    path = catalog.download_piper_voice("kokoro-v1.0", base_url=voice_server.url)
+    assert path == config.voices_dir() / "kokoro" / "kokoro-v1.0.int8.onnx"
+    assert "kokoro-v1.0" in catalog.installed_catalog_ids()
+    assert catalog.download_voice("kokoro-v1.0", base_url=voice_server.url) == path
+    # With an explicit Piper folder, Kokoro goes to the sibling "kokoro" folder.
+    other = config.data_dir() / "elsewhere" / "piper"
+    path2 = catalog.download_piper_voice("kokoro-v1.0", voices_dir=other, base_url=voice_server.url)
+    assert path2 == other.parent / "kokoro" / "kokoro-v1.0.int8.onnx"
+
+
+def test_kokoro_download_rejects_damaged_file(voice_server, kokoro_release, monkeypatch):
+    bad = dict(catalog.KOKORO_FILES)
+    bad["int8"] = catalog.KokoroFile(bad["int8"].name, bad["int8"].size, "0" * 64)
+    monkeypatch.setattr(catalog, "KOKORO_FILES", bad)
+    with pytest.raises(catalog.VoiceDownloadError, match="damaged"):
+        catalog.download_kokoro_model(base_url=voice_server.url)
+    assert _leftovers(config.voices_dir() / "kokoro") == []
+
+
+def test_kokoro_download_404_and_cancel(voice_server, kokoro_release):
+    (voice_server.root / "kokoro-v1.0.int8.onnx").unlink()
+    with pytest.raises(catalog.VoiceDownloadError, match="404"):
+        catalog.download_kokoro_model(base_url=voice_server.url)
+    assert _leftovers(config.voices_dir() / "kokoro") == []
+    cancel = threading.Event()
+
+    def progress(fraction: float, message: str) -> None:
+        if fraction > 0.1:
+            cancel.set()
+
+    with pytest.raises(catalog.DownloadCancelled):
+        catalog.download_kokoro_model(base_url=voice_server.url, variant="fp32", cancel=cancel, progress=progress)
+    assert _leftovers(config.voices_dir() / "kokoro") == []
 
 
 # --------------------------------------------------------------------------- cache

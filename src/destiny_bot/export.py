@@ -2,7 +2,9 @@
 
 Each section is planned with the speech layer, spoken utterance by utterance,
 and streamed straight into its file, so memory stays small even for long
-chapters. MP3 tracks get ID3 tags, and a ``playlist.m3u`` lists them in order.
+chapters. Each utterance's own leading/trailing silence is trimmed, so the
+pacing comes entirely from the plan's ``pause_after_ms``. MP3 tracks get ID3
+tags, and a ``playlist.m3u`` lists them in order.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ import unicodedata
 from pathlib import Path
 from typing import Callable, Literal
 
-from .audio import ClipJoiner
+from .audio import ClipJoiner, trim_silence
 from .models import Document, ReadingOptions, Section, Utterance
 from .tts.base import AudioClip, EngineUnavailable, TTSEngine, TTSError
 
@@ -189,12 +191,14 @@ def _record_section(
 
 
 def _speak(engine: TTSEngine, text: str, voice: str | None, rate: float) -> AudioClip:
+    """One utterance with its edge silence trimmed, so pauses come only from the plan."""
     try:
-        return engine.synthesize(text, voice, rate)
+        clip = engine.synthesize(text, voice, rate)
     except EngineUnavailable:
         raise
     except TTSError:
-        return engine.synthesize(text, voice, rate)  # one retry for a passing hiccup
+        clip = engine.synthesize(text, voice, rate)  # one retry for a passing hiccup
+    return trim_silence(clip)
 
 
 def _check_cancel(cancel: threading.Event | None) -> None:

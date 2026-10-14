@@ -44,7 +44,11 @@ def _bullet_flag(ppr) -> bool | None:
         return None
     if ppr.find(_A + "buNone") is not None:
         return False
-    if ppr.find(_A + "buChar") is not None or ppr.find(_A + "buAutoNum") is not None or ppr.find(_A + "buBlip") is not None:
+    if (
+        ppr.find(_A + "buChar") is not None
+        or ppr.find(_A + "buAutoNum") is not None
+        or ppr.find(_A + "buBlip") is not None
+    ):
         return True
     return None
 
@@ -88,7 +92,9 @@ class _SlideReader:
     # ------------------------------------------------------------ ordering
 
     def ordered(self, shapes) -> list:
-        items = sorted(((s.top or 0, s.left or 0, i, s) for i, s in enumerate(shapes)), key=lambda t: (t[0], t[1], t[2]))
+        items = sorted(
+            ((s.top or 0, s.left or 0, i, s) for i, s in enumerate(shapes)), key=lambda t: (t[0], t[1], t[2])
+        )
         rows: list[list[tuple]] = []
         for item in items:
             if rows and abs(item[0] - rows[-1][0][0]) <= self.tolerance:
@@ -251,7 +257,9 @@ class _SlideReader:
             frame = self.slide.notes_slide.notes_text_frame
             if frame is not None:
                 for paragraph in frame.paragraphs:
-                    self.add(text_block(BlockKind.PARAGRAPH, _paragraph_text(paragraph._p), meta={"speaker_notes": True}))
+                    self.add(
+                        text_block(BlockKind.PARAGRAPH, _paragraph_text(paragraph._p), meta={"speaker_notes": True})
+                    )
         return title
 
 

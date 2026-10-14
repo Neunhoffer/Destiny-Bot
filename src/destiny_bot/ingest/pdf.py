@@ -20,11 +20,12 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter, defaultdict
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from functools import lru_cache
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterator
 
 import pymupdf
 
@@ -107,9 +108,15 @@ _JUNK_TITLE_RE = re.compile(
 )
 _JUNK_AUTHOR_RE = re.compile(
     r"^(?:administrator|admin|user|owner|unknown|windows user|microsoft office user|default|author|"
-    r"the author|none|null|n/?a|\W*)$",
+    r"the author|none|null|n/?a|python-docx|python-pptx|\W*)$|^(?:array|hash)\(0x[0-9a-f]+\)$",
     re.I,
 )
+_GENERIC_HEADINGS = frozenset(
+    "contents|table of contents|abstract|preface|foreword|introduction|acknowledgments|acknowledgements|"
+    "index|references|bibliography|copyright|dedication|summary|about the author|about the authors|"
+    "brief contents|detailed contents".split("|")
+)
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\ufffd\ue000-\uf8ff]")  # + private-use glyphs
 
 
 # --------------------------------------------------------------------------- data
@@ -214,15 +221,38 @@ def load_pdf(
     """Read a PDF into a :class:`Document`. Raises :class:`IngestError` with a friendly message."""
     path = Path(path)
     display_name = Path(source_name).name or path.name
-    doc = _open_pdf(path, display_name)
+    with _quiet_mupdf():
+        doc = _open_pdf(path, display_name)
+        try:
+            return _load(doc, path, source_name, ocr, progress)
+        except IngestError:
+            raise
+        except MemoryError as exc:
+            raise IngestError(f"'{display_name}' is too large to open on this computer.") from exc
+        finally:
+            doc.close()
+
+
+@contextmanager
+def _quiet_mupdf() -> Iterator[None]:
+    """Keep MuPDF's messages about damaged files out of the console while loading."""
+    tools = getattr(pymupdf, "TOOLS", None)
     try:
-        return _load(doc, path, source_name, ocr, progress)
-    except IngestError:
-        raise
-    except MemoryError as exc:
-        raise IngestError(f"'{display_name}' is too large to open on this computer.") from exc
+        errors = tools.mupdf_display_errors()
+        warnings = tools.mupdf_display_warnings()
+        tools.mupdf_display_errors(False)
+        tools.mupdf_display_warnings(False)
+    except Exception:
+        yield
+        return
+    try:
+        yield
     finally:
-        doc.close()
+        try:
+            tools.mupdf_display_errors(errors)
+            tools.mupdf_display_warnings(warnings)
+        except Exception:
+            pass
 
 
 def _open_pdf(path: Path, display_name: str) -> pymupdf.Document:
@@ -391,18 +421,24 @@ def _load(doc: pymupdf.Document, path: Path, source_name: str, ocr: bool, progre
 
 @lru_cache(maxsize=512)
 def _font_info(font: str) -> tuple[bool, bool, bool, bool, bool]:
-    """(bold, italic, mono, math, symbol) guessed from a font name."""
+    """(bold, italic, mono, math, dingbat) guessed from a font name."""
     name = font.split("+", 1)[-1]
     low = name.lower()
     bold = bool(re.search(r"bold|black|heavy|semibold|demi|extrabold|ultrabold|[-,_]bd\b|cmbx", low))
     italic = bool(re.search(r"italic|oblique|[-,_]it\b|[-,_]ital|cmti|cmmi", low))
-    mono = bool(re.search(r"courier|mono|consolas|menlo|inconsolata|typewriter|cmtt|lucidaconsole|code", low))
+    mono = bool(
+        re.search(
+            r"courier|mono|consol|menlo|monaco|inconsolata|typewriter|cmtt|lmtt|txtt|lucidaconsole|andale|"
+            r"fixed|code|1mn|nimbusmon|pcrr|pcrb|letter ?gothic|ocr-?[ab]",
+            low,
+        )
+    )
     math = bool(
         re.match(r"(cmmi|cmsy|cmex|msam|msbm|rsfs|eufm|stix|esint|mtsy|mtex|rtxmi|txsy|txex|pxsy|pxex|lms|lmm)", low)
         or "math" in low
     )
-    symbol = bool(re.search(r"symbol|dingbat|wingding|webding|zapf", low))
-    return bold, italic, mono, math, symbol
+    dingbat = bool(re.search(r"dingbat|wingding|webding|zapf|bullet", low))
+    return bold, italic, mono, math, dingbat
 
 
 def _page_dims(page: pymupdf.Page) -> tuple[float, float]:
@@ -526,13 +562,18 @@ def _finish_line(line: _Line) -> None:
                 pieces.append(" ")
             prev_x1 = x1
             continue
-        f_bold, f_italic, f_mono, f_math, f_symbol = _font_info(font)
+        f_bold, f_italic, f_mono, f_math, f_dingbat = _font_info(font)
         n = len(stripped.replace(" ", ""))
+        if all(0xE000 <= ord(c) <= 0xF8FF for c in stripped) and size >= 1.4 * main:
+            prev_x1 = x1  # an icon (Font Awesome and the like), not text
+            continue
         if first:
             first = False
             c = stripped[0]
-            if len(stripped) <= 2 and (f_symbol or c in _BULLETS or 0xE000 <= ord(c) <= 0xF8FF):
-                symbol_lead = True
+            if len(stripped) <= 2 and (f_dingbat or c in _BULLETS or 0xE000 <= ord(c) <= 0xF8FF):
+                symbol_lead = True  # a bullet drawn as its own glyph: kept out of the text
+                prev_x1 = x1
+                continue
         raised = size < main * 0.9 and (bool(flags & 1) or oy < baseline - 0.2 * main)
         if raised:
             before = "".join(pieces)
@@ -576,7 +617,9 @@ def _finish_line(line: _Line) -> None:
 
     raw = "".join(s[0] for s in spans).replace("\t", "    ")
     line.lead_spaces = len(raw) - len(raw.lstrip(" "))
-    text = re.sub(r"[ \t]+", " ", "".join(pieces)).strip()
+    text = re.sub(r"[ \t]+", " ", _CONTROL_RE.sub("", "".join(pieces))).strip()
+    if symbol_lead and not text:
+        text = "•"  # a bullet on its own (its text comes on the same row, merged later)
     line.text = text
     line.size = main
     line.baseline = baseline
@@ -634,7 +677,8 @@ def _find_tables_and_boxes(page: pymupdf.Page, pg: _Page) -> None:
     if not paths:
         return
     area = pg.width * pg.height
-    horiz = vert = rects = 0
+    h_edges: set[int] = set()  # distinct y positions of horizontal rules / rectangle edges
+    v_edges: set[int] = set()  # distinct x positions of vertical ones
     box_candidates: list[tuple[float, float, float, float]] = []
     for p in paths[:_MAX_TABLE_DRAWINGS]:
         for item in p.get("items", ()):
@@ -642,24 +686,25 @@ def _find_tables_and_boxes(page: pymupdf.Page, pg: _Page) -> None:
             if op == "l":
                 (ax, ay), (bx, by) = item[1], item[2]
                 if abs(ay - by) < 1 and abs(ax - bx) > 10:
-                    horiz += 1
+                    h_edges.add(round(ay))
                 elif abs(ax - bx) < 1 and abs(ay - by) > 10:
-                    vert += 1
+                    v_edges.add(round(ax))
             elif op == "re":
                 rx0, ry0, rx1, ry1 = item[1]
                 rw, rh = abs(rx1 - rx0), abs(ry1 - ry0)
-                if rh < 2 and rw > 10:
-                    horiz += 1
-                elif rw < 2 and rh > 10:
-                    vert += 1
-                else:
-                    rects += 1
+                if rw > 10:
+                    h_edges.update((round(ry0), round(ry1)))
+                if rh > 10:
+                    v_edges.update((round(rx0), round(rx1)))
+                if rw >= 2 and rh >= 2:
                     filled = "f" in p.get("type", "") and p.get("fill") not in (None, (1.0, 1.0, 1.0), [1.0, 1.0, 1.0])
                     stroked = "s" in p.get("type", "")
                     if (filled or stroked) and rw >= 0.2 * pg.width and rh >= 18 and rw * rh <= 0.8 * area:
                         box_candidates.append((min(rx0, rx1), min(ry0, ry1), max(rx0, rx1), max(ry0, ry1)))
 
-    if len(paths) <= _MAX_TABLE_DRAWINGS and (rects >= 2 or (horiz >= 2 and vert >= 2)):
+    # A ruled table needs a grid: at least 3 horizontal and 3 vertical edge positions.
+    # (A shaded code box or a framed note has only 2 of each; find_tables is slow.)
+    if len(paths) <= _MAX_TABLE_DRAWINGS and len(h_edges) >= 3 and len(v_edges) >= 3:
         try:
             found = page.find_tables()
             tables = list(found.tables)
@@ -977,6 +1022,10 @@ def _mark_headers_footers(pages: list[_Page], stats: _Stats) -> None:
         plist = sorted({p for p, y in occ if abs(y - median) <= 4})
         if len(plist) >= threshold and any(b - a <= 2 for a, b in zip(plist, plist[1:])):
             repeated.add(key)
+    total = sum(ln.chars for pg in pages for ln in pg.lines if not ln.drop)
+    removed = sum(ln.chars for key, ln in candidates if key in repeated)
+    if total and removed > 0.5 * total:
+        return  # the "header" is the content itself (e.g. one line per page)
     for key, ln in candidates:
         if key in repeated:
             ln.drop = True
@@ -991,6 +1040,11 @@ def _page_chunks(pg: _Page, stats: _Stats) -> list[_Chunk]:
         return []
     lines = [ln for ln in lines if not any(_inside(ln, t.bbox) for t in pg.tables)]
     lines = _drop_figure_labels(lines, pg)
+    mono = [ln for ln in lines if ln.mono]
+    if len(mono) > 1:
+        # Code with right-aligned comments: join each row first, so the gap between
+        # code and comment is never mistaken for a column gutter.
+        lines = [ln for ln in lines if not ln.mono] + _merge_rows(mono)
 
     box_lines: dict[int, list[_Line]] = defaultdict(list)
     free: list[_Line] = []
@@ -1095,11 +1149,28 @@ def _reading_order(elems: list[_Elem], pg: _Page) -> list[tuple[tuple, list[_Ele
                 return j
         return -1
 
-    spanning = sorted((e for e in elems if col_of(e) == -1), key=lambda e: e.y0)
+    cols = {id(e): col_of(e) for e in elems}
+    # The short last line of a full-width paragraph fits inside one column; keep it
+    # with the full-width line right above it.
+    xright = max(e.x1 for e in elems)
+    full_lines = [e for e in elems if cols[id(e)] == -1 and e.kind == "line"]
+    for e in sorted(elems, key=lambda e: e.y0):
+        if e.kind != "line" or cols[id(e)] == -1:
+            continue
+        for s in full_lines:
+            if (
+                abs(s.x0 - e.x0) <= 2
+                and s.x1 >= xright - 0.1 * (xright - s.x0)
+                and -2 <= e.y0 - s.y1 <= 0.6 * e.line.size
+                and abs(s.line.size - e.line.size) <= 0.5
+            ):
+                cols[id(e)] = -1
+                break
+    spanning = sorted((e for e in elems if cols[id(e)] == -1), key=lambda e: e.y0)
     span_mid = [(s.y0 + s.y1) / 2 for s in spanning]
     segs: dict[tuple[int, int], list[_Elem]] = defaultdict(list)
     for e in elems:
-        j = col_of(e)
+        j = cols[id(e)]
         if j == -1:
             continue
         mid = (e.y0 + e.y1) / 2
@@ -1138,7 +1209,12 @@ def _side_by_side(cols: list[list[_Elem]]) -> bool:
 
 
 def _detect_gutters(elems: list[_Elem]) -> list[tuple[float, float]]:
-    """Find vertical gutters between text columns from the x-coverage of narrow elements."""
+    """Find vertical gutters between text columns.
+
+    Two kinds of evidence: x ranges that narrow elements leave empty (works when the
+    columns fill the page), and x ranges that fall in the gap between side-by-side
+    fragments of many rows (works when full-width figures or code cross the gutter).
+    """
     lines = [e for e in elems if e.kind == "line"]
     if len(lines) < 6:
         return []
@@ -1159,26 +1235,61 @@ def _detect_gutters(elems: list[_Elem]) -> list[tuple[float, float]]:
         k = round(e.x0 / 2)
         return lefts[k - 1] + lefts[k] + lefts[k + 1] >= 4
 
-    narrow = [e for e in elems if e.x1 - e.x0 <= 0.62 * width and column_like(e)]
-    if len(narrow) < 6:
-        return []
     nbins = int(width) + 2
-    diff = [0] * (nbins + 1)
-    for e in narrow:
-        a = max(0, int(e.x0 - xmin))
-        b = min(nbins - 1, int(math.ceil(e.x1 - xmin)))
-        diff[a] += 1
-        diff[b + 1] -= 1
-    cov, acc = [], 0
-    for k in range(nbins):
-        acc += diff[k]
-        cov.append(acc)
-    threshold = max(1, round(0.04 * len(narrow)))
     lo, hi = int(0.15 * width), int(0.85 * width)
+    candidate_sets: list[list[tuple[float, float]]] = []
+
+    narrow = [e for e in elems if e.x1 - e.x0 <= 0.62 * width and column_like(e)]
+    if len(narrow) >= 6:
+        diff = [0] * (nbins + 1)
+        for e in narrow:
+            a = max(0, int(e.x0 - xmin))
+            b = min(nbins - 1, int(math.ceil(e.x1 - xmin)))
+            diff[a] += 1
+            diff[b + 1] -= 1
+        cov, acc = [], 0
+        for k in range(nbins):
+            acc += diff[k]
+            cov.append(acc)
+        threshold = max(1, round(0.04 * len(narrow)))
+        candidate_sets.append(_runs(cov, lo, hi, lambda v: v <= threshold, best=min, xmin=xmin))
+
+    votes = [0] * (nbins + 1)
+    rows = _rows_of(elems)
+    for row in rows:
+        segs: list[list[float]] = []
+        for e in sorted(row, key=lambda e: e.x0):
+            if segs and e.x0 - segs[-1][1] < 6:
+                segs[-1][1] = max(segs[-1][1], e.x1)
+            else:
+                segs.append([e.x0, e.x1])
+        for (_, a), (b, _) in zip(segs, segs[1:]):
+            for k in range(max(0, int(math.ceil(a - xmin))), min(nbins, int(b - xmin)) + 1):
+                votes[k] += 1
+    need = max(3, 0.2 * len(rows))
+    candidate_sets.append(_runs(votes, lo, hi, lambda v: v >= need, best=max, xmin=xmin))
+
+    mid = (xmin + xmax) / 2
+    for candidates in candidate_sets:
+        if not candidates:
+            continue
+        if _valid_columns(lines, candidates, xmin, xmax):
+            return candidates
+        # Fall back to the single best gutter (closest to the middle, widest).
+        for g in sorted(candidates, key=lambda g: (abs((g[0] + g[1]) / 2 - mid), -(g[1] - g[0]))):
+            if _valid_columns(lines, [g], xmin, xmax):
+                return [g]
+    return []
+
+
+def _runs(
+    values: list[int], lo: int, hi: int, good: Callable[[int], bool], *, best: Callable, xmin: float
+) -> list[tuple[float, float]]:
+    """Maximal runs of ``good`` bins in [lo, hi], each narrowed to its best part (>= 5 bins wide)."""
     runs: list[tuple[int, int]] = []
     start = None
     for k in range(lo, hi + 1):
-        if cov[k] <= threshold:
+        if good(values[k]):
             if start is None:
                 start = k
         elif start is not None:
@@ -1186,31 +1297,40 @@ def _detect_gutters(elems: list[_Elem]) -> list[tuple[float, float]]:
             start = None
     if start is not None:
         runs.append((start, hi))
-    candidates = []
+    out = []
     for a, b in runs:
-        # Narrow the run to its emptiest part: the gutter proper, not the ragged edge of a column.
-        low = min(cov[a : b + 1])
+        target = best(values[a : b + 1])
         k = a
         while k <= b:
-            if cov[k] == low:
+            if values[k] == target:
                 j = k
-                while j + 1 <= b and cov[j + 1] == low:
+                while j + 1 <= b and values[j + 1] == target:
                     j += 1
                 if j - k + 1 >= 5:
-                    candidates.append((xmin + k, xmin + j + 1))
+                    out.append((xmin + k, xmin + j + 1))
                 k = j + 1
             else:
                 k += 1
-    if not candidates:
-        return []
-    if _valid_columns(lines, candidates, xmin, xmax):
-        return candidates
-    # Fall back to the single best gutter (closest to the middle, widest).
-    mid = (xmin + xmax) / 2
-    for g in sorted(candidates, key=lambda g: (abs((g[0] + g[1]) / 2 - mid), -(g[1] - g[0]))):
-        if _valid_columns(lines, [g], xmin, xmax):
-            return [g]
-    return []
+    return out
+
+
+def _rows_of(elems: list[_Elem]) -> list[list[_Elem]]:
+    """Cluster elements into visual rows (vertical overlap of at least 30%)."""
+    rows: list[list[_Elem]] = []
+    bounds: list[list[float]] = []
+    for e in sorted(elems, key=lambda e: (e.y0 + e.y1) / 2):
+        if e.kind != "line":
+            continue
+        if bounds:
+            b = bounds[-1]
+            overlap = min(b[1], e.y1) - max(b[0], e.y0)
+            if overlap >= 0.3 * min(b[1] - b[0], e.y1 - e.y0):
+                rows[-1].append(e)
+                b[0], b[1] = min(b[0], e.y0), max(b[1], e.y1)
+                continue
+        rows.append([e])
+        bounds.append([e.y0, e.y1])
+    return rows
 
 
 def _valid_columns(lines: list[_Elem], gutters: list[tuple[float, float]], xmin: float, xmax: float) -> bool:
@@ -1297,7 +1417,6 @@ def _merge_rows(lines: list[_Line]) -> list[_Line]:
             role=row[0].role,
         )
         _finish_line(merged)
-        merged.symbol_lead = row[0].symbol_lead or merged.symbol_lead
         out.append(merged)
     return out
 
@@ -1356,7 +1475,7 @@ def _list_marker(line: _Line) -> str | None:
     t = line.text
     if not t:
         return None
-    if line.symbol_lead or t[0] in _BULLETS or 0xE000 <= ord(t[0]) <= 0xF8FF:
+    if line.symbol_lead or t[0] in _BULLETS:
         return "bullet"
     if _NUMBERED_RE.match(t):
         return "number"
@@ -1542,9 +1661,7 @@ def _classify(chunks: list[_Chunk], stats: _Stats) -> None:
         text = ch.text
         if ch.kind == BlockKind.LIST_ITEM:
             first = ch.lines[0]
-            if first.symbol_lead or text[:1] in _BULLETS or (text and 0xE000 <= ord(text[0]) <= 0xF8FF):
-                text = text[1:].lstrip()
-            elif _DASH_BULLET_RE.match(text):
+            if text[:1] in _BULLETS or _DASH_BULLET_RE.match(text):
                 text = text[1:].lstrip()
             ch.text = text
             if _heading_like(ch, body):  # "1. Introduction" set as a heading
@@ -1909,7 +2026,7 @@ def _page_range_sections(blocks: list[Block]) -> list[Section]:
 def _metadata_title(value: str | None) -> str | None:
     if not value:
         return None
-    title = clean_display_text(str(value))
+    title = clean_display_text(_CONTROL_RE.sub("", str(value)))
     if len(title) < 2 or len(title) > 300 or not any(c.isalpha() for c in title):
         return None
     if _JUNK_TITLE_RE.search(title):
@@ -1920,7 +2037,7 @@ def _metadata_title(value: str | None) -> str | None:
 def _metadata_author(value: str | None) -> str | None:
     if not value:
         return None
-    author = clean_display_text(str(value))
+    author = clean_display_text(_CONTROL_RE.sub("", str(value)))
     if not author or len(author) > 300 or _JUNK_AUTHOR_RE.match(author):
         return None
     return author
@@ -1931,6 +2048,8 @@ def _heading_title(blocks: list[Block]) -> str | None:
         if (b.page or 1) > 3:
             break
         if b.kind == BlockKind.HEADING and b.level == 1 and 2 <= len(b.text) <= 200:
+            if _norm_title(b.text) in _GENERIC_HEADINGS:
+                continue
             return b.text
     return None
 

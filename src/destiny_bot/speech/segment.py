@@ -186,6 +186,8 @@ def _is_boundary(text: str, term_start: int, term_end: int, nxt: int, first: int
     if len(word) == 1 and word.isalpha():
         if word == "v":  # Smith v. Jones
             return False
+        if word.islower():
+            return True  # "... we get x. Then"
         return _starts_sentence(text, nxt)  # initials: "J. K. Rowling"
     if word in _WEAK_ABBREV:
         return _starts_sentence(text, nxt)

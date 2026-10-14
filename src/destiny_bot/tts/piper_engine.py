@@ -102,7 +102,8 @@ class PiperEngine(TTSEngine):
         return piper_voices_dir(self._voices_dir)
 
     def _installed(self) -> list[Path]:
-        return installed_piper_voices(self.voices_dir())
+        # No override: downloaded voices plus the ones bundled with the app.
+        return installed_piper_voices(self._voices_dir)
 
     def _model_path(self, voice_id: str) -> Path:
         for path in self._installed():

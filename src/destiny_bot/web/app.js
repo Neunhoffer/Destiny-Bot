@@ -564,7 +564,7 @@ const clips = {
     }
     entry = {
       key, text, engine, voice, rate, urgent, started: false, pinned: 0,
-      controller: new AbortController(), blob: null, url: null, decoded: null,
+      controller: new AbortController(), blob: null, url: null,
     };
     entry.promise = new Promise((resolve, reject) => {
       entry.resolve = resolve;
@@ -631,7 +631,6 @@ const clips = {
     }
     if (entry.url) URL.revokeObjectURL(entry.url);
     entry.url = null;
-    entry.decoded = null;
   },
 
   dropWhere(predicate) {
@@ -645,19 +644,18 @@ const clips = {
     }
   },
 
+  /** Decode on demand; only the compact encoded clips are cached, never the PCM. */
   async decoded(entry, ctx) {
-    if (entry.decoded) return entry.decoded;
     const blob = await entry.promise;
     const bytes = await blob.arrayBuffer();
     try {
-      entry.decoded = await ctx.decodeAudioData(bytes);
+      return await ctx.decodeAudioData(bytes);
     } catch (err) {
       const failure = new Error("This voice's audio couldn't be decoded.");
       failure.isDecodeError = true;
       failure.cause = err;
       throw failure;
     }
-    return entry.decoded;
   },
 
   objectUrl(entry) {
@@ -1995,8 +1993,14 @@ function updateSelectionBubble() {
   const rect = selection.range.getBoundingClientRect();
   bubble.hidden = false;
   const { width, height } = bubble.getBoundingClientRect();
+  const box = $('#reader').getBoundingClientRect();
+  if (rect.bottom < box.top || rect.top > box.bottom) {
+    bubble.hidden = true;
+    return;
+  }
   let top = rect.top - height - 10;
-  if (top < 64) top = rect.bottom + 10;
+  if (top < box.top + 4) top = rect.bottom + 10;
+  top = clamp(top, box.top + 4, box.bottom - height - 4);
   const left = clamp(rect.left + rect.width / 2 - width / 2, 8, window.innerWidth - width - 8);
   bubble.style.top = `${Math.round(top)}px`;
   bubble.style.left = `${Math.round(left)}px`;
@@ -2329,14 +2333,18 @@ function renderToc() {
       parent.li.append(list);
       parent.list = list;
     }
-    const page = entry.page_start ? (state.book?.source_type === 'pptx' ? `Slide ${entry.page_start}` : `p. ${entry.page_start}`) : '';
+    const isSlides = state.book?.source_type === 'pptx';
+    const page = entry.page_start ? (isSlides ? `Slide ${entry.page_start}` : `p. ${entry.page_start}`) : '';
+    const spokenPage = entry.page_start ? `, ${isSlides ? 'slide' : 'page'} ${entry.page_start}` : '';
     const button = el('button', {
       type: 'button', class: `toc-link level-${Math.min(level, 3)}`, dataset: { sid: entry.id },
       onclick: () => {
         goToSection(entry.id, { focusContent: true });
         closeOverlays();
       },
-    }, el('span', { class: 'toc-title', text: entry.title }), page ? el('span', { class: 'toc-page', text: page }) : null);
+    }, el('span', { class: 'toc-title', text: entry.title }),
+    page ? el('span', { class: 'toc-page', 'aria-hidden': 'true', text: page }) : null,
+    spokenPage ? el('span', { class: 'visually-hidden', text: spokenPage }) : null);
     const li = el('li', null, button);
     list.append(li);
     stack.push({ level, li, list: null });
@@ -2842,7 +2850,7 @@ function explainBlock(blockIndex) {
 
 function summarize(length) {
   runAI({
-    path: '/api/ai/summarize', title: length === 'detailed' ? 'Detailed summary' : 'Quick summary', iconName: 'summary',
+    path: '/api/ai/summarize', title: length === 'detailed' ? 'Full summary' : 'Quick summary', iconName: 'summary',
     body: { book_id: state.book.id, section_id: state.section.section.id, length },
   });
 }
@@ -3221,10 +3229,18 @@ function renderEngineList() {
   }];
   for (const e of state.status?.engines || []) {
     let note = ENGINE_BLURBS[e.name] || '';
-    if (!e.available) note = e.reason || 'Not available on this computer.';
-    else if (e.online && !state.settings.online_tts_allowed) note = 'Turn on “Online voices” in Privacy & AI to use these voices.';
-    else if (e.name === 'browser' && !hasSpeechSynthesis()) note = "This browser can't speak text.";
-    options.push({ name: e.name, label: e.label, online: e.online, available: engineAllowed(e) && (e.name !== 'browser' || hasSpeechSynthesis()), note });
+    let badge = '';
+    if (!e.available) {
+      note = e.reason || 'Not available on this computer.';
+      badge = 'Not available';
+    } else if (e.online && !state.settings.online_tts_allowed) {
+      note = 'Turn on “Online voices” in Privacy & AI to use these voices.';
+      badge = 'Off in Privacy settings';
+    } else if (e.name === 'browser' && !hasSpeechSynthesis()) {
+      note = "This browser can't speak text.";
+      badge = 'Not available';
+    }
+    options.push({ name: e.name, label: e.label, online: e.online, available: !badge, badge, note });
   }
   for (const option of options) {
     const id = `engine-${option.name}`;
@@ -3238,7 +3254,7 @@ function renderEngineList() {
       el('span', { class: 'engine-text' },
         el('span', { class: 'engine-name' }, option.label,
           option.online ? el('span', { class: 'badge badge-warn' }, '☁ Online') : null,
-          !option.available ? el('span', { class: 'badge', text: 'Not available' }) : null,
+          option.badge ? el('span', { class: 'badge', text: option.badge }) : null,
           option.name === resolved && choice === 'auto' ? el('span', { class: 'badge badge-accent', text: 'In use' }) : null),
         el('span', { class: 'engine-note', id: `${id}-note`, text: option.note })));
     input.addEventListener('change', async () => {

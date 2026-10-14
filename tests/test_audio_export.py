@@ -716,3 +716,70 @@ def test_export_real_piper_end_to_end(piper_voice_path, tmp_path, monkeypatch):
         assert decoded.returncode == 0 and not decoded.stderr.strip()
     playlist = files[2].read_text(encoding="utf-8")
     assert playlist.startswith("#EXTM3U\n#EXTINF:") and "01 - Chapter 1 Water.mp3" in playlist
+
+
+class PaddedEngine(SineEngine):
+    """Like a real voice: each clip has its own silence before and after the speech."""
+
+    def synthesize(self, text, voice=None, rate=1.0):
+        self.calls.append((text, voice, rate))
+        pcm = b"\x00\x00" * int(0.3 * 22050) + sine_pcm(0.2, 22050, 300) + b"\x00\x00" * int(0.4 * 22050)
+        return AudioClip(audio.wav_bytes(pcm, 22050), "audio/wav", 22050)
+
+
+def test_export_trims_utterance_silence(planner, tmp_path):
+    files = export.export_audiobook(
+        make_doc(), engine=PaddedEngine(), voice=None, options=ReadingOptions(), out_dir=tmp_path / "o",
+        section_ids=["s0"], fmt="wav",
+    )  # fmt: skip
+    with wave.open(str(files[0])) as w:
+        seconds = w.getnframes() / w.getframerate()
+    # lead 0.5 + 3 x (0.2 tone + 2 x 25 ms kept padding) + pauses 0.7 + 0.35 + 0.35 + trail 0.5
+    assert seconds == pytest.approx(0.5 + 3 * 0.25 + 1.4 + 0.5, abs=0.003)
+
+
+def test_export_real_kokoro_pacing(tmp_path, monkeypatch):
+    np = pytest.importorskip("numpy")
+    import os
+
+    from destiny_bot.tts import catalog
+    from destiny_bot.tts.kokoro_engine import KokoroEngine
+
+    folder = os.environ.get("DESTINY_TEST_KOKORO_DIR")
+    if not folder or catalog.find_kokoro_model(Path(folder)) is None:
+        pytest.skip("set DESTINY_TEST_KOKORO_DIR to a folder with a Kokoro model to run this test")
+    try:
+        from destiny_bot.speech import plan_section
+    except ImportError:
+        pytest.skip("the speech planner isn't available yet")
+    doc = Document(
+        id="k", title="Tiny Textbook", source_name="t.txt", source_type="txt",
+        sections=[Section(id="s0", title="Water", blocks=[
+            Block(kind=BlockKind.HEADING, text="Water", level=1),
+            Block(kind=BlockKind.PARAGRAPH, text="Water is a polar molecule. It forms hydrogen bonds. Ice floats on water."),
+        ])],
+    )  # fmt: skip
+    plan = plan_section(doc.sections[0], ReadingOptions())
+    files = export.export_audiobook(
+        doc, engine=KokoroEngine(Path(folder)), voice=None, options=ReadingOptions(), out_dir=tmp_path, fmt="wav"
+    )
+    pcm, rate, _, _ = audio.read_wav(files[0].read_bytes())
+    assert rate == 24000
+    x = np.abs(np.frombuffer(pcm, dtype="<i2").astype(float))
+    hop = rate // 100  # 10 ms frames
+    loud = x[: len(x) // hop * hop].reshape(-1, hop).max(axis=1) > 32767 * 10 ** (-45 / 20)
+    # Silent runs longer than 150 ms after the first sound are the planned pauses
+    # (each plus ~50 ms of kept padding); the 0.5 s lead-in comes before it.
+    runs, start = [], None
+    first = int(np.argmax(loud))
+    for i, on in enumerate(loud[first:], start=first):
+        if not on and start is None:
+            start = i
+        elif on and start is not None:
+            runs.append((i - start) * 10)
+            start = None
+    gaps = [ms for ms in runs if ms >= 150]
+    planned = [u.pause_after_ms for u in plan[:-1]]
+    assert len(gaps) == len(planned), (gaps, planned)
+    for gap, pause in zip(gaps, planned, strict=True):
+        assert gap == pytest.approx(pause + 50, abs=60)

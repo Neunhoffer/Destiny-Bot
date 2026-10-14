@@ -17,6 +17,7 @@
   --surface-3: #e6e2d8;
   --border: #e0dbd0;
   --border-strong: #c3bbac;
+  --input-border: #8b8477;
   --text: #1c2228;
   --text-2: #434b55;
   --text-3: #5d6570;
@@ -63,6 +64,7 @@
     --surface-3: #2f363d;
     --border: #2e353c;
     --border-strong: #48515b;
+    --input-border: #77818c;
     --text: #e8e5df;
     --text-2: #c4c8cd;
     --text-3: #a0a7ae;
@@ -102,6 +104,7 @@
   --surface-3: #2f363d;
   --border: #2e353c;
   --border-strong: #48515b;
+  --input-border: #77818c;
   --text: #e8e5df;
   --text-2: #c4c8cd;
   --text-3: #a0a7ae;
@@ -524,7 +527,7 @@ fieldset.field > legend {
   width: 100%;
   min-height: 40px;
   padding: 8px 12px;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--input-border);
   border-radius: 10px;
   background: var(--surface);
   color: var(--text);
@@ -540,6 +543,11 @@ fieldset.field > legend {
   background-size: 5px 5px, 5px 5px;
   background-repeat: no-repeat;
   text-overflow: ellipsis;
+}
+
+::placeholder {
+  color: var(--text-3);
+  opacity: 1;
 }
 
 .input:focus-visible,
@@ -573,7 +581,7 @@ input[type="radio"] {
   margin: 0;
   border-radius: 999px;
   background: var(--surface-3);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--input-border);
   cursor: pointer;
   transition: background-color 0.2s ease, border-color 0.2s ease;
 }
@@ -1917,7 +1925,7 @@ input[type="radio"] {
   min-height: 42px;
   max-height: 160px;
   padding: 10px 12px;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--input-border);
   border-radius: 12px;
   background: var(--surface);
   font-size: 14.5px;

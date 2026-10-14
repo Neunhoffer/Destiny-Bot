@@ -236,39 +236,25 @@ def _split_paragraphs(text: str) -> list[list[str]]:
 
 def _body_blocks(lines: list[str], page: int | None) -> list[Block]:
     """Paragraph and bullet blocks for the non-heading lines of one paragraph."""
-    blocks: list[Block] = []
     if len(lines) > 1 and max(len(line) for line in lines) > 200:
         # Not hard-wrapped: every line is its own paragraph.
         groups = [[line] for line in lines]
     else:
         groups = [lines]
+    pieces: list[tuple[BlockKind, list[str]]] = []
     for group in groups:
         prose: list[str] = []
         item: list[str] | None = None
         item_indent = 0
-
-        def flush_prose() -> None:
-            if prose:
-                block = text_block(BlockKind.PARAGRAPH, "\n".join(prose), page=page)
-                if block:
-                    blocks.append(block)
-                prose.clear()
-
-        def flush_item() -> None:
-            nonlocal item
-            if item:
-                block = text_block(BlockKind.LIST_ITEM, "\n".join(item), page=page)
-                if block:
-                    blocks.append(block)
-            item = None
-
         for line in group:
             bullet = _BULLET.match(line)
             if bullet:
-                flush_prose()
-                flush_item()
-                marker = bullet.group("marker")
-                body = bullet.group("text")
+                if prose:
+                    pieces.append((BlockKind.PARAGRAPH, prose))
+                    prose = []
+                if item:
+                    pieces.append((BlockKind.LIST_ITEM, item))
+                marker, body = bullet.group("marker"), bullet.group("text")
                 item = [f"{marker} {body}" if marker[0].isalnum() or marker[0] == "(" else body]
                 item_indent = len(bullet.group("indent").expandtabs(4))
                 continue
@@ -278,13 +264,18 @@ def _body_blocks(lines: list[str], page: int | None) -> list[Block]:
                 if indent > item_indent or not _TERMINAL_PUNCT.search(item[-1]):
                     item.append(line)
                     continue
-                flush_item()
+                pieces.append((BlockKind.LIST_ITEM, item))
+                item = None
             if prose and indent >= 2 and not prose[-1][:1].isspace() and _TERMINAL_PUNCT.search(prose[-1]):
-                flush_prose()  # an indented first line starts a new paragraph
+                pieces.append((BlockKind.PARAGRAPH, prose))  # an indented first line starts a new paragraph
+                prose = []
             prose.append(line)
-        flush_prose()
-        flush_item()
-    return blocks
+        if prose:
+            pieces.append((BlockKind.PARAGRAPH, prose))
+        if item:
+            pieces.append((BlockKind.LIST_ITEM, item))
+    blocks = [text_block(kind, "\n".join(piece), page=page) for kind, piece in pieces]
+    return [block for block in blocks if block is not None]
 
 
 def plain_text_blocks(text: str, *, page: int | None = None) -> list[Block]:
@@ -709,7 +700,11 @@ def markdown_blocks(text: str, *, _refs: frozenset[str] | None = None) -> list[B
             continue
 
         listed = _MD_LIST.match(line)
-        if listed and (listed.group("text") or "").strip() and (not para or previous_blank or listed.group("marker")[0] in "-*+1"):
+        if (
+            listed
+            and (listed.group("text") or "").strip()
+            and (not para or previous_blank or listed.group("marker")[0] in "-*+1")
+        ):
             flush()
             indent = len(listed.group("indent").expandtabs(4))
             while list_indents and indent + 1 < list_indents[-1]:
@@ -723,13 +718,7 @@ def markdown_blocks(text: str, *, _refs: frozenset[str] | None = None) -> list[B
             previous_blank = False
             continue
 
-        if (
-            line.startswith(("    ", "\t"))
-            and previous_blank
-            and not para
-            and item is None
-            and not list_indents
-        ):
+        if line.startswith(("    ", "\t")) and previous_blank and not para and item is None and not list_indents:
             body = []
             while i < n and (lines[i].startswith(("    ", "\t")) or not lines[i].strip()):
                 body.append(lines[i][4:] if lines[i].startswith("    ") else lines[i][1:])

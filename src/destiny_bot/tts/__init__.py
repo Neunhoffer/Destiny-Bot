@@ -11,9 +11,10 @@ import threading
 
 from .base import AudioClip, EngineUnavailable, TTSEngine, TTSError, Voice
 
-ENGINE_NAMES = ("piper", "system", "edge", "browser")
-# What "auto" tries, best first. Online engines are never picked automatically.
-AUTO_ORDER = ("piper", "system", "browser")
+ENGINE_NAMES = ("kokoro", "piper", "system", "edge", "browser")
+# What "auto" tries, best first; an engine counts only when it is installed and usable
+# (Kokoro needs its voice pack, Piper a downloaded voice). Online engines are never picked automatically.
+AUTO_ORDER = ("kokoro", "piper", "system", "browser")
 
 _engines: dict[str, TTSEngine] = {}
 _lock = threading.Lock()
@@ -31,6 +32,10 @@ def clamp_rate(rate: float | None, low: float = 0.25, high: float = 4.0) -> floa
 
 
 def _create(name: str) -> TTSEngine:
+    if name == "kokoro":
+        from .kokoro_engine import KokoroEngine
+
+        return KokoroEngine()
     if name == "piper":
         from .piper_engine import PiperEngine
 
@@ -76,8 +81,8 @@ def resolve_engine(preferred: str, *, online_allowed: bool) -> TTSEngine:
     """The engine to use for ``preferred`` ("auto" or an engine name).
 
     A requested engine that is unknown, unavailable, or online while online voices
-    are off falls back to "auto": the first available of piper (with a voice
-    installed), system, browser.
+    are off falls back to "auto": the first available of kokoro (with its voice
+    pack), piper (with a voice installed), system, browser.
     """
     if preferred and preferred != "auto" and preferred in ENGINE_NAMES:
         engine = get_engine(preferred)

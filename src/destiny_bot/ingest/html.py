@@ -43,7 +43,9 @@ _BLOCK_TAGS = frozenset(
     "summary table tbody td tfoot th thead tr ul".split()
 )
 _CONTENT_ANCESTORS = frozenset("article section main aside blockquote figure".split())
-_INLINE_NAMES = frozenset("a abbr b bdi bdo cite code data dfn em i kbd mark q s samp small span strong sub sup time u var".split())
+_INLINE_NAMES = frozenset(
+    "a abbr b bdi bdo cite code data dfn em i kbd mark q s samp small span strong sub sup time u var".split()
+)
 _LAYOUT_SIGNS = ["table", "h1", "h2", "h3", "h4", "h5", "h6"]
 
 _NOTE_TYPES = frozenset({"footnote", "endnote", "rearnote"})
@@ -55,6 +57,11 @@ _NOTES_CLASSES = frozenset({"footnotes", "endnotes", "references"})
 _BACKLINK_CLASSES = frozenset({"footnote-back", "footnote-backref", "mw-cite-backlink"})
 _BACKLINK_TEXTS = frozenset({"↩", "\u21a9\ufe0e", "↑", "^", "⤴", "back", "[back]", "return"})
 _CHROME_ROLES = frozenset({"navigation", "search", "banner"})
+# Class names of navigation chrome in saved web pages and web-exported e-books.
+_CHROME_CLASSES = frozenset(
+    {"navbar", "navigation", "breadcrumb", "breadcrumbs", "pagination", "pager", "related-links", "familylinks",
+     "skip-link", "skiplink", "skip-to-content"}
+)  # fmt: skip
 _HIDDEN_STYLE = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden", re.I)
 _TEX_ENCODINGS = frozenset({"application/x-tex", "tex", "latex", "application/x-latex", "text/x-tex"})
 _MATH_INVISIBLE = dict.fromkeys(map(ord, "\u2061\u2062\u2063\u2064"), None)  # function application etc.
@@ -63,20 +70,31 @@ _SELF_CLOSING = re.compile(rf"<(?!(?:{_VOID})\b)([A-Za-z][\w:.-]*)(\s[^<>]*?)?\s
 _IGNORED_STRINGS = (Comment, Declaration, Doctype, ProcessingInstruction)
 
 
+_LOCAL_NAMES: dict[str, str] = {}
+_NO_TOKENS: frozenset[str] = frozenset()
+
+
 def _local(tag: Tag) -> str:
-    return (tag.name or "").rsplit(":", 1)[-1].lower()
+    """Lower-case tag name without a namespace prefix (``epub:switch`` -> ``switch``)."""
+    name = tag.name or ""
+    local = _LOCAL_NAMES.get(name)
+    if local is None:
+        local = _LOCAL_NAMES[name] = name.rsplit(":", 1)[-1].lower()
+    return local
 
 
-def _tokens(tag: Tag, attr: str) -> set[str]:
-    value = tag.get(attr)
+def _tokens(tag: Tag, attr: str) -> set[str] | frozenset[str]:
+    value = tag.attrs.get(attr) if tag.attrs else None
     if not value:
-        return set()
+        return _NO_TOKENS
     if isinstance(value, list):
         value = " ".join(value)
     return set(value.lower().split())
 
 
-def _epub_types(tag: Tag) -> set[str]:
+def _epub_types(tag: Tag) -> set[str] | frozenset[str]:
+    if not tag.attrs:
+        return _NO_TOKENS
     types: set[str] = set()
     for key in tag.attrs:
         if key == "epub:type" or (key.endswith(":type") and key != "type"):
@@ -107,7 +125,8 @@ def _mathml_linear(el) -> str:
     if name in ("annotation", "annotation-xml", "none", "mprescripts", "mphantom"):
         return ""
     if name == "mspace":
-        return " "
+        width = re.match(r"\s*(\d+(?:\.\d+)?)\s*em", el.get("width") or "")
+        return " ; " if width and float(width.group(1)) >= 1 else " "  # a wide gap separates expressions
     if name in ("mi", "mn", "mo", "mtext", "ms"):
         return "".join(el.itertext()).translate(_MATH_INVISIBLE).strip()
     kids = [child for child in el if isinstance(child.tag, str)]
@@ -139,7 +158,7 @@ def _mathml_linear(el) -> str:
     if name in ("mtr", "mlabeledtr"):
         return " ".join(text for text in lin if text)  # aligned "lhs" "= rhs" cells, or matrix cells
     parts: list[str] = []
-    for child, text in zip(kids, lin):
+    for child, text in zip(kids, lin, strict=True):
         if not text:
             continue
         if _xlocal(child.tag) == "mo" and text not in _MATH_BRACKETS:
@@ -149,7 +168,12 @@ def _mathml_linear(el) -> str:
     return re.sub(r"\s+", " ", "".join(parts)).strip()
 
 
-_PLACEHOLDER_ALT = re.compile(r"(alt(ernative|ernate)?[ -]?text|description)\s+(is\s+)?(not\s+available|unavailable|missing)|equation|math|formula|image", re.I)
+# Alt text some converters write when they have none ("Alternative text not available").
+_PLACEHOLDER_ALT = re.compile(
+    r"(alt(ernative|ernate)?[ -]?text|description)\s+(is\s+)?(not\s+available|unavailable|missing)"
+    r"|equation|math|formula|image",
+    re.I,
+)
 
 
 def _lxml_math_text(math) -> str:
@@ -162,7 +186,7 @@ def _lxml_math_text(math) -> str:
             tex = "".join(child.itertext()).strip()
             if tex:
                 return tex
-    return _mathml_linear(math)
+    return re.sub(r"\s*(?:;\s*)+", "; ", _mathml_linear(math)).strip(" ;")
 
 
 _MATH_ELEMENT = re.compile(r"<((?:[\w-]+:)?math)\b[^>]*>.*?</\1\s*>", re.S | re.I)
@@ -220,6 +244,7 @@ class _Walker:
         self.anchors: dict[str, int] = {}
         self._prefix: str | None = None
         self._block_inside: dict[int, bool] = {}
+        self._dropped_cache: dict[int, bool] = {}
 
     # ------------------------------------------------------------ classification
 
@@ -237,7 +262,7 @@ class _Walker:
         types, roles = _epub_types(tag), _tokens(tag, "role")
         if "pagebreak" in types or "doc-pagebreak" in roles:
             return True  # printed page numbers: not part of the text
-        if roles & _CHROME_ROLES:
+        if roles & _CHROME_ROLES or _tokens(tag, "class") & _CHROME_CLASSES:
             return True
         if name == "default" and tag.parent is not None and _local(tag.parent) == "switch":
             return True  # <epub:switch> fallback content duplicates the <epub:case>
@@ -266,7 +291,9 @@ class _Walker:
         if name in _INLINE_NAMES:
             return False
         return bool(
-            _epub_types(tag) & _NOTE_TYPES or _tokens(tag, "role") & _NOTE_ROLES or _tokens(tag, "class") & _NOTE_CLASSES
+            _epub_types(tag) & _NOTE_TYPES
+            or _tokens(tag, "role") & _NOTE_ROLES
+            or _tokens(tag, "class") & _NOTE_CLASSES
         )
 
     @staticmethod
@@ -298,7 +325,9 @@ class _Walker:
             if not self._note_link(tag):
                 return False
             only = self._only_child(tag)
-            return (tag.parent is not None and _local(tag.parent) == "sup") or (only is not None and _local(only) == "sup")
+            return (tag.parent is not None and _local(tag.parent) == "sup") or (
+                only is not None and _local(only) == "sup"
+            )
         if name == "sup":
             only = self._only_child(tag)
             return only is not None and _local(only) == "a" and self._note_link(only)
@@ -315,6 +344,19 @@ class _Walker:
             and (tag.get("href") or "").startswith("#")
             and tag.get_text(strip=True).lower() in _BACKLINK_TEXTS
         )
+
+    def _dropped(self, tag: Tag) -> bool:
+        """Skipped element, note-reference marker or note back-link (memoised)."""
+        key = id(tag)
+        dropped = self._dropped_cache.get(key)
+        if dropped is None:
+            dropped = (
+                self._skip(tag)
+                or (bool(tag.attrs) or _local(tag) == "sup")
+                and (self._is_noteref(tag) or self._is_backlink(tag))
+            )
+            self._dropped_cache[key] = dropped
+        return dropped
 
     def _is_blockish(self, tag: Tag) -> bool:
         name = _local(tag)
@@ -376,7 +418,7 @@ class _Walker:
             if not isinstance(child, Tag):
                 continue
             self._record_anchor(child)
-            if self._skip(child) or self._is_noteref(child) or self._is_backlink(child):
+            if self._dropped(child):
                 continue
             name = _local(child)
             if name == "br":
@@ -389,6 +431,8 @@ class _Walker:
                 parts.append(_math_text(child))
             elif name == "sup":
                 parts.append(superscript_text(self.inline_text(child)))
+            elif name == "q":  # browsers add the quotation marks themselves
+                parts.append(f"“{self.inline_text(child).strip()}”")
             elif name in _BLOCK_TAGS or name in _HEADINGS:
                 parts.append(" ")
                 self._collect(child, parts)
@@ -434,7 +478,7 @@ class _Walker:
             if not isinstance(child, Tag):
                 continue
             self._record_anchor(child)
-            if self._skip(child) or self._is_noteref(child) or self._is_backlink(child):
+            if self._dropped(child):
                 continue
             if self._is_blockish(child):
                 self._flush(buffer, ctx)
@@ -523,6 +567,8 @@ class _Walker:
             return _math_text(node)
         if name == "sup":
             return superscript_text(self.inline_text(node))
+        if name == "q":
+            return f"“{self.inline_text(node).strip()}”"
         return self.inline_text(node)
 
     def _walk_block(self, tag: Tag, ctx: _Ctx) -> None:
@@ -717,20 +763,65 @@ def parse_html(html: str | bytes, *, page: int | None = None) -> HtmlContent:
     walker = _Walker(page)
     body = soup.body or soup
     root = _content_root(soup, markup)
-    if root is not body:
-        walker._record_anchor(root)
-    walker.walk_container(root, _Ctx())
-    if root is not body:
-        # Footnotes often sit after <main>/<article>; keep them.
-        done: set[int] = set()
-        for tag in body.find_all(True):
-            if tag is root or any(id(p) in done or p is root for p in tag.parents):
-                continue
-            if (walker._is_note(tag) or walker._is_note_container(tag)) and not walker._skip(tag):
-                done.add(id(tag))
-                walker._record_anchor(tag)
-                walker._walk_block(tag, _Ctx())
+    try:
+        if root is not body:
+            walker._record_anchor(root)
+        walker.walk_container(root, _Ctx())
+        if root is not body:
+            # Footnotes often sit after <main>; keep them.
+            done: set[int] = set()
+            for tag in body.find_all(True):
+                if tag is root or any(id(p) in done or p is root for p in tag.parents):
+                    continue
+                if (walker._is_note(tag) or walker._is_note_container(tag)) and not walker._skip(tag):
+                    done.add(id(tag))
+                    walker._record_anchor(tag)
+                    walker._walk_block(tag, _Ctx())
+    except RecursionError:
+        # Absurdly deep nesting (e.g. thousands of unclosed tags): fall back to a flat reading.
+        return HtmlContent(blocks=_flat_blocks(root, page), title=title, author=author)
     return HtmlContent(blocks=walker.blocks, title=title, author=author, anchors=walker.anchors)
+
+
+def _flat_blocks(root: Tag, page: int | None) -> list[Block]:
+    """One paragraph (or heading) per block-level element, found without recursion."""
+    walker = _Walker(page)
+    blocks: list[Block] = []
+    parts: list[str] = []
+    current: Tag | None = None
+
+    def flush() -> None:
+        if parts:
+            name = _local(current) if current is not None else ""
+            if name in _HEADINGS:
+                block = text_block(BlockKind.HEADING, "".join(parts), level=_HEADINGS[name], page=page)
+            else:
+                block = text_block(BlockKind.PARAGRAPH, "".join(parts), page=page)
+            if block:
+                blocks.append(block)
+            parts.clear()
+
+    for node in root.descendants:
+        if not isinstance(node, NavigableString) or isinstance(node, _IGNORED_STRINGS):
+            continue
+        owner: Tag | None = None
+        dropped = False
+        for parent in node.parents:
+            if parent is root or not isinstance(parent, Tag):
+                break
+            if walker._skip(parent):
+                dropped = True
+                break
+            if owner is None and (_local(parent) in _BLOCK_TAGS or _local(parent) in _HEADINGS):
+                owner = parent
+        if dropped:
+            continue
+        if owner is not current:
+            flush()
+            current = owner
+        parts.append(str(node).replace("\n", " "))
+    flush()
+    return blocks
 
 
 def html_to_blocks(html: str | bytes, *, page: int | None = None) -> tuple[list[Block], str | None]:
