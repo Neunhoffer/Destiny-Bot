@@ -656,7 +656,11 @@ def test_safe_filename():
     assert export.safe_filename('a<b>c:d"e/f\\g|h?i*j') == "a b c d e f g h i j"
     assert export.safe_filename("Tab\there\x00\x1f and​ more  ") == "Tab here and more"
     assert export.safe_filename("CON") == "CON_"
-    assert export.safe_filename("lpt1.txt") == "lpt1.txt_"
+    # Windows treats a device name with any extension as the device itself ("lpt1.txt_" is still LPT1).
+    assert export.safe_filename("lpt1.txt") == "lpt1_.txt"
+    assert export.safe_filename("nul .tar.gz") == "nul_.tar.gz"
+    assert export.safe_filename("COM0") == "COM0_" and export.safe_filename("LPT¹") == "LPT¹_"
+    assert export.safe_filename("Console.log") == "Console.log" and export.safe_filename("AUX cables") == "AUX cables"
     assert export.safe_filename("Ends with dots... ") == "Ends with dots"
     assert export.safe_filename("  ") == "Untitled"
     assert export.safe_filename("???") == "Untitled"
@@ -664,6 +668,51 @@ def test_safe_filename():
     long = export.safe_filename("word " * 40)
     assert len(long) <= 80 and not long.endswith(" ") and long.endswith("word")
     assert len(export.safe_filename("x" * 200)) == 80
+
+
+def _locked_final(monkeypatch, times: int) -> list[str]:
+    """os.replace fails like Windows does while a virus scanner or player holds the file."""
+    real_replace, attempts = export.os.replace, []
+
+    def replace(src, dst):
+        attempts.append(Path(dst).name)
+        if attempts.count(Path(dst).name) <= times:
+            raise PermissionError(13, "The process cannot access the file because it is being used by another process")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(export, "sys", types.SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(export.os, "replace", replace)
+    monkeypatch.setattr(export.time, "sleep", lambda seconds: None)
+    return attempts
+
+
+def test_export_waits_for_a_briefly_locked_file(planner, tmp_path, monkeypatch):
+    attempts = _locked_final(monkeypatch, times=2)
+    files = export.export_audiobook(make_doc(), engine=SineEngine(), voice=None, options=ReadingOptions(), out_dir=tmp_path / "o")
+    assert [p.name for p in files] == ["01 - Chapter 1 Cells.mp3", "02 - Chapter 2 Energy ATP.mp3", "playlist.m3u"]
+    assert attempts.count("01 - Chapter 1 Cells.mp3") == 3 and attempts.count("playlist.m3u") == 3
+    assert sorted(p.name for p in (tmp_path / "o").iterdir()) == sorted(p.name for p in files)
+
+
+def test_export_file_in_use_is_friendly(planner, tmp_path, monkeypatch):
+    _locked_final(monkeypatch, times=1000)
+    with pytest.raises(export.ExportError, match='"01 - Chapter 1 Cells.mp3" because another program'):
+        export.export_audiobook(make_doc(), engine=SineEngine(), voice=None, options=ReadingOptions(), out_dir=tmp_path / "o")
+    assert list((tmp_path / "o").iterdir()) == []
+
+
+def test_export_names_fit_windows_path_limit(planner, tmp_path, monkeypatch):
+    monkeypatch.setattr(export, "sys", types.SimpleNamespace(platform="win32"))
+    out = tmp_path / ("Biology 101 notes " * 8).strip()
+    long_title = "Chapter 7 Photosynthesis: Using Light to Make Food, Carbon Fixation and the Calvin Cycle Explained"
+    doc = Document(
+        id="x", title="Big", source_name="b.txt", source_type="txt",
+        sections=[Section(id="s0", title=long_title, blocks=[Block(kind=BlockKind.PARAGRAPH, text="Hi.")])],
+    )  # fmt: skip
+    assert len(str(out)) + len(f"/01 - {export.safe_filename(long_title)}.mp3") > 259  # too long before
+    files = export.export_audiobook(doc, engine=SineEngine(0.05), voice=None, options=ReadingOptions(), out_dir=out)
+    assert all(len(str(path)) <= 259 for path in files)
+    assert files[0].name.startswith("01 - Chapter 7 Photosynthesis") and files[0].suffix == ".mp3"
 
 
 def test_id3_unicode_title():
@@ -703,7 +752,7 @@ def test_export_real_piper_end_to_end(piper_voice_path, tmp_path, monkeypatch):
     )  # fmt: skip
     files = export.export_audiobook(doc, engine=PiperEngine(), voice=None, options=ReadingOptions(), out_dir=tmp_path / "book")
     assert [p.name for p in files] == ["01 - Chapter 1 Water.mp3", "02 - Chapter 2 Carbon.mp3", "playlist.m3u"]
-    rate = json.loads(piper_voice_path.with_name(piper_voice_path.name + ".json").read_text())["audio"]["sample_rate"]
+    rate = json.loads(piper_voice_path.with_name(piper_voice_path.name + ".json").read_text(encoding="utf-8"))["audio"]["sample_rate"]
     for path, title in zip(files[:2], ("Chapter 1: Water", "Chapter 2: Carbon")):
         probe = ffprobe(path)
         stream = probe["streams"][0]

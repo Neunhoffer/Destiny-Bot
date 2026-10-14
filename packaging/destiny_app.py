@@ -14,6 +14,9 @@ import multiprocessing
 import os
 import sys
 
+# Before anything can import onnxruntime: stop its telemetry to Microsoft (see destiny_bot/__init__.py).
+os.environ.setdefault("ORT_DISABLE_TELEMETRY", "1")
+
 
 def _port(args: list[str]) -> int:
     for index, arg in enumerate(args):

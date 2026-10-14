@@ -16,6 +16,7 @@ from pathlib import Path
 from ..models import Block, BlockKind, Document
 from . import IngestError, ProgressFn
 from .common import (
+    HyphenationEvidence,
     clean_display_text,
     doc_id_for_bytes,
     doc_id_for_file,
@@ -97,9 +98,12 @@ def _normalize_newlines(text: str) -> str:
 # --------------------------------------------------------------------------- shared block helpers
 
 
-def text_block(kind: BlockKind, text: str, **fields) -> Block | None:
+def text_block(kind: BlockKind, text: str, *, evidence: HyphenationEvidence | None = None, **fields) -> Block | None:
     """A cleaned block, or ``None`` when nothing readable is left."""
-    cleaned = fix_characters(text).strip("\n") if kind == BlockKind.CODE else clean_display_text(text)
+    if kind == BlockKind.CODE:
+        cleaned = fix_characters(text).strip("\n")
+    else:
+        cleaned = clean_display_text(text, evidence=evidence)
     if not cleaned.strip():
         return None
     return Block(kind=kind, text=cleaned, **fields)
@@ -234,7 +238,7 @@ def _split_paragraphs(text: str) -> list[list[str]]:
     return paragraphs
 
 
-def _body_blocks(lines: list[str], page: int | None) -> list[Block]:
+def _body_blocks(lines: list[str], page: int | None, evidence: HyphenationEvidence | None = None) -> list[Block]:
     """Paragraph and bullet blocks for the non-heading lines of one paragraph."""
     if len(lines) > 1 and max(len(line) for line in lines) > 200:
         # Not hard-wrapped: every line is its own paragraph.
@@ -274,7 +278,7 @@ def _body_blocks(lines: list[str], page: int | None) -> list[Block]:
             pieces.append((BlockKind.PARAGRAPH, prose))
         if item:
             pieces.append((BlockKind.LIST_ITEM, item))
-    blocks = [text_block(kind, "\n".join(piece), page=page) for kind, piece in pieces]
+    blocks = [text_block(kind, "\n".join(piece), page=page, evidence=evidence) for kind, piece in pieces]
     return [block for block in blocks if block is not None]
 
 
@@ -287,6 +291,7 @@ def plain_text_blocks(text: str, *, page: int | None = None) -> list[Block]:
     headings; heading levels follow the kinds of headings the text uses.
     """
     text = _normalize_newlines(text).replace("\f", "\n\n").replace("\v", "\n")
+    evidence = HyphenationEvidence(text.split("\n"))  # how the text spells "self-esteem" elsewhere
     raw: list[tuple[str, object]] = []  # ("heading", (rank, text)) | ("body", lines)
     for para in _split_paragraphs(text):
         # Underlined headings ("Notes" over "=====") and decorative rule lines.
@@ -340,7 +345,7 @@ def plain_text_blocks(text: str, *, page: int | None = None) -> list[Block]:
             if block:
                 blocks.append(block)
         else:
-            blocks.extend(_body_blocks(item, page))  # type: ignore[arg-type]
+            blocks.extend(_body_blocks(item, page, evidence))  # type: ignore[arg-type]
     return blocks
 
 

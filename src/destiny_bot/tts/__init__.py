@@ -31,6 +31,19 @@ def clamp_rate(rate: float | None, low: float = 0.25, high: float = 4.0) -> floa
     return min(max(value, low), high)
 
 
+def disable_onnx_telemetry() -> None:
+    """Turn off onnxruntime's telemetry events (on by default in Windows builds).
+
+    Call before creating an inference session; it is process-wide and harmless to repeat.
+    """
+    try:
+        import onnxruntime
+
+        onnxruntime.disable_telemetry_events()
+    except Exception:  # not installed, or an onnxruntime without this switch
+        pass
+
+
 def _create(name: str) -> TTSEngine:
     if name == "kokoro":
         from .kokoro_engine import KokoroEngine
@@ -105,6 +118,7 @@ __all__ = [
     "Voice",
     "all_engines",
     "clamp_rate",
+    "disable_onnx_telemetry",
     "get_engine",
     "resolve_engine",
 ]

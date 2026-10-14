@@ -21,8 +21,11 @@ import json
 import os
 import re
 import socket
+import ssl
+import sys
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -324,8 +327,8 @@ def download_piper_voice(
                 raise VoiceDownloadError("The downloaded voice file was empty. Please try again.")
 
             # The .json goes last: a voice counts as installed once both files exist.
-            os.replace(model_tmp, model_path)
-            os.replace(config_tmp, config_path)
+            _replace(model_tmp, model_path)
+            _replace(config_tmp, config_path)
         except DownloadCancelled:
             _report(progress, 0.0, "Download cancelled")
             raise
@@ -391,7 +394,7 @@ def download_kokoro_model(
                 before += item.size
             # The model goes last: Kokoro counts as installed once both files exist.
             for tmp, item in fetched:
-                os.replace(tmp, folder / item.name)
+                _replace(tmp, folder / item.name)
         except DownloadCancelled:
             _report(progress, 0.0, "Download cancelled")
             raise
@@ -437,7 +440,9 @@ def _fetch(
     request = urllib.request.Request(url, headers={"User-Agent": "DestinyBot voice downloader"})
     with os.fdopen(fd, "wb") as out:
         try:
-            response = urllib.request.urlopen(request, timeout=_TIMEOUT_S)  # noqa: S310 (https / test URL only)
+            response = urllib.request.urlopen(  # noqa: S310 (https / test URL only)
+                request, timeout=_TIMEOUT_S, context=_ssl_context()
+            )
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 raise VoiceDownloadError(
@@ -472,6 +477,36 @@ def _fetch(
     if cancel is not None and cancel.is_set():
         raise DownloadCancelled("Download cancelled.")
     return tmp
+
+
+def _ssl_context() -> ssl.SSLContext:
+    """The computer's trusted certificates, plus certifi's when Python found none.
+
+    Python from python.org on macOS ships without any (until "Install Certificates"
+    is run), which made every download fail as if the internet were down.
+    """
+    context = ssl.create_default_context()
+    if not context.cert_store_stats().get("x509_ca"):
+        try:
+            import certifi
+
+            context.load_verify_locations(cafile=certifi.where())
+        except (ImportError, OSError, ssl.SSLError):
+            pass
+    return context
+
+
+def _replace(src: Path, dst: Path) -> None:
+    """``os.replace`` that waits for a virus scanner to let go of a just-downloaded file (Windows)."""
+    attempts = 10 if sys.platform == "win32" else 1
+    for attempt in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(min(0.1 * 2**attempt, 2.0))
 
 
 def _lock_for(voice_id: str) -> threading.Lock:

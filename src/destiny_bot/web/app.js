@@ -34,6 +34,20 @@ const clamp = (value, lo, hi) => Math.min(hi, Math.max(lo, value));
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
+/**
+ * Playback timing for automated tests, only when the address has ?debug. `slowTts`
+ * delays every clip (simulates a slow computer); `fastForward` plays each clip and
+ * pause that many times shorter (long-session tests).
+ */
+const debug = /[?&]debug(=|&|$)/.test(window.location.search)
+  ? { events: [], slowTts: 0, fastForward: 1 } : null;
+
+function trace(type, data = {}) {
+  if (!debug) return;
+  debug.events.push({ type, perf: performance.now(), ...data });
+  if (debug.events.length > 4000) debug.events.splice(0, 1000);
+}
+
 function debounce(fn, ms) {
   let timer = 0;
   const run = (...args) => {
@@ -280,27 +294,32 @@ function errorText(err) {
   return err.message || String(err);
 }
 
-function toast(message, { kind = 'info', action = null, timeout = null } = {}) {
+/** A short message. `actions` (several buttons) appear in a row under the message. */
+function toast(message, { kind = 'info', action = null, actions = null, timeout = null } = {}) {
   const box = $('#toasts');
   const iconName = kind === 'error' ? 'alert' : kind === 'success' ? 'check' : 'info';
-  const node = el('div', { class: `toast toast-${kind}`, role: kind === 'error' ? 'alert' : 'status' },
-    icon(iconName), el('div', { class: 'toast-msg', text: message }));
+  const text = el('div', { class: 'toast-msg', text: message });
+  const node = el('div', { class: `toast toast-${kind}`, role: kind === 'error' ? 'alert' : 'status' }, icon(iconName), text);
   let timer = 0;
   const close = () => {
     clearTimeout(timer);
     node.classList.add('is-leaving');
     setTimeout(() => node.remove(), 220);
   };
-  if (action) {
-    node.append(el('button', {
-      type: 'button', class: 'btn btn-small btn-secondary',
-      onclick: () => { close(); action.run(); },
-    }, action.label));
+  const button = (a) => el('button', {
+    type: 'button', class: `btn btn-small ${a.primary ? 'btn-primary' : 'btn-secondary'}`,
+    onclick: () => { close(); a.run(); },
+  }, a.label);
+  if (actions?.length) {
+    node.classList.add('has-actions');
+    text.append(el('div', { class: 'toast-actions' }, actions.map(button)));
+  } else if (action) {
+    node.append(button(action));
   }
   node.append(el('button', { type: 'button', class: 'icon-btn icon-btn-small', 'aria-label': 'Dismiss', onclick: close }, icon('close')));
   box.append(node);
   while (box.children.length > 4) box.firstElementChild.remove();
-  const ms = timeout ?? (action || kind === 'error' ? 12000 : 5000);
+  const ms = timeout ?? (action || actions || kind === 'error' ? 12000 : 5000);
   const arm = (delay) => { clearTimeout(timer); timer = setTimeout(close, delay); };
   arm(ms);
   node.addEventListener('mouseenter', () => clearTimeout(timer));
@@ -493,7 +512,7 @@ const SECTION_GAP_SECONDS = 0.5;
 
 /** Natural pauses: shortened a little at high speed, never lengthened at low speed. */
 function pauseSeconds(utterance, rate) {
-  return (utterance.pause_after_ms || 0) / Math.max(1, rate * 0.8) / 1000;
+  return (utterance.pause_after_ms || 0) / Math.max(1, rate * 0.8) / 1000 / (debug?.fastForward || 1);
 }
 
 /** The one reusable <audio> element, used only when Web Audio isn't available. */
@@ -586,33 +605,28 @@ const mediaKeeper = {
   },
 };
 
-/** Fetched speech clips keyed by engine/voice/rate/text. LRU with bounded parallel prefetch. */
+/**
+ * Fetched speech clips keyed by engine/voice/rate/text (LRU). Requests go out one at
+ * a time, the clip needed soonest first: the voice engines synthesize one clip at a
+ * time anyway, so parallel requests would only delay the sentence about to be heard.
+ */
 const clips = {
   entries: new Map(),
-  waiting: [],
+  waiting: [], // not requested yet: urgent clips first, then prefetches in reading order
   running: 0,
-  maxParallel: 2,
-  limit: 40,
+  maxParallel: 1,
+  limit: 60,
+  synth: new Map(), // engine -> {busy, heard}: recent seconds spent synthesizing, and of audio made
+  charsPerSecond: 14, // speaking speed at 1×, learned from real clips
 
   key(text, engine, voice, rate) {
     return [engine, voice || '', rate.toFixed(2), text].join('␟');
   },
 
-  get(text, engine, voice, rate, { urgent = false } = {}) {
-    const key = this.key(text, engine, voice, rate);
-    let entry = this.entries.get(key);
-    if (entry) {
-      this.entries.delete(key);
-      this.entries.set(key, entry);
-      if (urgent && !entry.started) {
-        entry.urgent = true;
-        this.start(entry);
-      }
-      return entry;
-    }
-    entry = {
-      key, text, engine, voice, rate, urgent, started: false, pinned: 0,
-      controller: new AbortController(), blob: null, url: null,
+  create(key, text, engine, voice, rate) {
+    const entry = {
+      key, text, engine, voice, rate, urgent: false, prefetched: false, started: false, pinned: 0,
+      controller: new AbortController(), blob: null, url: null, duration: 0, learned: false,
     };
     entry.promise = new Promise((resolve, reject) => {
       entry.resolve = resolve;
@@ -620,13 +634,54 @@ const clips = {
     });
     entry.promise.catch(() => {}); // prefetch failures are reported when the clip is needed
     this.entries.set(key, entry);
-    if (urgent) this.start(entry);
-    else {
-      this.waiting.push(entry);
-      this.pump();
+    return entry;
+  },
+
+  touch(key) {
+    const entry = this.entries.get(key);
+    if (entry) {
+      this.entries.delete(key);
+      this.entries.set(key, entry);
     }
+    return entry;
+  },
+
+  get(text, engine, voice, rate, { urgent = false } = {}) {
+    const key = this.key(text, engine, voice, rate);
+    let entry = this.touch(key);
+    if (!entry) {
+      entry = this.create(key, text, engine, voice, rate);
+      this.waiting.push(entry);
+    }
+    if (urgent && !entry.started) {
+      entry.urgent = true;
+      this.waiting.splice(this.waiting.indexOf(entry), 1);
+      this.waiting.unshift(entry);
+    }
+    this.pump();
     this.evict();
     return entry;
+  },
+
+  /** Queue `wanted` ([text, engine, voice, rate] in reading order) behind urgent clips; forget stale prefetches. */
+  plan(wanted) {
+    const order = wanted.map(([text, engine, voice, rate]) => {
+      const key = this.key(text, engine, voice, rate);
+      const entry = this.touch(key) || this.create(key, text, engine, voice, rate);
+      if (!entry.started) entry.prefetched = true;
+      return entry;
+    });
+    const want = new Set(order);
+    for (const entry of [...this.waiting]) {
+      if (entry.prefetched && !entry.urgent && !entry.pinned && !want.has(entry)) this.drop(entry);
+    }
+    this.waiting = [
+      ...this.waiting.filter((e) => e.urgent),
+      ...order.filter((e) => !e.started && !e.urgent),
+      ...this.waiting.filter((e) => !e.urgent && !want.has(e)),
+    ];
+    this.pump();
+    this.evict();
   },
 
   start(entry) {
@@ -634,8 +689,8 @@ const clips = {
     entry.started = true;
     const queued = this.waiting.indexOf(entry);
     if (queued >= 0) this.waiting.splice(queued, 1);
-    const counted = !entry.urgent;
-    if (counted) this.running += 1;
+    this.running += 1;
+    const began = performance.now();
     api('/api/tts', {
       method: 'POST',
       body: { text: entry.text, engine: entry.engine, voice: entry.voice || undefined, rate: entry.rate },
@@ -643,23 +698,57 @@ const clips = {
       raw: true,
     })
       .then((res) => res.blob())
-      .then((blob) => {
+      .then(async (blob) => {
+        if (debug?.slowTts) await wait(debug.slowTts);
+        entry.fetchSeconds = (performance.now() - began) / 1000;
         entry.blob = blob;
         entry.resolve(blob);
+        trace('fetch', { chars: entry.text.length, seconds: entry.fetchSeconds, engine: entry.engine });
       }, (err) => {
         if (this.entries.get(entry.key) === entry) this.entries.delete(entry.key);
         entry.reject(err);
       })
       .finally(() => {
-        if (counted) {
-          this.running -= 1;
-          this.pump();
-        }
+        this.running -= 1;
+        this.pump();
       });
   },
 
   pump() {
     while (this.running < this.maxParallel && this.waiting.length) this.start(this.waiting[0]);
+  },
+
+  /** Learn how fast this engine synthesizes and how fast it speaks, from a decoded clip. */
+  learn(entry, duration) {
+    entry.duration = duration;
+    if (entry.learned || !(duration > 0.3) || !entry.fetchSeconds) return;
+    entry.learned = true;
+    // Weighted by audio length (short clips carry a fixed overhead), starting from a guess.
+    const guess = this.rtf(entry.engine);
+    const s = this.synth.get(entry.engine) || { busy: 5 * guess, heard: 5 };
+    s.busy = s.busy * 0.9 + Math.min(entry.fetchSeconds, duration * 2); // the first clip also loads the voice
+    s.heard = s.heard * 0.9 + duration;
+    this.synth.set(entry.engine, s);
+    const cps = entry.text.length / (duration * entry.rate);
+    if (cps > 4 && cps < 40) this.charsPerSecond = this.charsPerSecond * 0.8 + cps * 0.2;
+  },
+
+  /** Seconds this engine needs to make one second of audio (real-time factor). */
+  rtf(engine) {
+    const s = this.synth.get(engine);
+    if (s) return s.busy / s.heard;
+    return engine === 'kokoro' ? 0.6 : 0.2;
+  },
+
+  /** Seconds of listening to keep fetched ahead: more when the voice is slow to make. */
+  lookaheadSeconds(engine) {
+    return clamp(15 + 60 * this.rtf(engine), 20, 120);
+  },
+
+  /** Expected length of a clip in seconds (exact once it has been decoded). */
+  estimate(text, engine, voice, rate) {
+    const known = this.entries.get(this.key(text, engine, voice, rate))?.duration;
+    return known || text.length / (this.charsPerSecond * rate);
   },
 
   evict() {
@@ -697,7 +786,9 @@ const clips = {
     const blob = await entry.promise;
     const bytes = await blob.arrayBuffer();
     try {
-      return await ctx.decodeAudioData(bytes);
+      const buffer = await ctx.decodeAudioData(bytes);
+      this.learn(entry, buffer.duration);
+      return buffer;
     } catch (err) {
       const failure = new Error("This voice's audio couldn't be decoded.");
       failure.isDecodeError = true;
@@ -760,8 +851,9 @@ const webAudio = {
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     const gain = ctx.createGain();
-    const end = startAt + buffer.duration;
-    const fade = Math.min(FADE_SECONDS, buffer.duration / 4);
+    const length = buffer.duration / (debug?.fastForward || 1);
+    const end = startAt + length;
+    const fade = Math.min(FADE_SECONDS, length / 4);
     gain.gain.setValueAtTime(0, startAt);
     gain.gain.linearRampToValueAtTime(1, startAt + fade);
     gain.gain.setValueAtTime(1, Math.max(startAt + fade, end - fade));
@@ -776,7 +868,8 @@ const webAudio = {
         /* already disconnected */
       }
     };
-    source.start(startAt);
+    if (length < buffer.duration) source.start(startAt, 0, length);
+    else source.start(startAt);
     return { source, gain, start: startAt, end };
   },
 
@@ -1054,7 +1147,9 @@ async function playClipElement(text, engine, voice, rate, live) {
 // 6. Gapless scheduler for server voices
 // =====================================================================
 
-const AHEAD = 3;
+const AHEAD = 3; // sentences decoded and scheduled on the audio clock ahead of the one playing
+const MAX_PREFETCH = 40; // most clips fetched ahead (the lookahead itself is measured in seconds)
+const STALL_NOTICE_MS = 250; // show "Loading the voice…" once the listener has waited this long
 const sectionCache = new Map();
 
 function fetchSectionData(bookId, sectionId) {
@@ -1078,6 +1173,8 @@ function fetchSectionData(bookId, sectionId) {
 /**
  * Schedules decoded sentences back to back on the AudioContext clock and moves
  * the highlight when each one actually starts. Pause/resume suspend the clock.
+ * Clips are fetched one at a time, the next one needed first, then ahead in
+ * reading order (across sections) far enough that a slow voice never runs dry.
  */
 const sched = {
   active: false,
@@ -1086,13 +1183,17 @@ const sched = {
   filling: false,
   items: [], // {payload, index, u, source, gain, start, end, next}
   cursor: null, // {payload, index}: the next utterance to schedule
-  timeEnd: 0,
+  timeEnd: 0, // when the next utterance should start (audio clock)
   current: null,
   ended: null, // null | 'book' | 'sleep'
   timer: 0,
   engine: '',
   voice: '',
   rate: 1,
+  waitingSince: 0, // performance.now() when the listener started waiting for the voice
+  holdUntil: 0, // a sentence held back after running dry starts then (audio clock)
+  rateChangedAt: -Infinity,
+  stalls: [], // performance.now() of recent waits in the middle of reading
 
   start(index) {
     const ctx = webAudio.ctx;
@@ -1106,6 +1207,7 @@ const sched = {
     webAudio.resume();
     this.timer = setInterval(() => this.tick(), 40);
     clips.dropWhere((e) => e.rate !== this.rate || e.engine !== this.engine || e.voice !== this.voice);
+    trace('start', { section: state.section?.section?.id, index, engine: this.engine, rate: this.rate });
     this.fill();
   },
 
@@ -1121,6 +1223,9 @@ const sched = {
     this.cursor = null;
     this.ended = null;
     this.active = false;
+    this.waitingSince = 0;
+    this.holdUntil = 0;
+    setVoiceLoading(false);
   },
 
   canResume() {
@@ -1145,8 +1250,9 @@ const sched = {
         const next = await this.resolveCursor(valid);
         if (!valid()) return;
         if (!next) break;
-        this.prefetch(next);
+        // Ask for the clip needed now before queueing anything after it.
         const entry = clips.get(next.u.speech, this.engine, this.voice, this.rate, { urgent: true });
+        this.prefetch(valid);
         entry.pinned += 1;
         let buffer;
         try {
@@ -1189,20 +1295,74 @@ const sched = {
     return null;
   },
 
-  prefetch(next) {
-    const list = next.payload.utterances;
-    for (let i = next.index + 1; i <= next.index + AHEAD && i < list.length; i += 1) {
-      clips.get(list[i].speech, this.engine, this.voice, this.rate);
+  /** Queue the clips after the cursor, in reading order, until enough listening is covered. */
+  async prefetch(valid) {
+    if (!this.cursor) return;
+    const target = clips.lookaheadSeconds(this.engine);
+    let { payload, index } = this.cursor;
+    let ahead = Math.max(0, this.timeEnd - webAudio.ctx.currentTime);
+    const wanted = [];
+    try {
+      while (ahead < target && wanted.length < MAX_PREFETCH) {
+        if (index >= payload.utterances.length) {
+          if (!payload.next_id || !state.book || sleepTimer.mode === 'section') break;
+          payload = await fetchSectionData(state.book.id, payload.next_id);
+          if (!valid()) return;
+          index = 0;
+          ahead += SECTION_GAP_SECONDS;
+          continue;
+        }
+        const u = payload.utterances[index];
+        wanted.push([u.speech, this.engine, this.voice, this.rate]);
+        ahead += clips.estimate(u.speech, this.engine, this.voice, this.rate) / (debug?.fastForward || 1)
+          + pauseSeconds(u, this.rate);
+        index += 1;
+      }
+    } catch {
+      /* the next section isn't loaded yet; the scheduler reports problems when it gets there */
     }
+    if (valid()) clips.plan(wanted);
+  },
+
+  /**
+   * After running dry (or at the start), how long to hold the next sentence back so
+   * the few after it arrive in time: one short wait instead of stop-and-go speech.
+   */
+  preroll(next) {
+    const rtf = clips.rtf(this.engine);
+    if (rtf < 0.3) return 0;
+    const list = next.payload.utterances;
+    let ready = 0; // when clip i will have arrived, counted from now
+    let at = 0; // when clip i is due to start, counted from the held start
+    let need = 0;
+    for (let i = next.index; i < Math.min(list.length, next.index + 8); i += 1) {
+      const u = list[i];
+      const seconds = clips.estimate(u.speech, this.engine, this.voice, this.rate);
+      if (i > next.index) {
+        if (!clips.entries.get(clips.key(u.speech, this.engine, this.voice, this.rate))?.blob) ready += seconds * rtf;
+        need = Math.max(need, ready - at);
+      }
+      at += seconds / (debug?.fastForward || 1) + pauseSeconds(u, this.rate);
+    }
+    return Math.min(need, 4);
   },
 
   schedule(next, buffer) {
     const ctx = webAudio.ctx;
+    const now = ctx.currentTime;
     const prev = this.items[this.items.length - 1];
-    let startAt = Math.max(this.timeEnd, ctx.currentTime + 0.03);
-    if (prev && prev.payload !== next.payload) startAt += SECTION_GAP_SECONDS;
+    const gap = prev && prev.payload !== next.payload ? SECTION_GAP_SECONDS : 0;
+    let startAt = Math.max(this.timeEnd, now + 0.03) + gap;
+    if (!prev || now + 0.03 > this.timeEnd) {
+      startAt += this.preroll(next);
+      this.holdUntil = startAt;
+    }
     const node = webAudio.playAt(buffer, startAt);
     const item = { ...node, payload: next.payload, index: next.index, u: next.u, next: node.end + pauseSeconds(next.u, this.rate) };
+    trace('schedule', {
+      section: next.payload.section?.id, index: next.index, now, start: startAt, end: node.end,
+      planned: this.timeEnd + gap, pause: item.next - node.end, first: !prev,
+    });
     this.items.push(item);
     this.timeEnd = item.next;
   },
@@ -1225,6 +1385,7 @@ const sched = {
       this.items = this.items.filter((item) => item === current || item.next >= now);
     }
     if (!this.filling && this.cursor && this.aheadCount(now) < AHEAD) this.fill();
+    this.watchStall(now);
     if (this.ended && !this.filling && !this.cursor) {
       const last = this.items[this.items.length - 1];
       if (!last || heard >= last.end + 0.05) {
@@ -1235,11 +1396,30 @@ const sched = {
     }
   },
 
+  /** Notice when the listener is waiting for the voice: everything scheduled has played. */
+  watchStall(now) {
+    const waiting = player.playing && ((!!this.cursor && now > this.timeEnd + 0.02) || now < this.holdUntil - 0.05);
+    if (waiting) {
+      if (!this.waitingSince) this.waitingSince = performance.now();
+      if (performance.now() - this.waitingSince > STALL_NOTICE_MS) setVoiceLoading(true);
+      return;
+    }
+    if (!this.waitingSince) return;
+    const since = this.waitingSince;
+    const ms = performance.now() - since;
+    this.waitingSince = 0;
+    setVoiceLoading(false);
+    // Waiting for the first sentence, or right after a speed change, is expected.
+    if (this.current && ms > 500 && since - this.rateChangedAt > 8000) noteStall(ms);
+  },
+
   /** Speed changed: finish the current sentence, re-fetch everything after it at the new rate. */
   changeRate(rate) {
     if (!this.active || rate === this.rate) return;
     const now = webAudio.ctx.currentTime;
     this.rate = rate;
+    this.rateChangedAt = performance.now();
+    this.holdUntil = 0;
     this.fillGen += 1;
     this.filling = false;
     const keep = this.items.filter((item) => item.start <= now);
@@ -1253,6 +1433,7 @@ const sched = {
     const last = keep[keep.length - 1];
     this.timeEnd = last ? Math.max(now, last.end + pauseSeconds(last.u, rate)) : now + 0.05;
     clips.dropWhere((entry) => entry.rate !== rate);
+    trace('rate', { rate });
     this.fill();
   },
 
@@ -1293,7 +1474,54 @@ const sched = {
 function onScheduledStart(item) {
   if (item.payload !== state.section) showSection(item.payload, item.index, { announceIt: true });
   setCurrent(item.index, { scroll: true });
+  trace('highlight', {
+    section: item.payload.section?.id, index: item.index, start: item.start, heard: webAudio.heardTime(),
+  });
   noteProgress();
+}
+
+/** "Loading the voice…" on the play button and status line while the listener waits. */
+function setVoiceLoading(on) {
+  if (player.loading === on) return;
+  player.loading = on;
+  document.body.classList.toggle('is-loading-voice', on);
+  $('#btn-play').setAttribute('aria-busy', on ? 'true' : 'false');
+  updateStatus();
+}
+
+/** Count waits in the middle of reading; after a few with a slow voice, offer a faster one. */
+function noteStall(ms) {
+  trace('stall', { ms, engine: sched.engine, rate: sched.rate });
+  const now = performance.now();
+  sched.stalls = sched.stalls.filter((t) => now - t < 180000);
+  sched.stalls.push(now);
+  if (sched.stalls.length >= 3) offerFasterVoice();
+}
+
+function offerFasterVoice() {
+  if (sched.engine !== 'kokoro' || local.get('slowVoiceOffer', '') || $('.toast-offer')) return;
+  if (!engineAllowed(engineInfo('piper')) || !(state.serverVoices.piper || []).length) return;
+  sched.stalls = [];
+  const message = 'Your computer is a bit slow for this voice at this speed — switch to the faster natural voice?';
+  toast(message, {
+    kind: 'offer',
+    timeout: 30000,
+    actions: [
+      { label: 'Switch voice', primary: true, run: switchToFasterVoice },
+      { label: 'Keep this voice', run: () => local.set('slowVoiceOffer', 'kept') },
+    ],
+  });
+  announce(message);
+}
+
+async function switchToFasterVoice() {
+  const voice = activeVoice('piper');
+  if (!(await saveSettings({ tts_engine: 'piper', voices: { piper: voice } }))) return;
+  local.set('slowVoiceOffer', 'switched');
+  renderVoicePicker();
+  restartPlayback();
+  const name = (state.serverVoices.piper || []).find((v) => v.id === voice)?.name || 'the faster voice';
+  toast(`Now reading with ${name}. You can change the voice any time in the player.`, { kind: 'success' });
 }
 
 // =====================================================================
@@ -1302,6 +1530,7 @@ function onScheduledStart(item) {
 
 const player = {
   playing: false,
+  loading: false, // waiting for the voice to produce the next sentence
   mode: null, // 'webaudio' | 'sequential'
   gen: 0,
   sinceSave: 0,
@@ -1312,6 +1541,7 @@ const player = {
 function hardStop() {
   player.gen += 1;
   sched.teardown();
+  clips.plan([]); // forget prefetches not yet requested: the listener is moving elsewhere
   stopAudioElement();
   browserSpeech.cancel();
 }
@@ -1330,6 +1560,7 @@ function play() {
   if (!state.section || player.playing) return;
   speaker.stop();
   const engine = activeEngine();
+  trace('play', { section: state.section.section.id, index: state.index, engine });
   if (engine === 'browser') {
     startBrowserPlayback();
     return;
@@ -1393,8 +1624,25 @@ function restartPlayback() {
   hardStop();
   player.playing = false;
   if (was) play();
-  else updatePlayUI();
+  else {
+    updatePlayUI();
+    warmUpSoon();
+  }
 }
+
+/**
+ * While nothing plays, get the sentence under the cursor ready so Play starts
+ * at once (offline voices only: an online voice only gets text after Play).
+ */
+const warmUpSoon = debounce(() => {
+  if (player.playing || sched.active || speaker.speaking || !state.section) return;
+  const engine = activeEngine();
+  const info = engineInfo(engine);
+  if (engine === 'browser' || !info || info.online || !info.available) return;
+  const voice = activeVoice(engine);
+  const next = state.section.utterances.slice(state.index, state.index + 2);
+  clips.plan(next.map((u) => [u.speech, engine, voice, state.speed]));
+}, 300);
 
 /** Browser voices and the <audio> fallback: one sentence at a time. */
 async function runSequential(gen) {
@@ -1571,6 +1819,7 @@ function updateStatus() {
   if (!state.book) status = 'Add or open something to start listening';
   else if (!sec) status = 'Loading…';
   else if (!sec.utterances.length) status = `Nothing to read aloud here · ${sec.section.title}`;
+  else if (player.loading) status = `Loading the voice… · ${sec.section.title}`;
   else status = `Sentence ${state.index + 1} of ${sec.utterances.length} · ${sec.section.title}`;
   $('#now-status').textContent = status;
 }
@@ -1579,7 +1828,10 @@ function updateStatus() {
 
 const applySpeedSoon = debounce(() => {
   if (sched.active) sched.changeRate(state.speed);
-  else clips.dropWhere((entry) => entry.rate !== state.speed);
+  else {
+    clips.dropWhere((entry) => entry.rate !== state.speed);
+    warmUpSoon();
+  }
 }, 250);
 const saveSpeedSoon = debounce(() => saveSettings({ speed: state.speed }), 700);
 
@@ -1966,6 +2218,7 @@ function setCurrent(index, { scroll = true, force = false } = {}) {
   updateStudyActions();
   updateBookmarkButton();
   if (scroll) scrollToCurrent({ force });
+  if (!player.playing) warmUpSoon();
 }
 
 function scrollToCurrent({ force = false, instant = false } = {}) {
@@ -4150,4 +4403,40 @@ async function init() {
   else renderReader();
 }
 
+/** Read-only view of playback for automated tests (only with ?debug in the address). */
+function exposeDebugHooks() {
+  const entries = () => [...clips.entries.values()];
+  window.athenaDebug = {
+    events: debug.events,
+    set slowTts(ms) { debug.slowTts = Math.max(0, Number(ms) || 0); },
+    set fastForward(factor) { debug.fastForward = Math.max(1, Number(factor) || 1); },
+    state() {
+      const ctx = webAudio.ctx;
+      return {
+        playing: player.playing,
+        loading: player.loading,
+        section: state.section?.section?.id ?? null,
+        index: state.index,
+        speed: state.speed,
+        engine: activeEngine(),
+        voice: activeVoice(),
+        rtf: Object.fromEntries([...clips.synth.keys()].map((e) => [e, clips.rtf(e)])),
+        lookahead: clips.lookaheadSeconds(activeEngine()),
+        clipEntries: clips.entries.size,
+        clipBlobs: entries().filter((e) => e.blob).length,
+        objectUrls: entries().filter((e) => e.url).length,
+        queued: clips.waiting.length,
+        inFlight: clips.running,
+        scheduled: sched.items.length,
+        sectionsCached: sectionCache.size,
+        ctxTime: ctx ? ctx.currentTime : null,
+        ctxState: ctx ? ctx.state : null,
+        recentStalls: sched.stalls.length,
+        heapBytes: performance.memory ? performance.memory.usedJSHeapSize : null,
+      };
+    },
+  };
+}
+
+if (debug) exposeDebugHooks();
 init();

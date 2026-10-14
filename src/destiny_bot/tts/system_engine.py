@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import base64
 import concurrent.futures
+import importlib.util
+import locale
 import math
 import os
 import queue
@@ -314,8 +316,32 @@ def _co_initialize() -> None:
         pass
 
 
+# SAPI automation constants (SpeechLib).
+_SSFM_CREATE_FOR_WRITE = 3
+_SAFT_22KHZ_16BIT_MONO = 22
+_SVSF_IS_NOT_XML = 16  # plain text, even when it starts with "<"
+
+
+class _Sapi:
+    """SAPI 5's SpVoice, driven directly through comtypes.
+
+    Speaking into a file stream is synchronous and needs no events or message loop.
+    (pyttsx3 2.99's save_to_file writes only a WAV header on current Windows, and its
+    runAndWait can wait forever for an end-of-stream event that never comes.)
+    """
+
+    def __init__(self) -> None:
+        import comtypes.client  # type: ignore[import-not-found]
+
+        self.create = comtypes.client.CreateObject
+        self.voice = self.create("SAPI.SpVoice")
+
+    def tokens(self) -> list[Any]:
+        return list(self.voice.GetVoices())
+
+
 class _SapiWorker:
-    """One thread that owns the pyttsx3 engine (SAPI objects must stay on their thread)."""
+    """One thread that owns SAPI's COM objects (they must stay on the thread that made them)."""
 
     def __init__(self) -> None:
         self._jobs: queue.Queue[tuple[Callable[..., Any], tuple[Any, ...], concurrent.futures.Future]] = queue.Queue()
@@ -328,13 +354,11 @@ class _SapiWorker:
         return future.result(timeout=timeout)
 
     def _loop(self) -> None:
-        engine: Any = None
+        sapi: _Sapi | None = None
         init_error: BaseException | None = None
         try:
             _co_initialize()
-            import pyttsx3
-
-            engine = pyttsx3.init("sapi5")
+            sapi = _Sapi()
         except BaseException as exc:  # noqa: BLE001 - reported to every caller
             init_error = exc
         while True:
@@ -345,44 +369,82 @@ class _SapiWorker:
                 future.set_exception(init_error)
                 continue
             try:
-                future.set_result(fn(engine, *args))
+                future.set_result(fn(sapi, *args))
             except BaseException as exc:  # noqa: BLE001
                 future.set_exception(exc)
 
 
-def _pyttsx3_voices(engine: Any) -> list[Voice]:
+def _token_attr(token: Any, name: str) -> str:
+    try:
+        return str(token.GetAttribute(name) or "")
+    except Exception:  # a voice without that attribute
+        return ""
+
+
+def _token_name(token: Any) -> str:
+    try:
+        return _sapi_name(str(token.GetDescription() or ""))
+    except Exception:
+        return ""
+
+
+def _lcid_language(value: str) -> str | None:
+    """SAPI's language attribute ("409", or "409;9" for several) as BCP-47 ("en-US")."""
+    try:
+        lcid = int(value.split(";")[0].strip(), 16)
+    except ValueError:
+        return None
+    code = locale.windows_locale.get(lcid)
+    return _bcp47(code) if code else None
+
+
+def _sapi_voices(sapi: _Sapi) -> list[Voice]:
     voices: list[Voice] = []
     seen: set[str] = set()
-    for v in engine.getProperty("voices"):
-        name = _sapi_name(str(getattr(v, "name", "") or ""))
+    for token in sapi.tokens():
+        name = _token_name(token)
         if not name or name in seen:
             continue
         seen.add(name)
-        langs = getattr(v, "languages", None) or []
-        language = _bcp47(str(langs[0])) if langs and "Unknown" not in str(langs[0]) else None
-        gender = (getattr(v, "gender", None) or "").lower() or None
-        voices.append(Voice(id=name, name=name, engine="system", language=language, gender=gender))
+        gender = _token_attr(token, "Gender").lower()
+        language = _lcid_language(_token_attr(token, "Language"))
+        voices.append(
+            Voice(id=name, name=name, engine="system", language=language, gender=gender if gender in ("male", "female") else None)
+        )
     return voices
 
 
-def _pyttsx3_save(engine: Any, text: str, voice: str | None, wpm: int, out_path: str) -> None:
+def _sapi_save(sapi: _Sapi, text: str, voice: str | None, sapi_rate: int, out_path: str) -> None:
     if voice:
-        for v in engine.getProperty("voices"):
-            if _sapi_name(str(getattr(v, "name", "") or "")) == voice:
-                engine.setProperty("voice", v.id)
-                break
-        else:
+        token = next((t for t in sapi.tokens() if _token_name(t) == voice), None)
+        if token is None:
             raise EngineUnavailable(f"The Windows voice '{voice}' isn't installed. Pick another voice in Settings.")
-    engine.setProperty("rate", wpm)  # after the voice: changing voice resets the rate
-    engine.save_to_file(text, out_path)
-    engine.runAndWait()
+        sapi.voice.Voice = token
+    sapi.voice.Rate = sapi_rate  # after the voice: changing voice resets the rate
+    stream = sapi.create("SAPI.SpFileStream")
+    stream.Format.Type = _SAFT_22KHZ_16BIT_MONO
+    stream.Open(out_path, _SSFM_CREATE_FOR_WRITE, False)
+    try:
+        sapi.voice.AudioOutputStream = stream
+        sapi.voice.Speak(text, _SVSF_IS_NOT_XML)  # synchronous
+    finally:
+        stream.Close()
+
+
+def _has_audio(data: bytes) -> bool:
+    from ..audio import read_wav
+
+    try:
+        return bool(read_wav(data)[0])
+    except ValueError:
+        return False
 
 
 class _WindowsBackend(_Backend):
     def __init__(self) -> None:
         super().__init__()
         self._worker: _SapiWorker | None = None
-        self._pyttsx3_ok: bool | None = None
+        self._sapi_ok: bool | None = None
         self._lock = threading.Lock()
 
     def _powershell(self) -> str | None:
@@ -394,23 +456,21 @@ class _WindowsBackend(_Backend):
 
     def _sapi(self) -> _SapiWorker | None:
         with self._lock:
-            if self._pyttsx3_ok is None:
-                try:
-                    import pyttsx3  # noqa: F401
-
-                    self._pyttsx3_ok = True
-                except Exception:
-                    self._pyttsx3_ok = False
-            if not self._pyttsx3_ok:
+            if self._sapi_ok is None:
+                try:  # no import here: importing comtypes initializes COM on the calling thread
+                    self._sapi_ok = importlib.util.find_spec("comtypes") is not None
+                except (ImportError, ValueError):
+                    self._sapi_ok = False
+            if not self._sapi_ok:
                 return None
             if self._worker is None:
                 self._worker = _SapiWorker()
             return self._worker
 
-    def _give_up_on_pyttsx3(self) -> None:
+    def _give_up_on_sapi(self) -> None:
         # A hung or broken SAPI thread is abandoned (it is a daemon); PowerShell takes over.
         with self._lock:
-            self._pyttsx3_ok = False
+            self._sapi_ok = False
             self._worker = None
 
     def is_available(self) -> tuple[bool, str]:
@@ -422,9 +482,9 @@ class _WindowsBackend(_Backend):
         worker = self._sapi()
         if worker is not None:
             try:
-                return worker.call(_pyttsx3_voices, timeout=30)
+                return worker.call(_sapi_voices, timeout=30)
             except Exception:
-                self._give_up_on_pyttsx3()
+                self._give_up_on_sapi()
         exe = self._powershell()
         if not exe:
             return []
@@ -445,26 +505,37 @@ class _WindowsBackend(_Backend):
         return candidates[0] if candidates else None
 
     def synthesize(self, text: str, voice: str | None, wpm: int, rate: float) -> AudioClip:
-        with tempfile.TemporaryDirectory(prefix="destiny-sapi-", ignore_cleanup_errors=True) as tmp:
-            out = Path(tmp) / "speech.wav"
+        with tempfile.TemporaryDirectory(prefix="destiny-sapi-", ignore_cleanup_errors=True) as tmp_dir:
+            tmp = Path(tmp_dir)
             worker = self._sapi()
-            if worker is not None:
-                try:
-                    worker.call(_pyttsx3_save, text, voice, wpm, str(out), timeout=_synth_timeout(text))
-                    if out.is_file() and out.stat().st_size > 44:
-                        return _wav_clip(out.read_bytes())
-                except EngineUnavailable:
-                    raise
-                except Exception:
-                    pass
-                self._give_up_on_pyttsx3()
-            return self._powershell_speak(text, voice, wpm, Path(tmp), out)
+            if worker is None:
+                return _wav_clip(self._powershell_speak(text, voice, wpm, tmp))
+            # Its own file: a SAPI call that timed out may still hold it open.
+            sapi_out = tmp / "sapi.wav"
+            try:
+                worker.call(_sapi_save, text, voice, _sapi_rate(wpm), str(sapi_out), timeout=_synth_timeout(text))
+                data = sapi_out.read_bytes()
+            except EngineUnavailable:
+                raise
+            except Exception:
+                self._give_up_on_sapi()
+                return _wav_clip(self._powershell_speak(text, voice, wpm, tmp))
+            if _has_audio(data):
+                return _wav_clip(data)
+            # No sound: either nothing speakable, or SAPI is broken here. Ask PowerShell.
+            if not self._powershell():
+                return _wav_clip(data)
+            fallback = self._powershell_speak(text, voice, wpm, tmp)
+            if _has_audio(fallback):
+                self._give_up_on_sapi()
+            return _wav_clip(fallback)
 
-    def _powershell_speak(self, text: str, voice: str | None, wpm: int, tmp: Path, out: Path) -> AudioClip:
+    def _powershell_speak(self, text: str, voice: str | None, wpm: int, tmp: Path) -> bytes:
+        """The WAV bytes System.Speech makes for ``text`` (through Windows PowerShell)."""
         exe = self._powershell()
         if not exe:
             raise EngineUnavailable(self.is_available()[1])
-        text_path = tmp / "text.txt"
+        text_path, out = tmp / "text.txt", tmp / "speech.wav"
         text_path.write_text(text, encoding="utf-8")
         env = dict(os.environ)
         env.update(
@@ -477,7 +548,7 @@ class _WindowsBackend(_Backend):
         proc = _run(cmd, env=env, timeout=_synth_timeout(text) + 30)
         if proc.returncode != 0 or not out.is_file():
             raise TTSError(_FAILED_MSG)
-        return _wav_clip(out.read_bytes())
+        return out.read_bytes()
 
 
 # --------------------------------------------------------------------------- engine

@@ -13,8 +13,10 @@ import io
 import os
 import re
 import struct
+import sys
 import tempfile
 import threading
+import time
 import unicodedata
 from pathlib import Path
 from typing import Callable, Literal
@@ -156,7 +158,8 @@ def _record_section(
     first = _speak(engine, plan[0].speech, voice, rate)
     # MP3-only engines can't produce WAV (we have no MP3 decoder); save those as MP3.
     ext = "mp3" if fmt == "mp3" or first.mime == "audio/mpeg" else "wav"
-    final = out_dir / f"{number:0{width}d} - {safe_filename(section_title)}.{ext}"
+    prefix = f"{number:0{width}d} - "
+    final = out_dir / f"{prefix}{safe_filename(section_title, _name_room(out_dir, prefix, ext))}.{ext}"
     fd, tmp_name = tempfile.mkstemp(dir=out_dir, prefix=".export-", suffix=f".{ext}.part")
     tmp = Path(tmp_name)
     written.append(tmp)
@@ -185,7 +188,13 @@ def _record_section(
         joiner.add_silence(TRAIL_SILENCE_MS)
         seconds = joiner.close()
     _check_cancel(cancel)
-    os.replace(tmp, final)
+    try:
+        _replace(tmp, final)
+    except PermissionError as exc:
+        raise ExportError(
+            f"Couldn't save \"{final.name}\" because another program (maybe a music player) is using a file "
+            "with that name. Close it and try again."
+        ) from exc
     written[written.index(tmp)] = final
     return final, seconds
 
@@ -209,7 +218,21 @@ def _check_cancel(cancel: threading.Event | None) -> None:
 # --------------------------------------------------------------------------- file names
 
 _FORBIDDEN = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f]')
-_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+# Windows device names, also with any extension ("NUL.txt", "com1 .tar.gz") or a superscript digit.
+_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"{dev}{n}" for dev in ("COM", "LPT") for n in "0123456789¹²³")}
+
+
+# Windows refuses full paths of 260 characters or more unless long paths are switched on.
+_WINDOWS_MAX_PATH = 259
+_MIN_NAME = 20
+
+
+def _name_room(out_dir: Path, prefix: str, ext: str, max_len: int = 80) -> int:
+    """How long a track's title part may be so its full path stays usable on this system."""
+    if sys.platform != "win32":
+        return max_len
+    used = len(os.path.abspath(out_dir)) + 1 + len(prefix) + 1 + len(ext)
+    return max(_MIN_NAME, min(max_len, _WINDOWS_MAX_PATH - used))
 
 
 def safe_filename(name: str, max_len: int = 80) -> str:
@@ -226,8 +249,9 @@ def safe_filename(name: str, max_len: int = 80) -> str:
     name = name.rstrip(" .").lstrip(" ")
     if not name:
         name = "Untitled"
-    if name.split(".", 1)[0].upper() in _RESERVED:
-        name = f"{name}_"
+    stem, dot, rest = name.partition(".")
+    if stem.rstrip(" ").upper() in _RESERVED:
+        name = f"{stem.rstrip(' ')}_{dot}{rest}"
     return name
 
 
@@ -270,10 +294,23 @@ def _atomic_write(path: Path, data: bytes) -> None:
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
-        os.replace(tmp, path)
+        _replace(Path(tmp), path)
     except BaseException:
         _unlink(Path(tmp))
         raise
+
+
+def _replace(src: Path, dst: Path) -> None:
+    """``os.replace`` that retries briefly on Windows, where a virus scanner or player may hold the file."""
+    attempts = 8 if sys.platform == "win32" else 1
+    for attempt in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.05 * (attempt + 1))
 
 
 def _unlink(path: Path) -> None:

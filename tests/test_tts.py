@@ -131,7 +131,7 @@ def fake_piper(monkeypatch):
 
     def fake_load(self, path):
         loaded.append(path.stem)
-        meta = json.loads(path.with_name(path.name + ".json").read_text())
+        meta = json.loads(path.with_name(path.name + ".json").read_text(encoding="utf-8"))
         return FakePiperVoice(str(path), length_scale=meta.get("inference", {}).get("length_scale", 1.0))
 
     monkeypatch.setattr(PiperEngine, "_load", fake_load)
@@ -212,7 +212,9 @@ def test_resolve_survives_broken_engine(availability, monkeypatch):
 def test_resolve_real_auto_without_voices():
     # No Kokoro pack or Piper voice in the fresh data folder: auto skips both.
     engine = registry.resolve_engine("auto", online_allowed=False)
-    assert engine.name == ("system" if HAS_ESPEAK else "browser")
+    # Windows (SAPI) and macOS (say) always have a system voice; Linux needs espeak-ng.
+    has_system_voice = HAS_ESPEAK or sys.platform in ("win32", "darwin")
+    assert engine.name == ("system" if has_system_voice else "browser")
 
 
 # --------------------------------------------------------------------------- piper
@@ -370,7 +372,7 @@ def test_piper_real_synthesis(piper_voice_path):
     assert engine.is_available() == (True, "")
     assert engine.default_voice() == voice_id
     clip = engine.synthesize("Photosynthesis turns light into chemical energy.")
-    rate = json.loads(piper_voice_path.with_name(piper_voice_path.name + ".json").read_text())["audio"]["sample_rate"]
+    rate = json.loads(piper_voice_path.with_name(piper_voice_path.name + ".json").read_text(encoding="utf-8"))["audio"]["sample_rate"]
     assert clip.mime == "audio/wav" and clip.sample_rate == rate
     pcm, sr, channels, width = audio.read_wav(clip.data)
     assert (sr, channels, width) == (rate, 1, 2)
@@ -585,6 +587,32 @@ def test_kokoro_session_settings(monkeypatch):
     assert seen["path"].endswith("kokoro-v1.0.int8.onnx") and seen["providers"] == ["CPUExecutionProvider"]
     assert (opts.intra_op_num_threads, opts.inter_op_num_threads) == (3, 1)
     assert opts.get_session_config_entry("session.intra_op.allow_spinning") == "0"
+
+
+def test_onnx_telemetry_is_off_before_any_session(monkeypatch):
+    # onnxruntime's Windows builds send telemetry events by default; turn them off first.
+    import onnxruntime
+
+    piper = pytest.importorskip("piper")
+    events: list[str] = []
+    monkeypatch.setattr(onnxruntime, "disable_telemetry_events", lambda: events.append("telemetry off"))
+
+    def fake_session(*args, **kwargs):
+        events.append("session")
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(onnxruntime, "InferenceSession", fake_session)
+    write_fake_kokoro(config.voices_dir() / "kokoro")
+    with pytest.raises(EngineUnavailable):
+        KokoroEngine().synthesize("Hello")
+    assert events == ["telemetry off", "session"]
+
+    events.clear()
+    monkeypatch.setattr(piper.PiperVoice, "load", staticmethod(fake_session))  # Piper makes its own session
+    install_fake_voice("en_US-test-medium")
+    with pytest.raises(EngineUnavailable):
+        PiperEngine().synthesize("Hello")
+    assert events == ["telemetry off", "session"]
 
 
 def test_kokoro_damaged_model_is_friendly():
@@ -804,7 +832,7 @@ def _decode_ps(cmd: list[str]) -> str:
 
 def test_system_windows_powershell(monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setitem(sys.modules, "pyttsx3", None)  # pyttsx3 not installed
+    _fake_comtypes(monkeypatch, None)  # comtypes (SAPI from Python) not installed
     monkeypatch.setattr(shutil, "which", lambda name: PS_EXE if name == "powershell" else None)
     seen: list[dict] = []
 
@@ -845,94 +873,201 @@ def test_system_windows_powershell(monkeypatch):
     assert seen[-1]["DESTINY_TTS_RATE"] == "-10"
 
 
-class FakeSapiEngine:
-    def __init__(self, fail: bool = False):
-        self.fail = fail
-        self.props: dict = {}
-        self.threads: set[int] = set()
-        self.saved: list[tuple[str, str]] = []
+class FakeToken:
+    def __init__(self, token_id: str, description: str, language: str, gender: str | None):
+        self.Id, self.description, self.attrs = token_id, description, {"Language": language, "Gender": gender}
 
-    def getProperty(self, name):
-        self.threads.add(threading.get_ident())
-        assert name == "voices"
-        return [
-            SimpleNamespace(id="TOKEN_ZIRA", name="Microsoft Zira Desktop - English (United States)", languages=["en-US"], gender="Female"),
-            SimpleNamespace(id="TOKEN_DAVID", name="Microsoft David Desktop - English (United States)", languages=["en-US"], gender="Male"),
+    def GetDescription(self, locale=0):
+        return self.description
+
+    def GetAttribute(self, name):
+        if self.attrs.get(name) is None:
+            raise OSError("COMError: SPERR_NOT_FOUND")
+        return self.attrs[name]
+
+
+class FakeSapi:
+    """What comtypes.client.CreateObject hands out for SAPI: SpVoice and SpFileStream."""
+
+    def __init__(self, *, silent: bool = False, broken: bool = False, hang: threading.Event | None = None):
+        self.silent, self.broken, self.hang = silent, broken, hang
+        self.tokens = [
+            FakeToken("TOKEN_ZIRA", "Microsoft Zira Desktop - English (United States)", "409", "Female"),
+            FakeToken("TOKEN_DAVID", "Microsoft David Desktop - English (United States)", "409;9", "Male"),
+            FakeToken("TOKEN_HEDDA", "Microsoft Hedda Desktop - German (Germany)", "407", None),
         ]
+        self.threads: set[int] = set()
+        self.created: list[str] = []
+        self.spoken: list[dict] = []
+        self.paths: list[str] = []
 
-    def setProperty(self, name, value):
+    def CreateObject(self, progid):
         self.threads.add(threading.get_ident())
-        self.props[name] = value
-
-    def save_to_file(self, text, path):
-        self.threads.add(threading.get_ident())
-        self.saved.append((text, path))
-
-    def runAndWait(self):
-        self.threads.add(threading.get_ident())
-        if self.fail:
-            raise RuntimeError("SAPI is unhappy")
-        Path(self.saved[-1][1]).write_bytes(sine_wav(0.25, 16000))
+        self.created.append(progid)
+        if self.broken:
+            raise OSError("COMError: class not registered")
+        return FakeSpVoice(self) if progid == "SAPI.SpVoice" else FakeSpFileStream(self)
 
 
-def _fake_pyttsx3(monkeypatch, engine: FakeSapiEngine) -> list[str]:
-    drivers: list[str] = []
-    module = types.ModuleType("pyttsx3")
+class FakeSpVoice:
+    def __init__(self, sapi: FakeSapi):
+        self.sapi, self.Voice, self.Rate, self.AudioOutputStream = sapi, sapi.tokens[0], 0, None
 
-    def init(driver=None):
-        drivers.append(driver)
-        return engine
+    def GetVoices(self):
+        self.sapi.threads.add(threading.get_ident())
+        return iter(self.sapi.tokens)
 
-    module.init = init  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "pyttsx3", module)
-    return drivers
+    def Speak(self, text, flags=0):
+        self.sapi.threads.add(threading.get_ident())
+        stream = self.AudioOutputStream
+        self.sapi.spoken.append({"text": text, "flags": flags, "voice": self.Voice.Id, "rate": self.Rate, "format": stream.Format.Type})
+        if self.sapi.hang is not None:
+            self.sapi.hang.wait(10)
+        if not self.sapi.silent:
+            stream.pcm += audio.read_wav(sine_wav(0.25, 22050))[0]
 
 
-def test_system_windows_pyttsx3_worker(monkeypatch):
+class FakeSpFileStream:
+    def __init__(self, sapi: FakeSapi):
+        self.sapi, self.Format, self.path, self.pcm = sapi, SimpleNamespace(Type=None), None, b""
+
+    def Open(self, path, mode, do_events=False):
+        assert mode == 3  # SSFMCreateForWrite
+        self.path = path
+        self.sapi.paths.append(path)
+        Path(path).write_bytes(audio.wav_bytes(b"", 22050))  # just the header until Close
+
+    def Close(self):
+        Path(self.path).write_bytes(audio.wav_bytes(self.pcm, 22050))
+
+
+def _fake_comtypes(monkeypatch, sapi: FakeSapi | None) -> None:
+    """Install a fake comtypes (or, with None, make it look uninstalled)."""
+    if sapi is None:
+        monkeypatch.setitem(sys.modules, "comtypes", None)
+        return
+    import importlib.machinery
+
+    package = types.ModuleType("comtypes")
+    package.__spec__ = importlib.machinery.ModuleSpec("comtypes", None)
+    package.CoInitialize = lambda: None  # type: ignore[attr-defined]
+    client = types.ModuleType("comtypes.client")
+    client.CreateObject = sapi.CreateObject  # type: ignore[attr-defined]
+    package.client = client  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "comtypes", package)
+    monkeypatch.setitem(sys.modules, "comtypes.client", client)
+    monkeypatch.setitem(sys.modules, "pythoncom", None)
+
+
+def _powershell_speaks(monkeypatch, seconds: float = 0.2) -> FakeRun:
+    monkeypatch.setattr(shutil, "which", lambda name: PS_EXE if name == "powershell" else None)
+
+    def handler(cmd, kwargs):
+        if "GetInstalledVoices" in _decode_ps(cmd):
+            return 0, "Microsoft Zira Desktop\ten-US\tFemale\r\n".encode()
+        assert "Speak($text)" in _decode_ps(cmd)
+        out = Path(kwargs["env"]["DESTINY_TTS_OUT"])
+        out.write_bytes(sine_wav(seconds, 22050) if seconds else audio.wav_bytes(b"", 22050))
+        return 0, b""
+
+    fake = FakeRun(handler)
+    monkeypatch.setattr(subprocess, "run", fake)
+    return fake
+
+
+def test_system_windows_sapi_worker(monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
-    fake_engine = FakeSapiEngine()
-    drivers = _fake_pyttsx3(monkeypatch, fake_engine)
+    sapi = FakeSapi()
+    _fake_comtypes(monkeypatch, sapi)
     monkeypatch.setattr(shutil, "which", lambda name: None)
     monkeypatch.setattr(subprocess, "run", FakeRun(lambda cmd, kw: pytest.fail("PowerShell should not be used")))
     engine = SystemEngine()
     assert engine.is_available() == (True, "")
     voices = engine.list_voices()
-    assert [v.id for v in voices] == ["Microsoft Zira Desktop", "Microsoft David Desktop"]
-    assert voices[1].gender == "male" and voices[1].language == "en-US"
+    assert [(v.id, v.language, v.gender) for v in voices] == [
+        ("Microsoft Zira Desktop", "en-US", "female"),
+        ("Microsoft David Desktop", "en-US", "male"),  # "409;9": several languages, the first counts
+        ("Microsoft Hedda Desktop", "de-DE", None),  # no Gender attribute
+    ]
+    assert engine.default_voice() == "Microsoft Zira Desktop"
 
     results = []
-    threads = [threading.Thread(target=lambda: results.append(engine.synthesize("Hello there", "Microsoft David Desktop", 1.5))) for _ in range(3)]
+    threads = [threading.Thread(target=lambda: results.append(engine.synthesize("<5 cells", "Microsoft David Desktop", 1.5))) for _ in range(3)]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
     assert len(results) == 3 and all(wav_seconds(c.data) == pytest.approx(0.25, abs=0.01) for c in results)
-    assert drivers == ["sapi5"]  # engine created once
-    assert len(fake_engine.threads) == 1 and threading.get_ident() not in fake_engine.threads  # one worker thread
-    assert fake_engine.props == {"voice": "TOKEN_DAVID", "rate": 262}
-    assert all(not Path(p).exists() for _, p in fake_engine.saved)
+    assert sapi.created.count("SAPI.SpVoice") == 1  # one SpVoice, reused
+    assert len(sapi.threads) == 1 and threading.get_ident() not in sapi.threads  # all COM calls on one worker thread
+    assert sapi.spoken[-1] == {"text": "<5 cells", "flags": 16, "voice": "TOKEN_DAVID", "rate": 4, "format": 22}
+    assert all(not Path(p).exists() for p in sapi.paths)  # temp files cleaned up
+    engine.synthesize("Hi", rate=1.0)
+    assert sapi.spoken[-1]["voice"] == "TOKEN_ZIRA" and sapi.spoken[-1]["rate"] == 1
 
 
-def test_system_windows_pyttsx3_failure_falls_back(monkeypatch):
+def test_system_windows_header_only_wav_falls_back_to_powershell(monkeypatch):
+    # Seen on windows-latest: pyttsx3 left a 46-byte WAV with no audio, which was played as silence.
     monkeypatch.setattr(sys, "platform", "win32")
-    _fake_pyttsx3(monkeypatch, FakeSapiEngine(fail=True))
-    monkeypatch.setattr(shutil, "which", lambda name: PS_EXE if name == "powershell" else None)
+    sapi = FakeSapi(silent=True)
+    _fake_comtypes(monkeypatch, sapi)
+    fake = _powershell_speaks(monkeypatch, 0.3)
+    engine = SystemEngine()
+    clip = engine.synthesize("Hello there", "Microsoft Zira Desktop")
+    assert wav_seconds(clip.data) == pytest.approx(0.3, abs=0.01) and len(fake.calls) == 1
+    engine.synthesize("Hello again", "Microsoft Zira Desktop")
+    assert len(sapi.spoken) == 1 and len(fake.calls) == 2  # SAPI is broken here: PowerShell from now on
 
-    def handler(cmd, kwargs):
-        script = _decode_ps(cmd)
-        assert "Speak($text)" in script
-        Path(kwargs["env"]["DESTINY_TTS_OUT"]).write_bytes(sine_wav(0.2, 22050))
-        return 0, b""
 
-    fake = FakeRun(handler)
-    monkeypatch.setattr(subprocess, "run", fake)
+def test_system_windows_unspeakable_text_keeps_sapi(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    sapi = FakeSapi(silent=True)
+    _fake_comtypes(monkeypatch, sapi)
+    fake = _powershell_speaks(monkeypatch, 0)  # PowerShell has nothing to say either
+    engine = SystemEngine()
+    clip = engine.synthesize("...", "Microsoft Zira Desktop")
+    assert wav_seconds(clip.data) == pytest.approx(0.2, abs=0.01)  # a short pause
+    engine.synthesize("...", "Microsoft Zira Desktop")
+    assert len(sapi.spoken) == 2 and len(fake.calls) == 2
+
+
+def test_system_windows_sapi_hang_falls_back(monkeypatch):
+    from destiny_bot.tts import system_engine
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    release = threading.Event()
+    sapi = FakeSapi(hang=release)
+    _fake_comtypes(monkeypatch, sapi)
+    fake = _powershell_speaks(monkeypatch, 0.2)
+    monkeypatch.setattr(system_engine, "_synth_timeout", lambda text: 0.3)
+    try:
+        clip = SystemEngine().synthesize("Hello", "Microsoft Zira Desktop")
+    finally:
+        release.set()
+    assert wav_seconds(clip.data) == pytest.approx(0.2, abs=0.01) and len(fake.calls) == 1
+    # The hung SAPI call may still hold its file open (Windows locks it): PowerShell writes elsewhere.
+    assert fake.calls[0][1]["env"]["DESTINY_TTS_OUT"] != sapi.paths[0]
+
+
+def test_system_windows_sapi_failure_falls_back(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    _fake_comtypes(monkeypatch, FakeSapi(broken=True))
+    fake = _powershell_speaks(monkeypatch, 0.2)
     clip = SystemEngine().synthesize("Hello", "Microsoft Zira Desktop")
-    assert len(fake.calls) == 1 and wav_seconds(clip.data) == pytest.approx(0.2, abs=0.01)
+    assert wav_seconds(clip.data) == pytest.approx(0.2, abs=0.01)
+    assert ["Speak($text)" in _decode_ps(cmd) for cmd, _ in fake.calls] == [False, True]  # voice list, then speech
+
+
+def test_system_windows_language_codes():
+    from destiny_bot.tts.system_engine import _lcid_language
+
+    assert _lcid_language("409") == "en-US" and _lcid_language("809;9") == "en-GB"
+    assert _lcid_language("c0a") == "es-ES" and _lcid_language("") is None and _lcid_language("zz") is None
 
 
 def test_system_windows_nothing_available(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setitem(sys.modules, "pyttsx3", None)
+    _fake_comtypes(monkeypatch, None)
     monkeypatch.setattr(shutil, "which", lambda name: None)
     monkeypatch.setenv("SystemRoot", str(tmp_path))
     ok, reason = SystemEngine().is_available()
@@ -1205,6 +1340,50 @@ def test_download_network_failure():
     with pytest.raises(catalog.VoiceDownloadError) as info:
         catalog.download_piper_voice("en_US-amy-medium", base_url=f"http://127.0.0.1:{port}")
     assert str(info.value) == "Couldn't download the voice. Check your internet connection."
+
+
+def _locked_for(monkeypatch, times: int) -> list[str]:
+    """os.replace fails like Windows does while a virus scanner holds the new file."""
+    real_replace, attempts = os.replace, []
+
+    def replace(src, dst):
+        attempts.append(Path(dst).name)
+        if attempts.count(Path(dst).name) <= times:
+            raise PermissionError(13, "The process cannot access the file because it is being used by another process")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", replace)
+    monkeypatch.setattr(catalog.time, "sleep", lambda seconds: None)
+    return attempts
+
+
+def test_download_waits_for_the_virus_scanner(voice_server, monkeypatch):
+    voice_server.add_voice("en_US-amy-medium", b"model bytes", b"{}")
+    monkeypatch.setattr(catalog, "sys", SimpleNamespace(platform="win32"))
+    attempts = _locked_for(monkeypatch, times=3)
+    path = catalog.download_piper_voice("en_US-amy-medium", base_url=voice_server.url)
+    assert path.read_bytes() == b"model bytes" and attempts.count("en_US-amy-medium.onnx") == 4
+    assert _leftovers(path.parent) == ["en_US-amy-medium.onnx", "en_US-amy-medium.onnx.json"]
+
+
+def test_download_gives_up_on_a_file_that_stays_locked(voice_server, monkeypatch):
+    voice_server.add_voice("en_US-amy-medium", b"model bytes", b"{}")
+    monkeypatch.setattr(catalog, "sys", SimpleNamespace(platform="win32"))
+    _locked_for(monkeypatch, times=100)
+    with pytest.raises(catalog.VoiceDownloadError, match="Couldn't save the voice"):
+        catalog.download_piper_voice("en_US-amy-medium", base_url=voice_server.url)
+    assert _leftovers(config.voices_dir() / "piper") == []
+
+
+def test_download_tls_uses_certifi_when_python_has_no_certificates(monkeypatch):
+    # python.org's macOS Python starts with an empty certificate store.
+    import ssl
+
+    certifi = pytest.importorskip("certifi")
+    monkeypatch.setattr(ssl, "create_default_context", lambda: ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT))
+    context = catalog._ssl_context()
+    assert context.cert_store_stats()["x509_ca"] > 0 and context.verify_mode == ssl.CERT_REQUIRED
+    assert Path(certifi.where()).is_file()
 
 
 # --------------------------------------------------------------------------- bundled voice folders

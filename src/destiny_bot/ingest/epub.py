@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 from lxml import etree
+from lxml import html as lxml_html
 
 from ..models import Block, BlockKind, Document, Section
 from . import IngestError, ProgressFn
@@ -179,6 +180,22 @@ def _metadata(book, name: str) -> list[str]:
     return out
 
 
+def _is_contents_page(data: bytes) -> bool:
+    """Is this chapter file a table of contents (most of its words are links)?
+
+    The book's guide may label any file "toc"; some converters label the only
+    chapter that way, so the label alone is not trusted.
+    """
+    try:
+        root = lxml_html.fromstring(data)
+    except Exception:
+        return False
+    body = next(iter(root.xpath("//*[local-name()='body']")), root)
+    words = len(" ".join(body.itertext()).split())
+    linked = sum(len(" ".join(a.itertext()).split()) for a in body.iter("{*}a", "a") if a.get("href"))
+    return linked >= 0.5 * words
+
+
 def _has_text(content: HtmlContent) -> bool:
     return any(block.kind != BlockKind.FIGURE for block in content.blocks)
 
@@ -248,7 +265,7 @@ def load_epub(path: Path, *, source_name: str, progress: ProgressFn | None = Non
         if progress:
             progress(0.05 + 0.9 * index / max(1, total), f"Reading part {index + 1} of {total}")
         name = posixpath.normpath(item.file_name)
-        if name in guide_skip:
+        if name in guide_skip and _is_contents_page(item.content or b""):
             continue  # an HTML table-of-contents page: our sections replace it
         try:
             content = parse_html(item.content or b"")

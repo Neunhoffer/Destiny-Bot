@@ -14,7 +14,7 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-from . import clamp_rate
+from . import clamp_rate, disable_onnx_telemetry
 from .base import AudioClip, EngineUnavailable, TTSEngine, TTSError, Voice
 from .catalog import find_kokoro_model
 
@@ -251,6 +251,7 @@ class KokoroEngine(TTSEngine):
         import onnxruntime as rt
         from kokoro_onnx import Kokoro
 
+        disable_onnx_telemetry()  # privacy: nothing about this computer goes to Microsoft
         opts = rt.SessionOptions()
         opts.intra_op_num_threads = self._threads or physical_cores()
         opts.inter_op_num_threads = 1

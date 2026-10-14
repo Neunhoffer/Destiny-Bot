@@ -522,6 +522,34 @@ def test_doctor(tmp_path, capsys, fakes):
     assert "sk-ant-never-print-me" not in out
 
 
+def test_doctor_warns_about_microsoft_store_python(capsys, fakes, monkeypatch):
+    store = r"C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0"
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "base_prefix", store)
+    assert cli._microsoft_store_python()
+    monkeypatch.setattr(sys, "base_prefix", r"C:\Users\Zoë\AppData\Local\Programs\Python\Python312")
+    monkeypatch.setattr(sys, "prefix", r"C:\Users\Zoë\athena-venv")
+    monkeypatch.setattr(sys, "executable", r"C:\Users\Zoë\athena-venv\Scripts\python.exe")
+    assert not cli._microsoft_store_python()
+    monkeypatch.setattr(sys, "executable", "C:/Users/Zoë/AppData/Local/Microsoft/WindowsApps/PythonSoftwareFoundation.Python.3.12_qbz5n2kfra8p0/python.exe")
+    assert cli._microsoft_store_python()
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert not cli._microsoft_store_python()
+
+    monkeypatch.setattr(cli, "_microsoft_store_python", lambda: True)
+    assert cli.main(["doctor"]) == 0
+    assert "Warning: this Python comes from the Microsoft Store" in capsys.readouterr().out
+    monkeypatch.setattr(cli, "_microsoft_store_python", lambda: False)
+    assert cli.main(["doctor"]) == 0
+    assert "Microsoft Store" not in capsys.readouterr().out
+
+
+def test_export_folder_avoids_windows_device_names():
+    assert cli._safe_folder_name("Con") == "Con_" and cli._safe_folder_name("aux.2") == "aux_.2"
+    assert cli._safe_folder_name("A: B/C?") == "A_ B_C_" and cli._safe_folder_name("???") == "Athena export"
+    assert cli._safe_folder_name("Biology... ") == "Biology" and len(cli._safe_folder_name("x" * 200)) == 80
+
+
 def test_wipe(tmp_path, capsys, fakes):
     add_book(tmp_path, "biology.md")
     config.update_settings({"anthropic_api_key": "sk-x"})
@@ -576,7 +604,11 @@ def _fake_module(name: str, **attrs):
     return module
 
 
-def test_app_shortcut_and_self_test(monkeypatch, capsys, tmp_path):
+@pytest.mark.parametrize("real_modules_loaded", [False, True])
+def test_app_shortcut_and_self_test(monkeypatch, capsys, tmp_path, real_modules_loaded):
+    if real_modules_loaded:  # as in a full test run: the fakes must still win over the real modules
+        import destiny_bot.desktop  # noqa: F401
+        import destiny_bot.selftest  # noqa: F401
     calls = []
 
     def run_app(*, port):

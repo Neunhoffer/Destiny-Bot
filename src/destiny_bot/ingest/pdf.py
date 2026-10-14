@@ -33,6 +33,7 @@ import pymupdf
 from ..models import Block, BlockKind, Document, Section
 from . import IngestError, ProgressFn
 from .common import (
+    HyphenationEvidence,
     clean_display_text,
     doc_id_for_file,
     finalize_sections,
@@ -319,19 +320,24 @@ def _load(doc: pymupdf.Document, path: Path, source_name: str, ocr: bool, progre
         progress(0.92, "Organizing the text")
 
     _mark_headers_footers(pages, stats)
+    # How the document spells words within lines decides breaks like "self-\nesteem".
+    evidence = HyphenationEvidence(ln.text for pg in pages for ln in pg.lines)
+    for pg in pages:
+        for para in pg.ocr_paragraphs or ():
+            evidence.add(para)
     layouts = [[] if pg.ocr_paragraphs else _page_elements(pg) for pg in pages]
     gutters = _page_gutters(layouts)
     chunks: list[_Chunk] = []
     for pg, elems, page_gutters in zip(pages, layouts, gutters):
         if pg.ocr_paragraphs:
-            chunks.extend(_ocr_chunks(pg, stats))
+            chunks.extend(_ocr_chunks(pg, stats, evidence))
         else:
             chunks.extend(_page_chunks(pg, elems, page_gutters, stats))
     _drop_repeated_ocr_margins(chunks)
     _mark_ocr_headings(chunks)
-    _classify(chunks, stats)
+    _classify(chunks, stats, evidence)
     _assign_heading_levels(chunks)
-    chunks = _assemble(_join_heading_labels(chunks))
+    chunks = _assemble(_join_heading_labels(chunks), evidence)
     blocks, positions = _to_blocks(chunks)
 
     meta = doc.metadata or {}
@@ -1055,7 +1061,7 @@ def _plausible_ocr_text(text: str) -> bool:
     return True
 
 
-def _ocr_chunks(pg: _Page, stats: _Stats) -> list[_Chunk]:
+def _ocr_chunks(pg: _Page, stats: _Stats, evidence: HyphenationEvidence | None = None) -> list[_Chunk]:
     out = []
     for k, para in enumerate(pg.ocr_paragraphs or []):
         first = para.split("\n", 1)[0]
@@ -1070,7 +1076,7 @@ def _ocr_chunks(pg: _Page, stats: _Stats) -> list[_Chunk]:
             size=stats.body_size,
             raw=[para],
         )
-        ch.text = clean_display_text(para)
+        ch.text = clean_display_text(para, evidence=evidence)
         bullet = _OCR_BULLET_RE.match(ch.text)
         if bullet:
             ch.kind = BlockKind.LIST_ITEM
@@ -1924,7 +1930,7 @@ def _continues(
 # --------------------------------------------------------------------------- classification
 
 
-def _chunk_text(ch: _Chunk) -> str:
+def _chunk_text(ch: _Chunk, evidence: HyphenationEvidence | None = None) -> str:
     if ch.kind == BlockKind.CODE:
         left = min(ln.x0 for ln in ch.lines)
         out = []
@@ -1932,10 +1938,10 @@ def _chunk_text(ch: _Chunk) -> str:
             indent = max(0, round((ln.x0 - left) / max(ln.size * 0.6, 1))) + ln.lead_spaces
             out.append(" " * indent + fix_characters(ln.text))
         return "\n".join(out)
-    return clean_display_text("\n".join(ln.text for ln in ch.lines))
+    return clean_display_text("\n".join(ln.text for ln in ch.lines), evidence=evidence)
 
 
-def _classify(chunks: list[_Chunk], stats: _Stats) -> None:
+def _classify(chunks: list[_Chunk], stats: _Stats, evidence: HyphenationEvidence | None = None) -> None:
     body = stats.body_size
     for ch in chunks:
         if ch.kind == BlockKind.TABLE or not ch.lines:
@@ -1944,7 +1950,7 @@ def _classify(chunks: list[_Chunk], stats: _Stats) -> None:
             if len(ch.lines) >= 2 or ch.lines[0].chars >= 12:
                 ch.kind = BlockKind.CODE
         ch.raw = [ln.text for ln in ch.lines]
-        ch.text = _chunk_text(ch)
+        ch.text = _chunk_text(ch, evidence)
         if ch.kind in (BlockKind.FOOTNOTE, BlockKind.EQUATION, BlockKind.CODE):
             continue
         text = ch.text
@@ -2126,7 +2132,7 @@ def _uses_first_line_indents(chunks: list[_Chunk]) -> bool:
     return indented >= 3 and indented >= 0.6 * (indented + flush)
 
 
-def _assemble(chunks: list[_Chunk]) -> list[_Chunk]:
+def _assemble(chunks: list[_Chunk], evidence: HyphenationEvidence | None = None) -> list[_Chunk]:
     """Merge paragraphs split by breaks; floats that interrupt a paragraph move after it."""
     indent_style = _uses_first_line_indents(chunks)
     out: list[_Chunk] = []
@@ -2144,7 +2150,7 @@ def _assemble(chunks: list[_Chunk]) -> list[_Chunk]:
         if open_para is not None:
             broken = bool(pending) or ch.after_break or ch.col != open_para.end_col
             if _continues_across(open_para, ch, broken, indent_style):
-                open_para.text = clean_display_text(open_para.text + "\n" + ch.text)
+                open_para.text = clean_display_text(open_para.text + "\n" + ch.text, evidence=evidence)
                 open_para.end_col = ch.col
                 continue
         out.extend(pending)

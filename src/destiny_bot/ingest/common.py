@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import re
 import unicodedata
+from collections import Counter
 from pathlib import Path
+from typing import Iterable
 
 from ..models import Block, BlockKind, Section
 
@@ -21,8 +23,10 @@ _LIGATURES = {
 }
 _INVISIBLE = dict.fromkeys(map(ord, "­​‌‍⁠﻿"), None)  # soft hyphen, zero-widths, BOM
 _SPACES = re.compile(r"[ \t  -   　]+")
-# "infor-\nmation" -> "information" (only when the next line continues a lowercase word)
-_HYPHEN_BREAK = re.compile(r"(\w)[-‐‑]\s*\n\s*([a-z])")
+# A word hyphenated at a line break: "infor-\nmation", "self-\nesteem", "pre-\nColumbian".
+_HYPHEN_BREAK = re.compile(r"(?<!\w)(\w+)[-\u2010\u2011][ \t]*\n\s*(\w+)")
+_SOFT_HYPHEN_BREAK = re.compile(r"\u00ad[ \t]*\n\s*")  # a discretionary hyphen: always rejoin
+_DASH_BREAK = re.compile(r"(?<=\w)([\u2013\u2014])[ \t]*\n\s*(?=\w)")  # "1990–\n2000": no space
 _NEWLINES = re.compile(r"\s*\n\s*")
 
 # A section longer than this many characters is split into parts (~40 minutes of speech).
@@ -50,16 +54,151 @@ def fix_characters(text: str) -> str:
     return unicodedata.normalize("NFC", text)
 
 
-def clean_display_text(text: str) -> str:
+# --------------------------------------------------------------------------- line-break hyphens
+
+# Prefixes after which a line-break hyphen is usually a real one ("self-esteem", "half-life",
+# "short-term", "pre-existing"). The hyphen goes only when the right part makes an ordinary
+# word with the prefix: a word ending ("self-\nish") or a common closed word ("pre-\nvious",
+# "anti-\nbodies", "multi-\nple").
+_HYPHEN_PREFIXES: dict[str, tuple[str, ...]] = {
+    "self": ("ish", "less", "hood", "same"),
+    "well": ("ness", "spring", "ington"),
+    "non": ("sens", "ethele", "chalan", "descript"),
+    "all": ("ow", "ot", "oy", "ude", "ur", "ianc", "ied", "ies", "ocat", "usi", "uvi", "erg", "itera", "ay", "eg"),
+    "cross": ("ing", "ed", "es", "er", "ly", "ness"),
+    "half": ("penn",),
+    "full": ("ness", "er", "est"),
+    "high": ("light", "way", "land", "ness", "er", "est", "ly"),
+    "low": ("land", "er", "est", "ly", "li", "ness"),
+    "long": ("ing", "er", "est", "itud", "ish", "hand", "horn", "bow", "boat", "shore", "evit"),
+    "short": ("age", "en", "er", "est", "ly", "ness", "fall", "coming", "hand", "cut", "stop", "bread"),
+    "pre": (
+        "vious", "vent", "dict", "fer", "par", "serv", "sum", "cis", "fix", "view", "mium", "mis", "lud", "fac",
+        "ced", "cip", "dat", "decess", "domin", "limin", "matur", "scri", "tend", "vail", "val", "sent", "gnan",
+        "jud", "ach", "caution", "cursor", "dispos", "histor", "mier", "natal", "occup", "paid", "posit",
+        "requis", "school", "synap", "rogativ", "hensil", "amble", "cinct", "cious", "clud", "concept", "determin",
+        "dica", "dilect", "empt", "fect", "frontal", "load", "medit", "monit", "ponder", "scien", "supp", "text",
+    ),
+    "post": (
+        "pon", "age", "script", "doc", "graduat", "war", "modern", "operativ", "natal", "synap", "mortem", "mark",
+        "man", "card", "season", "partum", "secondary", "colonial", "industrial", "prandial", "menopaus", "ulat",
+        "ur", "erior",
+    ),
+    "anti": (
+        "bod", "biot", "gen", "dot", "septic", "oxidant", "bacterial", "viral", "freez", "matter", "thes",
+        "derivativ", "symmetr", "clockwis", "nod", "particl", "path", "social", "trust", "histamin", "sens",
+        "parallel", "log", "quark", "neutrino", "proton", "electron", "cipat", "cancer", "coagul", "convuls",
+        "depress", "inflamm", "fung", "micro", "pod",
+    ),
+    "multi": (
+        "pl", "tud", "variat", "nomial", "media", "national", "cellular", "lateral", "lingual", "task", "facet",
+        "purpose", "cultural", "dimensional", "linear", "set", "modal", "valent", "core", "thread",
+    ),
+}
+# Prefixes that are mostly written closed ("example", "coefficient", "cosine"): the hyphen
+# stays only for the few compounds listed ("ex-wife", "co-author").
+_CLOSED_PREFIXES: dict[str, tuple[str, ...]] = {
+    "ex": ("wife", "wive", "husband", "president", "boyfriend", "girlfriend", "partner", "spouse", "officio",
+           "smoker", "convict", "soldier", "minister", "employee", "member"),
+    "co": ("worker", "author", "founder", "chair", "host", "pilot", "star", "sign", "conspirator", "defendant",
+           "teach", "parent"),
+}  # fmt: skip
+# Second halves that make compounds, not word endings ("evidence-based", "decision-making").
+_COMPOUND_TAILS = frozenset(
+    "based like specific making free friendly oriented driven induced mediated dependent level scale term "
+    "wide known related off sized solving containing bound centered focused aware sensitive resistant".split()
+)
+# "first- and second-order": a suspended hyphen keeps its space.
+_SUSPENDED = frozenset({"and", "or", "to"})
+
+
+class HyphenationEvidence:
+    """How a document spells words elsewhere, to decide breaks such as "self-\nesteem".
+
+    Build it from the document's text (lines as they appear, with their own line
+    breaks); a break is joined when the document writes the joined word more often
+    than the hyphenated one, and kept hyphenated in the opposite case.
+    """
+
+    def __init__(self, texts: Iterable[str] = ()) -> None:
+        self.words: Counter[str] = Counter()
+        self.compounds: Counter[str] = Counter()
+        for text in texts:
+            self.add(text)
+
+    def add(self, text: str) -> None:
+        if not text:
+            return
+        lowered = fix_characters(text).lower()
+        self.words.update(_WORD.findall(lowered))
+        if "-" in lowered:
+            self.compounds.update(f"{a}-{b}" for a, b in _COMPOUND.findall(lowered))
+
+    def prefers(self, left: str, right: str) -> bool | None:
+        """True: keep the hyphen; False: join; None: the document doesn't say."""
+        hyphenated = self.compounds.get(f"{left}-{right}", 0)
+        joined = self.words.get(left + right, 0)
+        if hyphenated == joined:
+            return None
+        return hyphenated > joined
+
+
+_WORD = re.compile(r"[^\W\d_]+")
+_COMPOUND = re.compile(r"([^\W\d_]+)-(?=([^\W\d_]+))")
+
+
+def _line_break_hyphen(left: str, right: str, before: str, evidence: HyphenationEvidence | None) -> str:
+    """How to rejoin "left-" at the end of a line with "right" at the start of the next.
+
+    ``before`` is the character before ``left``.
+    """
+    hyphenated, joined = f"{left}-{right}", left + right
+    if left[-1].isdigit() or right[0].isdigit() or before in ("-", "‐", "‑"):
+        return hyphenated  # "COVID-19", "3-methyl", "state-of-the-art"
+    if right[0].isupper() and not (left.isupper() and right.isupper()):
+        return hyphenated  # "pre-Columbian", "non-English" ("INFOR-MATION" is still one word)
+    lo_left, lo_right = left.lower(), right.lower()
+    if lo_right in _SUSPENDED and len(left) >= 3:
+        return f"{left}- {right}"  # "first- and second-order"
+    if evidence is not None:
+        keep = evidence.prefers(lo_left, lo_right)
+        if keep is not None:
+            return hyphenated if keep else joined
+    if lo_left in _HYPHEN_PREFIXES:
+        return joined if lo_right.startswith(_HYPHEN_PREFIXES[lo_left]) else hyphenated
+    if lo_left in _CLOSED_PREFIXES:
+        return hyphenated if lo_right.startswith(_CLOSED_PREFIXES[lo_left]) else joined
+    if lo_right in _COMPOUND_TAILS and len(left) >= 4:
+        return hyphenated  # "evidence-based"
+    return joined
+
+
+def rejoin_line_breaks(text: str, evidence: HyphenationEvidence | None = None) -> str:
+    """Rejoin words hyphenated (or dashed) across line breaks; other line breaks stay."""
+    if "\n" not in text:
+        return text
+    text = _SOFT_HYPHEN_BREAK.sub("", text)
+    text = _DASH_BREAK.sub(r"\1", text)
+
+    def repl(m: re.Match[str]) -> str:
+        start = m.start(1)
+        return _line_break_hyphen(m.group(1), m.group(2), m.string[start - 1 : start] if start else "", evidence)
+
+    return _HYPHEN_BREAK.sub(repl, text)
+
+
+def clean_display_text(text: str, *, evidence: HyphenationEvidence | None = None) -> str:
     """Turn raw extracted text into a single clean line for display and reading.
 
     Repairs ligatures, removes soft hyphens / zero-width characters, rejoins words
-    hyphenated across line breaks, turns remaining line breaks into spaces and
-    collapses runs of whitespace.
+    hyphenated across line breaks (keeping the hyphen of compounds such as
+    "self-esteem"; ``evidence`` tells how the rest of the document spells them),
+    turns remaining line breaks into spaces and collapses runs of whitespace.
     """
-    text = fix_characters(text)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
-    text = _HYPHEN_BREAK.sub(r"\1\2", text)
+    if "\u00ad" in text:
+        text = _SOFT_HYPHEN_BREAK.sub("", text)  # (before fix_characters drops the soft hyphens)
+    text = rejoin_line_breaks(fix_characters(text), evidence)
     text = _NEWLINES.sub(" ", text)
     text = _SPACES.sub(" ", text)
     return text.strip()

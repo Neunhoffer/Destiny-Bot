@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import importlib
 import os
 import platform
 import re
@@ -195,9 +196,11 @@ def _utterance_text(section: Section, utterance: Utterance) -> str:
 
 
 def _safe_folder_name(title: str) -> str:
-    name = _UNSAFE_NAME_CHARS.sub("_", title)
-    name = " ".join(name.split()).strip(" .")[:80].strip(" .")
-    return name or "Athena export"
+    from .export import safe_filename  # also renames Windows device names such as "Con" or "Aux.2"
+
+    if not _UNSAFE_NAME_CHARS.sub("", title).strip(" ."):
+        return "Athena export"
+    return safe_filename(_UNSAFE_NAME_CHARS.sub("_", title))
 
 
 # -- books
@@ -377,7 +380,9 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
 def _desktop() -> Any:
     try:
-        from . import desktop
+        # import_module, not "from . import desktop": that returns the package attribute
+        # even when sys.modules holds another module (the test fakes).
+        desktop = importlib.import_module(f"{__package__}.desktop")
     except ImportError as exc:
         raise CLIError(
             f"The desktop app isn't available in this copy of Athena ({exc}). "
@@ -411,8 +416,8 @@ def _cmd_shortcut(args: argparse.Namespace) -> int:
 
 def _cmd_self_test(args: argparse.Namespace) -> int:
     try:
-        from .selftest import run_self_test
-    except ImportError as exc:
+        run_self_test = importlib.import_module(f"{__package__}.selftest").run_self_test
+    except (ImportError, AttributeError) as exc:
         raise CLIError(f"The self-test isn't available in this copy of Athena ({exc}).") from None
     return int(run_self_test(quick=args.quick) or 0)
 
@@ -710,12 +715,27 @@ def _cmd_ai_key(args: argparse.Namespace) -> int:
     return 0
 
 
+def _microsoft_store_python() -> bool:
+    """True for Python from the Microsoft Store, which redirects writes to %LOCALAPPDATA%."""
+    if sys.platform != "win32":
+        return False
+    places = (sys.prefix, sys.base_prefix, sys.executable)
+    return any("\\windowsapps\\" in (place or "").lower().replace("/", "\\") for place in places)
+
+
 def _cmd_doctor(args: argparse.Namespace) -> int:
     settings = config.load_settings()
     python_ok = sys.version_info >= (3, 10)
     print(f"Athena {__version__}")
     print(f"Python {platform.python_version()}" + ("" if python_ok else "  (too old: Athena needs 3.10 or newer)"))
     print(f"Data folder: {config.data_dir()}")
+    if _microsoft_store_python():
+        print(
+            "  Warning: this Python comes from the Microsoft Store. Windows quietly keeps its copy of the data\n"
+            "  folder inside the Store app's own storage (under %LOCALAPPDATA%\\Packages), so File Explorer\n"
+            "  and the Athena app may not see your books, and uninstalling that Python deletes them.\n"
+            "  Use the Athena app or Python from python.org instead."
+        )
     try:
         book_count = len(Library().list())
     except OSError as exc:

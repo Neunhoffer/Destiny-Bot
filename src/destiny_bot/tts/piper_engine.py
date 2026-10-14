@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import clamp_rate
+from . import clamp_rate, disable_onnx_telemetry
 from .base import AudioClip, EngineUnavailable, TTSEngine, TTSError, Voice
 from .catalog import CATALOG, RECOMMENDED_VOICE, catalog_voice, installed_piper_voices, piper_voices_dir
 
@@ -190,6 +190,7 @@ class PiperEngine(TTSEngine):
         from piper import PiperVoice
 
         config_path = path.with_name(path.name + ".json")
+        disable_onnx_telemetry()  # privacy: nothing about this computer goes to Microsoft
         try:
             try:
                 return PiperVoice.load(str(path), config_path=str(config_path), download_dir=str(path.parent))
