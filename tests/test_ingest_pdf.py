@@ -1124,3 +1124,138 @@ def test_numbered_item_at_top_of_page_is_not_a_page_number(tmp_path):
     items = [bl.text for bl in blocks(doc) if bl.kind == BlockKind.LIST_ITEM]
     assert [t.split()[:2] for t in items] == [[f"{n}.", "Step"] for n in range(1, 5)]
     assert not any(bl.text.strip(".").isdigit() for bl in blocks(doc))
+
+
+def test_line_break_hyphens_follow_the_books_own_spelling(tmp_path):
+    b = PdfBuilder()
+    b.lines(
+        [
+            "Students with high self-esteem and a co-op job were asked about their self-",
+            "esteem, their infor-",
+            "mation needs, the co-",
+            "efficient of the test and how their co-",
+            "op works. The half-",
+            "life of a drug, the pre-",
+            "Columbian era, multi-",
+            "ple anti-",
+            "bodies and the state-of-the-",
+            "art.",
+        ]
+    )
+    doc = load(b.save(tmp_path / "hyphens.pdf"))
+    assert texts(doc) == [
+        "Students with high self-esteem and a co-op job were asked about their self-esteem, their information "
+        "needs, the coefficient of the test and how their co-op works. The half-life of a drug, the "
+        "pre-Columbian era, multiple antibodies and the state-of-the-art."
+    ]
+
+
+def test_hyphenated_word_across_a_page_break(tmp_path):
+    rng = random.Random(41)
+    b = PdfBuilder()
+    while b.y < b.bottom - 40:
+        b.paragraph(para(rng, 2), first_indent=14)
+    b.lines(["Building self-esteem takes practice, and low self-"], space_after=0)
+    b.new_page()
+    b.lines(["esteem is common in first-year students."])
+    doc = load(b.save(tmp_path / "pagebreak.pdf"))
+    joined = [t for t in texts(doc) if "low self" in t]
+    assert len(joined) == 1 and joined[0].endswith("low self-esteem is common in first-year students.")
+
+
+def test_repeated_copyright_notice_on_chapter_openers_is_dropped(tmp_path):
+    # A multi-line notice in small print at the foot of every chapter opener (pages far apart),
+    # as in many publishers' free textbook editions; a one-off note at a page foot stays.
+    rng = random.Random(42)
+    b = PdfBuilder()
+    notice = [
+        "This material is published by Example University Press as Cell Biology for Everyone by",
+        "Ana Lima and Ben Okafor (2024). This version is free to view and download for personal use",
+        "only. Not for re-distribution, re-sale, or use in derivative works. (c) the authors.",
+    ]
+    for chapter in range(1, 5):
+        if chapter > 1:
+            b.new_page()
+        b.heading(f"Chapter {chapter} Topic {chapter}", size=18)
+        for k, line in enumerate(notice):
+            b.text((b.margin, b.bottom + 20 + 10 * k), line, size=8)
+        for _ in range(24):
+            b.paragraph(para(rng, 3), first_indent=14)
+    b.text((b.margin, b.bottom + 20), "Figure credits: photographs by the Cell Imaging Library.", size=8)
+    doc = load(b.save(tmp_path / "openers.pdf"))
+    assert doc.page_count >= 12
+    all_text = full_text(doc)
+    assert "This material is published" not in all_text and "re-distribution" not in all_text
+    assert "Figure credits: photographs by the Cell Imaging Library." in all_text
+    assert [bl.text for bl in blocks(doc) if bl.kind == BlockKind.HEADING] == [
+        f"Chapter {n} Topic {n}" for n in range(1, 5)
+    ]
+
+
+def test_control_codes_from_math_fonts_are_not_in_table_cells():
+    rows = pdf_mod._clean_table([["Distribution", "Eta"], ["Bernoulli", "log\x00 phi \x01"], ["Gaussian", "mu\x02"]])
+    assert rows == [["Distribution", "Eta"], ["Bernoulli", "log phi"], ["Gaussian", "mu"]]
+
+
+def test_margin_notes_do_not_split_sentences(tmp_path):
+    # Textbook layout: a narrower text block and key terms in small print in the outer
+    # margin, beside the paragraph that introduces them (right margin on odd pages, left on even).
+    rng = random.Random(43)
+    b = PdfBuilder()
+    for page in range(2):
+        if page:
+            b.new_page()
+        x0, x1 = (72, 400) if page == 0 else (200, 540)
+        b.columns = [(x0, x1)]
+        note_x = 412 if page == 0 else 72
+        for k in range(3):
+            b.paragraph(para(rng, 2, f"P{page}{k}"), first_indent=14, space_after=4)
+            top = b.y
+            b.paragraph(f"M{page}{k} " + para(rng, 4), first_indent=14)
+            b.text((note_x, top + 28), f"key term {page}{k}", size=8)
+            b.text((note_x, top + 37), "in the margin", size=8)
+    doc = load(b.save(tmp_path / "margins.pdf"))
+    assert doc.page_count == 2
+    ts = texts(doc)
+    for page in range(2):
+        for k in range(3):
+            main = next(t for t in ts if t.startswith(f"M{page}{k} "))
+            assert ts[ts.index(main) + 1] == f"key term {page}{k} in the margin"
+            assert "key term" not in main and main.endswith(".")
+    assert [t.split()[0] for t in ts if t[:1] in "PM"] == [f"{c}{p}{k}" for p in range(2) for k in range(3) for c in "PM"]
+
+
+def test_long_chapter_splits_at_its_outline_sections(tmp_path):
+    # Part > chapter > section outline: a 50,000-character chapter used to become
+    # "Chapter 2 (part 2)" pieces cut at an arbitrary paragraph.
+    rng = random.Random(44)
+    b = PdfBuilder()
+    toc = [[1, "Part I Foundations", 1]]
+    b.heading("Part I Foundations", size=24)
+    b.new_page()
+    toc.append([2, "Chapter 2 Membranes", 2])
+    b.heading("Chapter 2 Membranes", size=20)
+    b.paragraph(para(rng, 3, "INTRO"))
+    for n in range(1, 4):
+        if n > 1:
+            b.new_page()
+        toc.append([3, f"2.{n} Topic {n}", b.doc.page_count])
+        b.heading(f"2.{n} Topic {n}", size=14)
+        for _ in range(60):
+            b.paragraph(para(rng, 3), first_indent=14)
+    b.new_page()
+    toc.append([2, "Chapter 3 Short", b.doc.page_count])
+    b.heading("Chapter 3 Short", size=20)
+    b.paragraph(para(rng, 3, "SHORT"))
+    doc = load(b.save(tmp_path / "parts.pdf", toc=toc))
+    chapter_chars = sum(len(bl.text) for s in doc.sections[1:5] for bl in s.blocks)
+    assert chapter_chars > 40_000
+    assert [(s.title, s.level) for s in doc.sections] == [
+        ("Part I Foundations", 1),
+        ("Chapter 2 Membranes", 2),
+        ("2.1 Topic 1", 3),
+        ("2.2 Topic 2", 3),
+        ("2.3 Topic 3", 3),
+        ("Chapter 3 Short", 2),
+    ]
+    assert doc.sections[2].blocks[0].text == "2.1 Topic 1"

@@ -183,17 +183,26 @@ class App:
           };
         })();""")
         self.page = self.ctx.new_page()
+        override = os.environ.get("DESTINY_E2E_APP_JS")  # compare another build of app.js (A/B checks)
+        if override:
+            body = Path(override).read_text(encoding="utf-8")
+            self.page.route("**/static/app.js", lambda route: route.fulfill(
+                status=200, content_type="text/javascript", body=body))
         self.errors: list[str] = []
         self.page.on("console", lambda m: self.errors.append(m.text) if m.type == "error" else None)
         self.page.on("pageerror", lambda e: self.errors.append(f"pageerror: {e}"))
         self.base = base
         self.page.goto(base + ("/?debug" if debug else "/"))
 
+    def js(self, expression: str, timeout: float = 10) -> Any:
+        """Evaluate a JS expression; raises instead of hanging if the page's script is stuck."""
+        return self.page.locator("html").evaluate(f"() => ({expression})", timeout=timeout * 1000)
+
     def wait(self, js: str, timeout: float = 30, interval: float = 0.1) -> Any:
         """Poll a JS expression until it's truthy (the app's CSP blocks wait_for_function's eval)."""
         deadline = time.time() + timeout
         while True:
-            value = self.page.evaluate(js)
+            value = self.js(js)
             if value:
                 return value
             if time.time() > deadline:
@@ -201,17 +210,17 @@ class App:
             time.sleep(interval)
 
     def state(self) -> dict[str, Any]:
-        return self.page.evaluate("athenaDebug.state()")
+        return self.js("athenaDebug.state()")
 
     def events(self, kind: str | None = None) -> list[dict[str, Any]]:
-        events = self.page.evaluate("athenaDebug.events")
+        events = self.js("athenaDebug.events")
         return [e for e in events if kind is None or e["type"] == kind]
 
     def now(self) -> float:
-        return self.page.evaluate("performance.now()")
+        return self.js("performance.now()")
 
     def tts_log(self) -> list[dict[str, Any]]:
-        return self.page.evaluate("window.__ttsLog")
+        return self.js("window.__ttsLog")
 
     def set_speed(self, value: float) -> None:
         """Move the speed slider the way a person drags it."""

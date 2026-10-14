@@ -665,7 +665,8 @@ const clips = {
     }
     if (urgent && !entry.started) {
       entry.urgent = true;
-      this.waiting.splice(this.waiting.indexOf(entry), 1);
+      const queued = this.waiting.indexOf(entry);
+      if (queued >= 0) this.waiting.splice(queued, 1);
       this.waiting.unshift(entry);
     }
     this.pump();
@@ -675,12 +676,13 @@ const clips = {
 
   /** Queue `wanted` ([text, engine, voice, rate] in reading order) behind urgent clips; forget stale prefetches. */
   plan(wanted) {
-    const order = wanted.map(([text, engine, voice, rate]) => {
+    // A Set: books repeat sentences ("See the figure below."), and each clip is fetched once.
+    const order = [...new Set(wanted.map(([text, engine, voice, rate]) => {
       const key = this.key(text, engine, voice, rate);
       const entry = this.touch(key) || this.create(key, text, engine, voice, rate);
       if (!entry.started) entry.prefetched = true;
       return entry;
-    });
+    }))];
     const want = new Set(order);
     for (const entry of [...this.waiting]) {
       if (entry.prefetched && !entry.urgent && !entry.pinned && !want.has(entry)) this.drop(entry);
@@ -729,7 +731,10 @@ const clips = {
   },
 
   pump() {
-    while (this.running < this.maxParallel && this.waiting.length) this.start(this.waiting[0]);
+    while (this.running < this.maxParallel && this.waiting.length) {
+      const entry = this.waiting.shift();
+      if (!entry.started) this.start(entry);
+    }
   },
 
   /** Learn how fast this engine synthesizes and how fast it speaks, from a decoded clip. */

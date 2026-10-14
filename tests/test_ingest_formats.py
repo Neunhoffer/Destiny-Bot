@@ -1520,3 +1520,45 @@ def test_docx_ruby_text_is_read_without_its_pronunciation_guide(tmp_path):
     doc = load_document(path)
     assert texts(doc) == ["Capital: 東京."]
     assert doc.warnings == []
+
+
+@pytest.mark.parametrize(
+    ("alt", "expected"),
+    [
+        ("Diagram of a plant cell", "Diagram of a plant cell"),
+        ("IMG_2034.JPG", ""),
+        ("K:\\Pics\\Chapter 3\\mitosis final.png", ""),
+        ("/Users/ana/Desktop/cell.jpeg", ""),
+        ("https://example.edu/images/cell.gif", ""),
+        ("A close up of a logo Description generated with very high confidence", "A close up of a logo"),
+        ("A diagram of a cell. Description automatically generated", "A diagram of a cell"),
+    ],
+)
+def test_picture_descriptions_that_are_file_names_are_not_read(tmp_path, alt, expected):
+    import docx
+    import pptx
+    from docx.shared import Inches
+    from pptx.util import Inches as PptxInches
+
+    from destiny_bot.ingest.common import clean_alt_text
+
+    assert clean_alt_text(alt) == expected
+    figures = [expected] if expected else []
+    # Word
+    d = docx.Document()
+    d.add_paragraph("Look at the picture.")
+    d.add_picture(io.BytesIO(png_bytes()), width=Inches(1))
+    d.paragraphs[-1]._p.xpath(".//wp:docPr")[0].set("descr", alt)
+    d.save(str(tmp_path / "pic.docx"))
+    assert texts(load_document(tmp_path / "pic.docx"), K.FIGURE) == figures
+    # PowerPoint (python-pptx itself writes the file name, as older PowerPoint versions did)
+    prs = pptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[5])
+    slide.shapes.title.text = "Mitosis"
+    picture = slide.shapes.add_picture(io.BytesIO(png_bytes()), PptxInches(1), PptxInches(2))
+    picture._element.xpath(".//p:cNvPr")[0].set("descr", alt)
+    prs.save(str(tmp_path / "pic.pptx"))
+    assert texts(load_document(tmp_path / "pic.pptx"), K.FIGURE) == figures
+    # web page / EPUB chapter
+    blocks, _ = html_to_blocks(f'<p>Cells divide.</p><figure><img src="a.png" alt="{alt}"></figure>')
+    assert [b.text for b in blocks if b.kind == K.FIGURE] == figures

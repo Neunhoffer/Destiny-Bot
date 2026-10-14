@@ -2,9 +2,11 @@
 
 :func:`normalize_for_speech` expands abbreviations ("e.g." -> "for example"),
 drops citations, speaks links, symbols, units, Greek letters, Roman numerals and
-number ranges as words, and tames ALL-CAPS headings so voices don't spell them
-out. :func:`verbalize_math` turns LaTeX-ish or linear math into spoken English
-for equation blocks.
+number ranges as words, says years, dates, money, clock times, phone numbers and
+chemical formulas the way people do, drops the periods inside sentences that make
+voices pause ("Franklin D. Roosevelt"), and tames ALL-CAPS headings so voices
+don't spell them out. :func:`verbalize_math` turns LaTeX-ish or linear math into
+spoken English for equation blocks.
 
 The rules are precise rather than greedy. Leaving something unchanged is always
 better than deleting or changing words a student needs to hear.

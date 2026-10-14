@@ -174,6 +174,30 @@ def test_seek_pause_resume_next_section_and_voice_switch(server, open_app):
     app.check_no_errors()
 
 
+def test_repeated_sentences_play_through(server, open_app):
+    """Books repeat sentences: each clip is fetched once and the page never freezes."""
+    server.settings(tts_engine="piper", speed=2.0)
+    steps = ["Lab steps.", "Mix the solution.", "Mix the solution.", "Wait one minute.", "Mix the solution.", "Lab steps."]
+    book = server.paste("Repeats", " ".join(steps) + "\n\nWrite down the colour.")
+    plan = utterances(server, book["id"])
+    start = next(u["index"] for u in plan if u["speech"] == "Mix the solution.")
+    assert plan[start + 1]["speech"] == plan[start]["speech"]
+    server.api("PUT", f"/api/books/{book['id']}/progress", {"section_id": "s0", "utterance": start})
+    app = open_app(server.base, book_id=book["id"])
+    app.open_book()
+    # The warm-up asks for the current and next sentence: here the same text.
+    app.wait("window.__ttsLog.length >= 1 && window.__ttsLog.every((r) => r.t1)", timeout=60)
+    time.sleep(0.5)
+    app.page.click("#btn-play", timeout=10000)
+    app.wait("athenaDebug.state().playing", timeout=10)
+    app.wait("!athenaDebug.state().playing", timeout=60)  # reached the end
+    heard = [e["index"] for e in app.events("schedule")]
+    assert heard == list(range(start, len(plan))), heard
+    texts = [r["text"] for r in app.tts_log()]
+    assert len(set(texts)) == len(texts), texts
+    app.check_no_errors()
+
+
 def test_slow_voice_shows_loading_and_offers_the_faster_voice(server, open_app):
     """When Kokoro can't keep up, she sees "Loading the voice…" and gets a one-click switch to Piper."""
     server.settings(tts_engine="kokoro", speed=1.0, voices={"kokoro": "af_heart"})

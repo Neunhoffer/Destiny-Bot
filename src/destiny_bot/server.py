@@ -219,6 +219,9 @@ class TTSBody(BaseModel):
     engine: str | None = Field(default=None, max_length=50)
     voice: str | None = Field(default=None, max_length=300)
     rate: float = Field(default=1.0, ge=0.5, le=3.0)
+    # True for text that didn't come from a reading plan (AI answers, voice samples):
+    # it is prepared for speech first, so years, money and decimals are read right.
+    normalize: bool = False
 
 
 class ChatTurn(BaseModel):
@@ -1107,6 +1110,10 @@ def create_app(
         if len(text) > MAX_TTS_CHARS:
             raise HTTPException(400, f"That's too much text to read at once ({MAX_TTS_CHARS:,} characters at most).")
         settings = config.load_settings()
+        if body.normalize:
+            text = _speech().normalize_for_speech(text, settings.reading).strip()
+            if not text:
+                raise HTTPException(400, "There's nothing in that text to read aloud.")
         engine = choose_engine(body.engine, settings, for_files=False)
         voice = pick_voice(engine, body.voice, settings)
         rate = _clamp_rate(body.rate)

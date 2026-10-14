@@ -33,6 +33,7 @@ import pymupdf
 from ..models import Block, BlockKind, Document, Section
 from . import IngestError, ProgressFn
 from .common import (
+    MAX_SECTION_CHARS,
     HyphenationEvidence,
     clean_display_text,
     doc_id_for_file,
@@ -326,7 +327,7 @@ def _load(doc: pymupdf.Document, path: Path, source_name: str, ocr: bool, progre
     for pg in pages:
         for para in pg.ocr_paragraphs or ():
             evidence.add(para)
-    layouts = [[] if pg.ocr_paragraphs else _page_elements(pg) for pg in pages]
+    layouts = [[] if pg.ocr_paragraphs else _page_elements(pg, stats) for pg in pages]
     gutters = _page_gutters(layouts)
     chunks: list[_Chunk] = []
     for pg, elems, page_gutters in zip(pages, layouts, gutters):
@@ -1301,8 +1302,8 @@ def _margin_notices(
 # --------------------------------------------------------------------------- page layout
 
 
-def _page_elements(pg: _Page) -> list[_Elem]:
-    """The page's content as layout elements: text lines, framed boxes and tables."""
+def _page_elements(pg: _Page, stats: _Stats | None = None) -> list[_Elem]:
+    """The page's content as layout elements: text lines, framed boxes, tables and margin notes."""
     lines = [ln for ln in pg.lines if not ln.drop]
     if not lines and not pg.tables:
         return []
@@ -1328,13 +1329,52 @@ def _page_elements(pg: _Page) -> list[_Elem]:
         free = next(iter(box_lines.values()))  # the "box" is just a frame around the whole page text
         box_lines = {}
 
+    notes: list[list[_Line]] = []
+    if stats is not None:
+        free, notes = _split_margin_notes(free, stats)
     elems = [_Elem("line", ln.x0, ln.y0, ln.x1, ln.y1, line=ln) for ln in free]
+    for note in notes:
+        elems.append(
+            _Elem("note", min(ln.x0 for ln in note), note[0].y0, max(ln.x1 for ln in note), note[-1].y1, lines=note)
+        )
     for bi, blines in box_lines.items():
         b = boxes[bi]
         elems.append(_Elem("box", b[0], b[1], b[2], b[3], lines=blines))
     for t in pg.tables:
         elems.append(_Elem("table", *t.bbox, table=t))
     return elems
+
+
+def _split_margin_notes(lines: list[_Line], stats: _Stats) -> tuple[list[_Line], list[list[_Line]]]:
+    """Separate notes in the page margin (small print beside the text block: key terms,
+    glosses, "see also" pointers) from the text. Returns (text lines, notes)."""
+    body = [ln for ln in lines if abs(ln.size - stats.body_size) <= 0.6 and len(ln.text) >= 25 and not ln.mono]
+    if len(body) < 5:
+        return lines, []
+    left = min(ln.x0 for ln in body)
+    right = max(ln.x1 for ln in body)
+    width = right - left
+    keep: list[_Line] = []
+    marginal: list[_Line] = []
+    for ln in lines:
+        outside = ln.x0 >= right + 2 or ln.x1 <= left - 2
+        if outside and ln.size <= stats.body_size * 0.92 and ln.x1 - ln.x0 <= 0.4 * width:
+            if any(c.isalpha() for c in ln.text):
+                marginal.append(ln)  # (line numbers and other bare digits in the margin are dropped)
+        else:
+            keep.append(ln)
+    notes: list[list[_Line]] = []
+    for ln in sorted(marginal, key=lambda ln: (ln.x0 > right, ln.y0)):
+        prev = notes[-1][-1] if notes else None
+        if (
+            prev is not None
+            and (prev.x0 > right) == (ln.x0 > right)
+            and ln.y0 - prev.y1 <= 0.8 * max(ln.size, prev.size)
+        ):
+            notes[-1].append(ln)
+        else:
+            notes.append([ln])
+    return keep, notes
 
 
 def _page_chunks(
@@ -1352,7 +1392,11 @@ def _page_chunks(
         group_lines = [e.line for e in items if e.kind == "line"]
         bounds = _column_geometry(group_lines) if group_lines else None
         pending_lines: list[_Line] = []
+        group_start = len(chunks)
+        notes = [el for el in items if el.kind == "note"]
         for el in items:
+            if el.kind == "note":
+                continue  # placed after the paragraph it sits beside (below)
             if el.kind == "line":
                 pending_lines.append(el.line)
                 continue
@@ -1386,6 +1430,21 @@ def _page_chunks(
         if pending_lines:
             chunks.extend(_group_lines(pending_lines, (pg.index,) + key, stats, interrupted, bounds))
             interrupted = False
+        for note in notes:
+            # After the last chunk of this column that starts above the note (and after
+            # notes already placed there): a margin note never splits a paragraph.
+            at = group_start
+            for i in range(group_start, len(chunks)):
+                if chunks[i].y0 <= note.y0 + 1 or chunks[i].col[1:2] == ("note",):
+                    at = i + 1
+                else:
+                    break
+            note_key = (pg.index, "note", round(note.y0), round(note.x0))
+            placed = _group_lines(_merge_rows(note.lines), note_key, stats, False)
+            for ch in placed:
+                ch.is_float = True
+                ch.in_box = True
+            chunks[at:at] = placed
     return chunks
 
 
@@ -1424,6 +1483,9 @@ def _reading_order(elems: list[_Elem], gutters: list[tuple[float, float]]) -> li
         for j, (c0, c1) in enumerate(columns):
             if e.x0 >= c0 - 2 and e.x1 <= c1 + 2:
                 return j
+        if e.kind == "note":  # a margin note belongs with the column next to it
+            mid = (e.x0 + e.x1) / 2
+            return min(range(len(columns)), key=lambda j: abs((columns[j][0] + columns[j][1]) / 2 - mid))
         return -1
 
     cols = {id(e): col_of(e) for e in elems}
@@ -1518,6 +1580,7 @@ def _detect_gutters(elems: list[_Elem]) -> list[tuple[float, float]]:
     columns fill the page), and x ranges that fall in the gap between side-by-side
     fragments of many rows (works when full-width figures or code cross the gutter).
     """
+    elems = [e for e in elems if e.kind != "note"]  # margin notes are not a column
     lines = [e for e in elems if e.kind == "line"]
     if len(lines) < 6:
         return []
@@ -2281,6 +2344,7 @@ def _sections_from_outline(
 
     # Adopt outline levels for matching headings; split points for levels 1-2.
     splits: list[tuple[int, int, str]] = []  # (block index, level, title)
+    subs: list[tuple[int, int, str]] = []  # level-3 entries: split points for very long sections
     matched: set[int] = set()
     cursor = 0
     for lvl, etitle, page, to_y in entries:
@@ -2295,8 +2359,11 @@ def _sections_from_outline(
         if top:
             splits.append((idx, lvl, etitle))
             cursor = idx
+        elif lvl == 3:
+            subs.append((idx, lvl, etitle))
     if not splits:
         return None
+    splits = _split_long_outline_sections(blocks, splits, sorted(subs, key=lambda e: e[0]))
 
     sections: list[Section] = []
     first = splits[0][0]
@@ -2314,6 +2381,25 @@ def _sections_from_outline(
                 b.level = min(lvl + 1, 6)
         sections.append(make_section(etitle, lvl, sec_blocks))
     return sections
+
+
+def _split_long_outline_sections(
+    blocks: list[Block], splits: list[tuple[int, int, str]], subs: list[tuple[int, int, str]]
+) -> list[tuple[int, int, str]]:
+    """Also split a section too long to listen to in one go (a 25-page chapter of a book with
+    parts, chapters and sections) at its own sub-entries, rather than at an arbitrary block."""
+    out: list[tuple[int, int, str]] = []
+    for k, (idx, lvl, etitle) in enumerate(splits):
+        end = splits[k + 1][0] if k + 1 < len(splits) else len(blocks)
+        out.append((idx, lvl, etitle))
+        if sum(len(b.text) for b in blocks[idx:end]) <= MAX_SECTION_CHARS:
+            continue
+        last = idx
+        for sub_idx, sub_lvl, sub_title in subs:
+            if last < sub_idx < end and sub_lvl > lvl:
+                out.append((sub_idx, sub_lvl, sub_title))
+                last = sub_idx
+    return out
 
 
 def _find_outline_block(

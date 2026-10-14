@@ -141,10 +141,11 @@ def section_plain_text(section: Section, *, max_chars: int | None = None) -> str
   being spoken.
 - Every utterance has a non-zero `pause_after_ms`. Voice output is trimmed of
   leading and trailing silence, so this pause is the only gap between utterances.
-  It is 220 ms between sentences inside a block, 60 ms after a chunk of a split
-  sentence, 450 ms after a paragraph, quote, caption, footnote, figure, equation
-  or code block, 300 ms after a list item or table row, and 750 ms after a
-  heading or section-title announcement.
+  It is 300 ms between sentences inside a block, 60 ms after a chunk of a split
+  sentence (180 ms when the chunk ends with ; or :), 600 ms after a paragraph,
+  quote, caption, footnote, figure, equation or code block, 350 ms after a list
+  item or table row, and 900 ms after a heading or section-title announcement.
+  These values were measured against the real voices' own sentence pacing.
 - Blocks that options say to skip produce no utterances.
 - If the section's first block is not a HEADING and `announce_section_title` is set,
   utterance 0 is `block=-1, start=0, end=0` and speaks the title.

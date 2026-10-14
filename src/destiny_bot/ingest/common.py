@@ -246,7 +246,7 @@ _FILE_NAME_ALT = re.compile(
 )
 _URL_ALT = re.compile(r"^(?:https?|file|ftp)://\S*$|^www\.\S+$", re.I)
 _AUTO_ALT_NOTE = re.compile(
-    r"[\s.]*(?:Description|Text) (?:automatically generated|generated with (?:very )?(?:high|medium|low) confidence)"
+    r"\.? ?(?:Description|Text) (?:automatically generated|generated with (?:very )?(?:high|medium|low) confidence)"
     r"\.?$",
     re.I,
 )

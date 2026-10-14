@@ -1799,3 +1799,43 @@ def test_catalog_marks_kokoro_pack_installed(client, fakes):
     fakes.catalog.installed_catalog_ids = lambda: {"en_GB-alba-medium"}
     voices = {v["id"]: v["installed"] for v in client.get("/api/voices/catalog").json()["voices"]}
     assert voices == {"en_US-lessac-medium": False, "en_GB-alba-medium": True}
+
+
+# -- reading text that didn't come from a reading plan
+
+
+def test_tts_normalizes_when_asked(client, fakes, monkeypatch):
+    calls = []
+
+    def normalize(text, options=None):
+        calls.append(text)
+        return text.replace("$3.50", "3 dollars and 50 cents")
+
+    monkeypatch.setattr(server, "_speech", lambda: SimpleNamespace(normalize_for_speech=normalize))
+    r = client.post("/api/tts", json={"text": "It costs $3.50.", "engine": "piper", "normalize": True})
+    assert r.status_code == 200
+    assert calls == ["It costs $3.50."]
+    assert fakes.tts.engines["piper"].calls[-1][0] == "It costs 3 dollars and 50 cents."
+
+
+def test_tts_reads_plan_text_as_is_by_default(client, fakes, monkeypatch):
+    monkeypatch.setattr(server, "_speech", lambda: SimpleNamespace(normalize_for_speech=lambda t, o=None: "changed"))
+    assert client.post("/api/tts", json={"text": "It costs $3.50.", "engine": "piper"}).status_code == 200
+    assert fakes.tts.engines["piper"].calls[-1][0] == "It costs $3.50."
+
+
+def test_tts_with_nothing_speakable_after_normalizing(client, fakes, monkeypatch):
+    monkeypatch.setattr(server, "_speech", lambda: SimpleNamespace(normalize_for_speech=lambda t, o=None: " "))
+    r = client.post("/api/tts", json={"text": "[12]", "engine": "piper", "normalize": True})
+    assert r.status_code == 400
+    assert not fakes.tts.engines["piper"].calls
+
+
+def test_tts_normalize_with_the_real_speech_layer(client, fakes, monkeypatch):
+    from destiny_bot import speech
+
+    monkeypatch.setattr(server, "_speech", lambda: speech)
+    r = client.post("/api/tts", json={"text": "In 1990 it cost $3.50.", "engine": "piper", "normalize": True})
+    assert r.status_code == 200
+    spoken = fakes.tts.engines["piper"].calls[-1][0]
+    assert "$" not in spoken and "dollars" in spoken
