@@ -392,14 +392,15 @@ def _windows_app_identity() -> None:
 def _show_error(message: str) -> None:
     """Show a native error dialog (best effort) and log the message."""
     log.error("%s", message)
+    platform = _platform()
     try:
-        if os.name == "nt":
+        if platform == "win32":
             import ctypes
 
             # MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST
             ctypes.windll.user32.MessageBoxW(None, message, APP_NAME, 0x10 | 0x10000 | 0x40000)
             return
-        if sys.platform == "darwin":
+        if platform == "darwin":
 
             def applescript(text: str) -> str:
                 return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'

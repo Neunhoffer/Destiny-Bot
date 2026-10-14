@@ -12,8 +12,15 @@ import wave
 
 import pytest
 
+import destiny_bot
 from destiny_bot import config, desktop, selftest
 from destiny_bot.tts.base import AudioClip, EngineUnavailable, TTSEngine, Voice
+
+# tests/test_cli.py swaps these modules out through sys.modules. A submodule imported here
+# would also become an attribute of the destiny_bot package, which `from . import desktop`
+# prefers over sys.modules, so drop the attributes again.
+for _name in ("desktop", "selftest"):
+    vars(destiny_bot).pop(_name, None)
 
 
 @pytest.fixture(autouse=True)

@@ -20,7 +20,14 @@ from pathlib import Path
 
 import pytest
 
+import destiny_bot
 from destiny_bot import config, desktop
+
+# tests/test_cli.py swaps these modules out through sys.modules. A submodule imported here
+# would also become an attribute of the destiny_bot package, which `from . import desktop`
+# prefers over sys.modules, so drop the attributes again.
+for _name in ("desktop", "selftest"):
+    vars(destiny_bot).pop(_name, None)
 
 
 @pytest.fixture(autouse=True)
@@ -375,8 +382,6 @@ def test_import_errors_ask_for_a_reinstall():
 
 def test_show_error_falls_back_to_stderr(monkeypatch, capsys):
     monkeypatch.setattr(desktop, "_platform", lambda: "linux")
-    monkeypatch.setattr(desktop.os, "name", "posix")
-    monkeypatch.setattr(desktop.sys, "platform", "linux")
     monkeypatch.setattr(desktop.shutil, "which", lambda name: None)
     desktop._show_error("Something broke.")
     assert "Something broke." in capsys.readouterr().err
@@ -384,8 +389,7 @@ def test_show_error_falls_back_to_stderr(monkeypatch, capsys):
 
 def test_show_error_uses_zenity_when_available(monkeypatch):
     calls: list[list[str]] = []
-    monkeypatch.setattr(desktop.os, "name", "posix")
-    monkeypatch.setattr(desktop.sys, "platform", "linux")
+    monkeypatch.setattr(desktop, "_platform", lambda: "linux")
     monkeypatch.setattr(desktop.shutil, "which", lambda name: "/usr/bin/zenity" if name == "zenity" else None)
     monkeypatch.setattr(desktop, "_run_hidden", lambda cmd, **kw: calls.append(cmd))
     desktop._show_error("Oops")
