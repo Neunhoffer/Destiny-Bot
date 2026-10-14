@@ -385,8 +385,8 @@ def _valid_speech(stats: dict[str, Any]) -> str:
     if stats.get("mime") != "audio/wav":
         return "" if stats.get("bytes", 0) > 1000 else "the audio file is empty"
     if stats["duration_s"] < MIN_SPEECH_S:
-        silent = " of silence" if stats["peak"] < 500 else ""
-        return f"only {stats['duration_s']:.2f} s{silent} of audio ({stats['sample_rate']} Hz, {stats['bytes']} bytes)"
+        silent = ", all silent" if stats["peak"] < 500 else ""
+        return f"only {stats['duration_s']:.2f} s of audio{silent} ({stats['sample_rate']} Hz, {stats['bytes']} bytes)"
     if stats["peak"] < 500 or stats["rms_dbfs"] < MIN_RMS_DBFS:
         return f"the audio is silent (level {stats['rms_dbfs']} dBFS)"
     return ""
