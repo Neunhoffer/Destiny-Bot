@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="destiny-token" content="__DESTINY_TOKEN__">
+  <meta name="color-scheme" content="light dark">
+  <meta name="referrer" content="no-referrer">
+  <title>Destiny Bot</title>
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/styles.css">
+  <script type="module" src="/static/app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#reader">Skip to the text</a>
+
+  <header class="topbar">
+    <button type="button" class="icon-btn only-narrow" id="btn-sidebar" aria-label="Show library and contents"
+            aria-controls="sidebar" aria-expanded="false"><span class="i" data-icon="menu"></span></button>
+    <div class="brand">
+      <img src="/static/icon.svg" alt="" width="30" height="30">
+      <span class="brand-name">Destiny Bot</span>
+    </div>
+    <div class="topbar-spacer"></div>
+    <button type="button" class="chip privacy-chip" id="privacy-chip" aria-label="Privacy settings">
+      <span class="i" data-icon="lock" id="privacy-chip-icon"></span>
+      <span class="chip-long" id="privacy-chip-long">Private: everything stays on this computer</span>
+      <span class="chip-short" id="privacy-chip-short">Offline</span>
+    </button>
+    <button type="button" class="btn btn-ghost topbar-btn" id="btn-study" aria-controls="study" aria-expanded="false">
+      <span class="i" data-icon="bulb"></span><span class="hide-narrow">Study helper</span>
+    </button>
+    <button type="button" class="icon-btn hide-narrow" id="btn-shortcuts" aria-label="Keyboard shortcuts"
+            title="Keyboard shortcuts (?)"><span class="i" data-icon="keyboard"></span></button>
+    <button type="button" class="icon-btn" id="btn-settings" aria-label="Settings" title="Settings">
+      <span class="i" data-icon="settings"></span></button>
+  </header>
+
+  <div class="app" id="app">
+    <aside class="sidebar" id="sidebar" aria-label="Library and contents">
+      <div class="panel-head only-narrow">
+        <h2 class="panel-title">Your library</h2>
+        <button type="button" class="icon-btn" id="btn-sidebar-close" aria-label="Close library">
+          <span class="i" data-icon="close"></span></button>
+      </div>
+      <div class="sidebar-actions">
+        <button type="button" class="btn btn-primary btn-block" id="btn-add">
+          <span class="i" data-icon="plus"></span>Add material</button>
+        <button type="button" class="btn btn-secondary" id="btn-paste" title="Paste text">
+          <span class="i" data-icon="paste"></span>Paste text</button>
+        <input type="file" id="file-input" class="visually-hidden" tabindex="-1" aria-hidden="true" multiple
+               accept=".pdf,.epub,.docx,.pptx,.html,.htm,.xhtml,.txt,.md,.markdown,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp,image/*">
+      </div>
+      <div class="tasks" id="tasks" aria-live="polite"></div>
+
+      <div class="tabs" role="tablist" aria-label="Sidebar" id="sidebar-tabs">
+        <button type="button" role="tab" id="tab-library" aria-controls="panel-library" aria-selected="true">Library</button>
+        <button type="button" role="tab" id="tab-contents" aria-controls="panel-contents" aria-selected="false" tabindex="-1">Contents</button>
+        <button type="button" role="tab" id="tab-bookmarks" aria-controls="panel-bookmarks" aria-selected="false" tabindex="-1">Bookmarks</button>
+      </div>
+      <div class="tabpanels">
+        <section role="tabpanel" class="tabpanel" id="panel-library" aria-labelledby="tab-library">
+          <ul class="book-list" id="library-list"></ul>
+          <p class="panel-empty" id="library-empty" hidden>Nothing here yet. Add a textbook, slides or notes to get started.</p>
+        </section>
+        <section role="tabpanel" class="tabpanel" id="panel-contents" aria-labelledby="tab-contents" hidden>
+          <nav aria-label="Table of contents" id="toc"></nav>
+          <p class="panel-empty" id="toc-empty">Open a book to see its chapters here.</p>
+        </section>
+        <section role="tabpanel" class="tabpanel" id="panel-bookmarks" aria-labelledby="tab-bookmarks" hidden>
+          <ul class="bookmark-list" id="bookmark-list"></ul>
+          <p class="panel-empty" id="bookmark-empty">No bookmarks yet. Press <kbd>B</kbd> or the bookmark button while reading to save your place.</p>
+        </section>
+      </div>
+    </aside>
+
+    <main class="reader" id="reader" tabindex="-1">
+      <div class="banners" id="banners"></div>
+      <div class="reader-body" id="reader-body"></div>
+    </main>
+
+    <aside class="study" id="study" aria-labelledby="study-title">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title" id="study-title">Study helper</h2>
+          <p class="study-context" id="study-context"></p>
+        </div>
+        <button type="button" class="icon-btn" id="btn-study-close" aria-label="Close study helper">
+          <span class="i" data-icon="close"></span></button>
+      </div>
+      <div class="study-actions" id="study-actions" role="group" aria-label="Study actions">
+        <button type="button" class="action-btn" id="ai-explain"><span class="i" data-icon="bulb"></span><span>Explain this</span></button>
+        <button type="button" class="action-btn" id="ai-summary-short"><span class="i" data-icon="summary"></span><span>Quick summary</span></button>
+        <button type="button" class="action-btn" id="ai-summary-long"><span class="i" data-icon="summary"></span><span>Detailed summary</span></button>
+        <button type="button" class="action-btn" id="ai-quiz"><span class="i" data-icon="quiz"></span><span>Quiz me</span></button>
+        <button type="button" class="action-btn action-wide" id="ai-narrate" hidden><span class="i" data-icon="table"></span><span id="ai-narrate-label">Explain this table</span></button>
+        <button type="button" class="action-btn action-wide" id="ai-describe" hidden><span class="i" data-icon="image"></span><span id="ai-describe-label">Describe figures on this page</span></button>
+      </div>
+      <div class="study-thread" id="study-thread"></div>
+      <form class="study-ask" id="ask-form">
+        <label class="visually-hidden" for="ask-input">Ask a question about this section</label>
+        <textarea id="ask-input" rows="1" placeholder="Ask a question about this section…" maxlength="2000"></textarea>
+        <button type="submit" class="icon-btn icon-btn-accent" aria-label="Send question" title="Send"><span class="i" data-icon="send"></span></button>
+      </form>
+    </aside>
+  </div>
+  <div class="scrim" id="scrim" hidden></div>
+
+  <footer class="player" id="player" aria-label="Player">
+    <div class="player-info">
+      <div class="now-title" id="now-title">Nothing open</div>
+      <div class="now-status" id="now-status" aria-live="off">Add or open something to start listening</div>
+    </div>
+    <div class="transport" role="group" aria-label="Playback">
+      <button type="button" class="icon-btn" id="btn-bookmark" aria-label="Bookmark this sentence" title="Bookmark (B)"><span class="i" data-icon="bookmark"></span></button>
+      <button type="button" class="icon-btn" id="btn-prev-section" data-space-plays aria-label="Previous section" title="Previous section (Shift+←)"><span class="i" data-icon="prevSection"></span></button>
+      <button type="button" class="icon-btn" id="btn-prev" data-space-plays aria-label="Previous sentence" title="Previous sentence (←)"><span class="i" data-icon="prev"></span></button>
+      <button type="button" class="play-btn" id="btn-play" aria-label="Play" title="Play (Space)"><span class="i" data-icon="play"></span></button>
+      <button type="button" class="icon-btn" id="btn-next" data-space-plays aria-label="Next sentence" title="Next sentence (→)"><span class="i" data-icon="next"></span></button>
+      <button type="button" class="icon-btn" id="btn-next-section" data-space-plays aria-label="Next section" title="Next section (Shift+→)"><span class="i" data-icon="nextSection"></span></button>
+      <div class="sleep">
+        <button type="button" class="icon-btn" id="btn-sleep" aria-label="Sleep timer: off" aria-haspopup="true" aria-expanded="false" aria-controls="sleep-menu" title="Sleep timer">
+          <span class="i" data-icon="moon"></span><span class="sleep-left" id="sleep-left"></span></button>
+        <div class="popover" id="sleep-menu" hidden>
+          <p class="popover-title" id="sleep-title">Sleep timer</p>
+          <div class="popover-options" role="group" aria-labelledby="sleep-title">
+            <button type="button" data-sleep="off" aria-pressed="true">Off</button>
+            <button type="button" data-sleep="15" aria-pressed="false">15 minutes</button>
+            <button type="button" data-sleep="30" aria-pressed="false">30 minutes</button>
+            <button type="button" data-sleep="60" aria-pressed="false">60 minutes</button>
+            <button type="button" data-sleep="section" aria-pressed="false">End of this section</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="player-tools">
+      <div class="speed">
+        <label for="speed" class="speed-label">Speed</label>
+        <input type="range" id="speed" min="0.5" max="3" step="0.05" value="1" aria-valuetext="1.00 times">
+        <output id="speed-value" for="speed">1.00×</output>
+      </div>
+      <div class="voice-pick">
+        <label for="voice-select" class="visually-hidden">Voice</label>
+        <span class="i voice-icon" data-icon="voice"></span>
+        <select id="voice-select" class="select"></select>
+      </div>
+    </div>
+  </footer>
+
+  <div class="toasts" id="toasts"></div>
+  <div class="visually-hidden" id="live" aria-live="polite" aria-atomic="true"></div>
+
+  <div class="drop-overlay" id="drop-overlay" hidden>
+    <div class="drop-card">
+      <span class="i drop-icon" data-icon="upload"></span>
+      <p class="drop-title">Drop to add to your library</p>
+      <p class="drop-hint">PDF, EPUB, Word, PowerPoint, web pages, text and photos of handouts</p>
+    </div>
+  </div>
+
+  <div class="sel-bubble" id="sel-bubble" hidden>
+    <button type="button" id="sel-explain"><span class="i" data-icon="bulb"></span>Explain</button>
+    <button type="button" id="sel-read"><span class="i" data-icon="play"></span>Read from here</button>
+  </div>
+
+  <!-- Paste text -->
+  <dialog class="dialog" id="paste-dialog" aria-labelledby="paste-title">
+    <form class="dialog-inner" id="paste-form" method="dialog">
+      <div class="dialog-head">
+        <h2 id="paste-title">Paste text</h2>
+        <button type="button" class="icon-btn" data-close aria-label="Close"><span class="i" data-icon="close"></span></button>
+      </div>
+      <div class="dialog-body">
+        <div class="field">
+          <label for="paste-name">Title</label>
+          <input type="text" id="paste-name" class="input" maxlength="200" placeholder="For example: Week 3 reading notes" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="paste-text">Text</label>
+          <textarea id="paste-text" class="input paste-area" rows="10" placeholder="Paste or type the text you want read aloud. Lines starting with # become headings."></textarea>
+          <p class="hint" id="paste-count"></p>
+        </div>
+      </div>
+      <div class="dialog-foot">
+        <button type="button" class="btn btn-secondary" data-close>Cancel</button>
+        <button type="submit" class="btn btn-primary" id="paste-submit" value="add">Add to library</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Generic confirm -->
+  <dialog class="dialog dialog-small" id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-message">
+    <form class="dialog-inner" method="dialog">
+      <div class="dialog-head"><h2 id="confirm-title">Are you sure?</h2></div>
+      <div class="dialog-body"><p id="confirm-message"></p></div>
+      <div class="dialog-foot">
+        <button type="submit" class="btn btn-secondary" value="cancel" id="confirm-cancel">Cancel</button>
+        <button type="submit" class="btn btn-danger" value="ok" id="confirm-ok">Delete</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Erase all data -->
+  <dialog class="dialog dialog-small" id="wipe-dialog" aria-labelledby="wipe-title">
+    <form class="dialog-inner" id="wipe-form" method="dialog">
+      <div class="dialog-head">
+        <h2 id="wipe-title">Erase all my data?</h2>
+        <button type="button" class="icon-btn" data-close aria-label="Close"><span class="i" data-icon="close"></span></button>
+      </div>
+      <div class="dialog-body">
+        <p>This permanently deletes every book in your library, your reading progress, bookmarks, saved audio, exported files and settings (including your API key) from this computer. Downloaded voices are kept.</p>
+        <p>This can’t be undone.</p>
+        <div class="field">
+          <label for="wipe-input">Type <strong>DELETE</strong> to confirm</label>
+          <input type="text" id="wipe-input" class="input" autocomplete="off" autocapitalize="characters" spellcheck="false">
+        </div>
+      </div>
+      <div class="dialog-foot">
+        <button type="button" class="btn btn-secondary" data-close>Cancel</button>
+        <button type="submit" class="btn btn-danger" id="wipe-confirm" disabled>Erase everything</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Keyboard shortcuts -->
+  <dialog class="dialog dialog-small" id="shortcuts-dialog" aria-labelledby="shortcuts-title">
+    <div class="dialog-inner">
+      <div class="dialog-head">
+        <h2 id="shortcuts-title">Keyboard shortcuts</h2>
+        <button type="button" class="icon-btn" data-close aria-label="Close"><span class="i" data-icon="close"></span></button>
+      </div>
+      <div class="dialog-body">
+        <table class="shortcuts">
+          <caption class="visually-hidden">Keyboard shortcuts</caption>
+          <tbody>
+            <tr><th scope="row"><kbd>Space</kbd></th><td>Play or pause</td></tr>
+            <tr><th scope="row"><kbd>←</kbd> <kbd>→</kbd></th><td>Previous or next sentence</td></tr>
+            <tr><th scope="row"><kbd>Shift</kbd> + <kbd>←</kbd> <kbd>→</kbd></th><td>Previous or next section</td></tr>
+            <tr><th scope="row"><kbd>+</kbd> <kbd>−</kbd></th><td>Faster or slower</td></tr>
+            <tr><th scope="row"><kbd>B</kbd></th><td>Bookmark the current sentence</td></tr>
+            <tr><th scope="row"><kbd>?</kbd></th><td>Show this list</td></tr>
+            <tr><th scope="row"><kbd>Esc</kbd></th><td>Close a window or panel</td></tr>
+          </tbody>
+        </table>
+        <p class="hint">Tip: click any sentence to start reading from there.</p>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Settings -->
+  <dialog class="dialog dialog-wide" id="settings-dialog" aria-labelledby="settings-title">
+    <div class="dialog-inner">
+      <div class="dialog-head">
+        <h2 id="settings-title">Settings</h2>
+        <button type="button" class="icon-btn" data-close aria-label="Close settings"><span class="i" data-icon="close"></span></button>
+      </div>
+      <div class="settings-body">
+        <div class="settings-tabs" role="tablist" aria-label="Settings sections" aria-orientation="vertical" id="settings-tabs">
+          <button type="button" role="tab" id="stab-voice" aria-controls="spanel-voice" aria-selected="true"><span class="i" data-icon="voice"></span>Voice</button>
+          <button type="button" role="tab" id="stab-reading" aria-controls="spanel-reading" aria-selected="false" tabindex="-1"><span class="i" data-icon="book"></span>Reading</button>
+          <button type="button" role="tab" id="stab-appearance" aria-controls="spanel-appearance" aria-selected="false" tabindex="-1"><span class="i" data-icon="palette"></span>Appearance</button>
+          <button type="button" role="tab" id="stab-privacy" aria-controls="spanel-privacy" aria-selected="false" tabindex="-1"><span class="i" data-icon="lock"></span>Privacy &amp; AI</button>
+        </div>
+        <div class="settings-panels">
+          <section role="tabpanel" class="spanel" id="spanel-voice" aria-labelledby="stab-voice" tabindex="0">
+            <h3>Voice</h3>
+            <fieldset class="engine-list" id="engine-list">
+              <legend>Voice engine</legend>
+            </fieldset>
+            <div class="field-row">
+              <div class="field grow">
+                <label for="set-voice">Voice</label>
+                <select id="set-voice" class="select"></select>
+              </div>
+              <button type="button" class="btn btn-secondary" id="btn-test-voice"><span class="i" data-icon="speaker"></span>Test voice</button>
+            </div>
+            <p class="hint" id="set-voice-hint"></p>
+            <h3 class="section-gap">Natural voices</h3>
+            <p class="hint">Free voices that sound natural and run entirely on this computer once downloaded.</p>
+            <div id="catalog-banner"></div>
+            <ul class="catalog" id="catalog-list"></ul>
+          </section>
+
+          <section role="tabpanel" class="spanel" id="spanel-reading" aria-labelledby="stab-reading" tabindex="0" hidden>
+            <h3>What to read aloud</h3>
+            <p class="hint">These only change what you hear. The text on screen always stays the same.</p>
+            <div class="option-list" id="reading-options"></div>
+          </section>
+
+          <section role="tabpanel" class="spanel" id="spanel-appearance" aria-labelledby="stab-appearance" tabindex="0" hidden>
+            <h3>Appearance</h3>
+            <fieldset class="field">
+              <legend>Theme</legend>
+              <div class="segmented" id="theme-choice">
+                <label><input type="radio" name="theme" value="system"><span>Match my computer</span></label>
+                <label><input type="radio" name="theme" value="light"><span>Light</span></label>
+                <label><input type="radio" name="theme" value="dark"><span>Dark</span></label>
+              </div>
+            </fieldset>
+            <div class="field">
+              <label for="font-scale">Text size <output id="font-scale-value" for="font-scale">100%</output></label>
+              <input type="range" id="font-scale" min="0.8" max="1.6" step="0.05" value="1">
+              <p class="preview-text" id="font-preview">The quick brown fox reads a chapter before class.</p>
+            </div>
+            <div class="option">
+              <div class="option-text">
+                <label for="comfortable" class="option-label">Comfortable reading</label>
+                <p class="hint" id="comfortable-hint">Adds a little more space between letters, words and lines. Many readers with dyslexia find this easier.</p>
+              </div>
+              <input type="checkbox" role="switch" class="switch" id="comfortable" aria-describedby="comfortable-hint">
+            </div>
+            <fieldset class="field">
+              <legend>Highlight color</legend>
+              <div class="swatches" id="highlight-choice"></div>
+            </fieldset>
+          </section>
+
+          <section role="tabpanel" class="spanel" id="spanel-privacy" aria-labelledby="stab-privacy" tabindex="0" hidden>
+            <h3>Privacy</h3>
+            <p class="hint">Destiny Bot works completely offline. These optional features use online services, and both are off until you turn them on.</p>
+            <div class="option">
+              <div class="option-text">
+                <label for="set-online-tts" class="option-label"><span class="i" data-icon="cloud"></span>Online voices</label>
+                <p class="hint" id="online-tts-hint">Sends the text being read to Microsoft to create the voice.</p>
+              </div>
+              <input type="checkbox" role="switch" class="switch" id="set-online-tts" aria-describedby="online-tts-hint">
+            </div>
+            <div class="option">
+              <div class="option-text">
+                <label for="set-ai" class="option-label"><span class="i" data-icon="cloud"></span>Study helper (AI)</label>
+                <p class="hint" id="ai-hint">Sends the text you ask about to Anthropic (Claude).</p>
+              </div>
+              <input type="checkbox" role="switch" class="switch" id="set-ai" aria-describedby="ai-hint">
+            </div>
+            <div class="subsettings" id="ai-settings">
+              <div class="field">
+                <label for="api-key">Anthropic API key <span class="key-state" id="api-key-state"></span></label>
+                <div class="field-row">
+                  <input type="password" id="api-key" class="input grow" autocomplete="off" spellcheck="false" placeholder="sk-ant-…" aria-describedby="api-key-hint">
+                  <button type="button" class="btn btn-primary" id="api-key-save">Save key</button>
+                  <button type="button" class="btn btn-secondary" id="api-key-remove">Remove</button>
+                </div>
+                <p class="hint" id="api-key-hint">Create a key at console.anthropic.com. It is stored only on this computer and is never shown again.</p>
+              </div>
+              <div class="field">
+                <label for="ai-model">Model</label>
+                <input type="text" id="ai-model" class="input" autocomplete="off" spellcheck="false">
+              </div>
+            </div>
+            <h3 class="section-gap">Your data</h3>
+            <div class="field">
+              <span class="field-label" id="data-dir-label">Data folder</span>
+              <div class="data-dir">
+                <code id="data-dir" aria-labelledby="data-dir-label"></code>
+                <button type="button" class="btn btn-small btn-secondary" id="copy-data-dir"><span class="i" data-icon="copy"></span>Copy</button>
+              </div>
+              <p class="hint">Everything Destiny Bot saves lives in this one folder.</p>
+            </div>
+            <div class="danger-zone">
+              <div>
+                <p class="option-label">Erase all my data</p>
+                <p class="hint">Deletes your library, progress, bookmarks, saved audio and settings.</p>
+              </div>
+              <button type="button" class="btn btn-danger-outline" id="btn-wipe">Erase…</button>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Export -->
+  <dialog class="dialog dialog-medium" id="export-dialog" aria-labelledby="export-title">
+    <form class="dialog-inner" id="export-form" method="dialog">
+      <div class="dialog-head">
+        <h2 id="export-title">Save as audio</h2>
+        <button type="button" class="icon-btn" data-close aria-label="Close"><span class="i" data-icon="close"></span></button>
+      </div>
+      <div class="dialog-body" id="export-setup">
+        <p class="hint">Make audio files you can listen to anywhere, one file per section.</p>
+        <fieldset class="field">
+          <legend>Sections</legend>
+          <label class="check"><input type="checkbox" id="export-all" checked><span>Whole book</span></label>
+          <div class="export-sections" id="export-sections"></div>
+        </fieldset>
+        <div class="field-row wrap">
+          <fieldset class="field">
+            <legend>Format</legend>
+            <div class="segmented">
+              <label><input type="radio" name="export-format" value="mp3" checked><span>MP3 (smaller)</span></label>
+              <label><input type="radio" name="export-format" value="wav"><span>WAV (best quality)</span></label>
+            </div>
+          </fieldset>
+          <div class="field grow">
+            <label for="export-voice">Voice</label>
+            <select id="export-voice" class="select"></select>
+          </div>
+        </div>
+        <div class="field">
+          <label for="export-rate">Speed <output id="export-rate-value" for="export-rate">1.00×</output></label>
+          <input type="range" id="export-rate" min="0.5" max="3" step="0.05" value="1">
+        </div>
+        <p class="hint" id="export-note"></p>
+      </div>
+      <div class="dialog-body" id="export-progress" hidden>
+        <p class="job-message" id="export-message" aria-live="polite">Starting…</p>
+        <div class="progress" id="export-bar-wrap"><div class="progress-bar" id="export-bar"></div></div>
+        <div id="export-files"></div>
+      </div>
+      <div class="dialog-foot">
+        <button type="button" class="btn btn-secondary" id="export-cancel">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="export-start"><span class="i" data-icon="download"></span>Start</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>
