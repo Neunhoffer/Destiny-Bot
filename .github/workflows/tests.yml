@@ -10,7 +10,7 @@ permissions:
 
 concurrency:
   group: tests-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false # let a running build finish; only the newest waiting run is kept
 
 jobs:
   pytest:

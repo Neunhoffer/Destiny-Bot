@@ -27,7 +27,7 @@ permissions:
 
 concurrency:
   group: desktop-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false # let a running build finish; only the newest waiting run is kept
 
 env:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
