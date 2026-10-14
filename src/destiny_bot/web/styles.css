@@ -599,6 +599,13 @@ input[type="radio"] {
   transition: transform 0.2s ease;
 }
 
+/* a larger invisible hit area around the switch */
+.switch::after {
+  content: "";
+  position: absolute;
+  inset: -8px -6px;
+}
+
 .switch:checked {
   background: var(--accent);
   border-color: var(--accent);
@@ -3290,9 +3297,17 @@ input[type="radio"] {
 }
 
 @media (pointer: coarse) {
-  .icon-btn {
+  .icon-btn,
+  .icon-btn-small {
     min-width: 44px;
     height: 44px;
+  }
+
+  .btn,
+  .btn-small,
+  .check,
+  .popover-options button {
+    min-height: 44px;
   }
 
   .toc-link {
@@ -3351,4 +3366,12 @@ input[type="radio"] {
 .chooser-list .book-item {
   border: 1px solid var(--border);
   background: var(--surface);
+}
+
+.field-row.wrap {
+  margin-bottom: 16px;
+}
+
+.option + .field {
+  margin-top: 16px;
 }

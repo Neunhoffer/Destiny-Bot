@@ -145,12 +145,12 @@ def render(size: int) -> Image.Image:
     # Sound waves: concentric arcs above the book, fading outwards. Small sizes get
     # fewer, bolder arcs and a bigger book so the shapes survive at 16 px.
     if size <= 20:
-        waves, wave_width, book_scale, drop = [(6.0, 1.0), (15.0, 1.0)], 5.0, 1.3, 3.0
+        waves, wave_width, book_scale, drop, rise = [(6.0, 1.0), (15.0, 1.0)], 5.0, 1.3, 4.0, 1.5
     elif simple:
-        waves, wave_width, book_scale, drop = [(5.5, 1.0), (10.5, 1.0), (15.5, 0.85)], 3.8, 1.25, 2.5
+        waves, wave_width, book_scale, drop, rise = [(5.5, 1.0), (10.5, 1.0), (15.5, 0.85)], 3.8, 1.25, 2.5, 0.0
     else:
-        waves, wave_width, book_scale, drop = WAVES, 3.0, 1.0, 0.0
-    cx, cy = WAVE_CENTER[0], WAVE_CENTER[1] + drop * 0.5
+        waves, wave_width, book_scale, drop, rise = WAVES, 3.0, 1.0, 0.0, 0.0
+    cx, cy = WAVE_CENTER[0], WAVE_CENTER[1] + drop * 0.5 - rise
     for radius, opacity in waves:
         layer = Image.new("RGBA", (px, px), (0, 0, 0, 0))
         _arc(ImageDraw.Draw(layer), (cx * k, cy * k), radius * k, wave_width * k, WHITE + (round(255 * opacity),))

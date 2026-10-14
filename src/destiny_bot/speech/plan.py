@@ -133,11 +133,9 @@ def _normalizer(opts: ReadingOptions) -> Normalizer:
 
 
 def _trimmed(text: str) -> tuple[int, int]:
-    stripped = text.strip()
-    if not stripped:
-        return 0, 0
-    start = text.index(stripped[0])
-    return start, start + len(stripped)
+    """``(start, end)`` of ``text`` without surrounding whitespace."""
+    start = len(text) - len(text.lstrip())
+    return start, max(start, len(text.rstrip()))
 
 
 def _with_prefix(pieces: list[_Piece], prefix: str) -> list[_Piece]:
@@ -214,7 +212,8 @@ def _whole_block(text: str, speech: str, max_chars: int, prefix: str) -> list[_P
 _CODE_COMMENT = re.compile(r"^(?:#+|//+|--|;+|%+|/\*+|\*+/?)\s*")
 _CODE_OPERATORS = [
     ("===", " is identical to "), ("!==", " is not identical to "), ("==", " is equal to "),
-    ("!=", " is not equal to "), ("<=", " is less than or equal to "), (">=", " is greater than or equal to "),
+    ("!=", " is not equal to "), ("<=", " is less than or equal to "),
+    (">=", " is greater than or equal to "),
     ("+=", " plus equals "), ("-=", " minus equals "), ("*=", " times equals "), ("/=", " divide equals "),
     ("->", " arrow "), ("=>", " arrow "), ("&&", " and "), ("||", " or "), ("++", " plus plus "),
     ("**", " to the power of "), ("::", " "),
@@ -267,7 +266,7 @@ def _table(block: Block, opts: ReadingOptions, normalize: Normalizer, lead: str)
     header = rows[0] if _has_header(rows, block.meta) else None
     data = rows[1:] if header is not None else rows
     n_rows, n_cols = len(data), max(len(r) for r in rows)
-    size = f"{n_rows} {'row' if n_rows == 1 else 'rows'} and {n_cols} {'column' if n_cols == 1 else 'columns'}"
+    size = f"{_count(n_rows, 'row')} and {_count(n_cols, 'column')}"
     if opts.tables == "announce":
         return _whole_block(text, f"There is a table here with {size}.", opts.max_chars, lead)
 
@@ -285,6 +284,10 @@ def _table(block: Block, opts: ReadingOptions, normalize: Normalizer, lead: str)
         parts = [(*whole, part, PAUSE_CHUNK_MS) for part in _pack(f"Row {number}: ", cells, opts.max_chars)]
         pieces.extend(_end_pause(parts, PAUSE_ROW_MS))
     return pieces
+
+
+def _count(n: int, noun: str) -> str:
+    return f"{n} {noun}" + ("" if n == 1 else "s")
 
 
 def _table_rows(block: Block) -> list[list[str]]:
@@ -397,7 +400,8 @@ def _plain_block(block: Block) -> str:
     if not text:
         return ""
     if kind == BlockKind.CODE:
-        return f"```\n{(block.text or '').strip(chr(10))}\n```"
+        code = (block.text or "").strip("\n")
+        return f"```\n{code}\n```"
     if kind == BlockKind.LIST_ITEM:
         return "- " + _LEADING_BULLET.sub("", text)
     if kind == BlockKind.QUOTE:

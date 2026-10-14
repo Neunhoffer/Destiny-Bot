@@ -177,6 +177,8 @@ class _Page:
     image_rects: list[tuple[float, float, float, float]] = field(default_factory=list)
     figures: list[tuple[float, float, float, float]] = field(default_factory=list)  # vector diagrams
     ocr_paragraphs: list[str] | None = None
+    raw_chars: int = 0  # characters in the text layer ...
+    bad_chars: int = 0  # ... of which undecodable (control codes, U+FFFD): broken font encodings
 
 
 @dataclass
@@ -298,9 +300,8 @@ def _load(doc: pymupdf.Document, path: Path, source_name: str, ocr: bool, progre
     pitch_samples: list[float] = []
     failed: list[int] = []
     scanned: list[int] = []  # 0-based indices of pages without a text layer
-    ocr_done: list[int] = []
-    ocr_empty: list[int] = []
-    ocr_failed: list[int] = []
+    garbled: list[int] = []  # pages whose text layer can't be decoded
+    ocr_outcome: dict[int, str] = {}  # page -> "done" | "empty" | "failed"
     ocr_state: dict[str, object] = {}
 
     for i in range(n):
@@ -313,22 +314,23 @@ def _load(doc: pymupdf.Document, path: Path, source_name: str, ocr: bool, progre
             failed.append(i)
             pages.append(_Page(index=i, width=612, height=792))
             continue
-        if _needs_ocr(page, pg):
-            scanned.append(i)
-            pg.lines = []
+        is_garbled = _garbled(pg)
+        if is_garbled or _needs_ocr(page, pg):
+            (garbled if is_garbled else scanned).append(i)
+            if not is_garbled:
+                pg.lines = []
             if ocr:
                 if progress:
-                    progress(0.9 * i / n, f"Reading scanned page {i + 1} of {n} (OCR)")
+                    progress(0.9 * i / n, f"Reading page {i + 1} of {n} with OCR")
                 result = _ocr_page(page, ocr_state)
-                if result is None:
-                    pass  # OCR unavailable; reported below
-                elif isinstance(result, Exception):
-                    ocr_failed.append(i)
+                if isinstance(result, Exception):
+                    ocr_outcome[i] = "failed"
                 elif result:
                     pg.ocr_paragraphs = result
-                    ocr_done.append(i)
-                else:
-                    ocr_empty.append(i)
+                    pg.lines = []
+                    ocr_outcome[i] = "done"
+                elif result is not None:
+                    ocr_outcome[i] = "empty"
         pages.append(pg)
 
     if progress:
@@ -356,37 +358,53 @@ def _load(doc: pymupdf.Document, path: Path, source_name: str, ocr: bool, progre
     blocks, positions = _to_blocks(chunks)
 
     # ---- warnings
-    unread = [i for i in scanned if i not in ocr_done and i not in ocr_empty and i not in ocr_failed]
+    def outcome(pages0: list[int], value: str | None) -> list[int]:
+        return [i for i in pages0 if ocr_outcome.get(i) == value]
+
     if failed:
         warnings.append(f"{_pages_phrase(failed)} couldn't be read and {_was_were(failed)} skipped.")
-    if ocr_done:
+    if outcome(scanned, "done"):
+        done = outcome(scanned, "done")
         warnings.append(
-            f"{_pages_phrase(ocr_done)} had no text layer and {_was_were(ocr_done)} read with OCR. "
+            f"{_pages_phrase(done)} had no text layer and {_was_were(done)} read with OCR. "
             "Recognition mistakes are possible."
         )
-    if unread:
-        if not ocr:
-            warnings.append(
-                f"{_pages_phrase(unread)} {_is_are(unread)} scanned images with no text and "
-                f"{_was_were(unread)} skipped because OCR is turned off."
-            )
-        else:
-            reason = str(ocr_state.get("reason") or "")
-            msg = (
-                f"{_pages_phrase(unread)} {_is_are(unread)} scanned images with no text. "
-                "Install Tesseract OCR to have them read aloud."
-            )
-            if reason and "tesseract" not in reason.lower():
-                msg += f" ({reason})"
-            warnings.append(msg)
-    if ocr_failed:
-        warnings.append(f"OCR failed on {_pages_phrase(ocr_failed).lower()}; {_is_are(ocr_failed, 'it is', 'they are')} skipped.")
-    if ocr_empty:
+    if outcome(garbled, "done"):
+        done = outcome(garbled, "done")
         warnings.append(
-            f"No text was found on scanned {_pages_phrase(ocr_empty).lower()} "
-            "(they may be pictures or blank)."
+            f"The text of {_pages_phrase(done).lower()} couldn't be decoded, so {_it_they(done)} "
+            f"{_was_were(done)} read with OCR instead. Recognition mistakes are possible."
         )
-    if not blocks and not scanned and not failed:
+    reason = str(ocr_state.get("reason") or "")
+
+    def install(pages0: list[int]) -> str:
+        them = "it" if len(pages0) == 1 else "them"
+        if not ocr:
+            return f"Turn on OCR to have {them} read aloud."
+        msg = f"Install Tesseract OCR to have {them} read aloud."
+        return msg + (f" ({reason})" if reason and "tesseract" not in reason.lower() else "")
+
+    unread = outcome(scanned, None)
+    if unread:
+        what = "is a scanned image" if len(unread) == 1 else "are scanned images"
+        warnings.append(f"{_pages_phrase(unread)} {what} with no text. {install(unread)}")
+    undecoded = outcome(garbled, None) + outcome(garbled, "failed") + outcome(garbled, "empty")
+    if undecoded:
+        warnings.append(
+            f"The text of {_pages_phrase(undecoded).lower()} can't be decoded properly (the PDF's fonts "
+            "don't say which letters they draw), so parts may be missing or garbled."
+            + (f" {install(undecoded)}" if outcome(garbled, None) else "")
+        )
+    if outcome(scanned, "failed"):
+        bad = outcome(scanned, "failed")
+        warnings.append(f"OCR failed on {_pages_phrase(bad).lower()}, so {_it_they(bad)} {_was_were(bad)} skipped.")
+    if outcome(scanned, "empty"):
+        empty = outcome(scanned, "empty")
+        warnings.append(
+            f"No text was found on scanned {_pages_phrase(empty).lower()} "
+            f"({_it_they(empty)} may be {'a picture' if len(empty) == 1 else 'pictures'} or blank)."
+        )
+    if not blocks and not scanned and not failed and not garbled:
         warnings.append("No readable text was found in this PDF.")
 
     # ---- metadata and sections
@@ -475,6 +493,10 @@ def _extract_page(page: pymupdf.Page, index: int, size_weights: Counter, pitch_s
             nchars = sum(len(s["text"].strip()) for s in ln["spans"])
             if not nchars:
                 continue
+            for sp in ln["spans"]:
+                t = sp["text"]
+                pg.raw_chars += len(t)
+                pg.bad_chars += sum(1 for c in t if (c < " " and c not in "\t\n\r") or c == "\ufffd")
             dir_weight[direction] += nchars
             raw_lines.append((direction, ln, block.get("number", 0)))
     if not raw_lines:
@@ -716,13 +738,17 @@ def _find_tables_and_boxes(page: pymupdf.Page, pg: _Page) -> None:
                 header = getattr(tab, "header", None)
                 bbox = tuple(tab.bbox)
                 if header is not None and getattr(header, "external", False):
-                    rows = [list(header.names)] + rows
+                    # PyMuPDF may take the line above a table as its header row; keep it
+                    # unless it is really a caption ("Table 4. ...") or a sliced text line.
+                    names = [n or "" for n in header.names]
                     hb = tuple(header.bbox)
-                    bbox = (min(bbox[0], hb[0]), min(bbox[1], hb[1]), max(bbox[2], hb[2]), max(bbox[3], hb[3]))
+                    if not _is_caption_text(" ".join(names).strip()) and not _cuts_through_text(hb, pg.lines):
+                        rows = [names] + rows
+                        bbox = (min(bbox[0], hb[0]), min(bbox[1], hb[1]), max(bbox[2], hb[2]), max(bbox[3], hb[3]))
             except Exception:
                 continue
             cleaned = _clean_table(rows)
-            if cleaned is not None:
+            if cleaned is not None and not _cuts_through_text(bbox, pg.lines):
                 pg.tables.append(_Table(bbox=bbox, rows=cleaned))
 
     for b in box_candidates:
@@ -786,6 +812,17 @@ def _vector_figures(paths: list[dict], pg: _Page, exclude: list[tuple]) -> list[
     return regions
 
 
+def _cuts_through_text(bbox: tuple, lines: list[_Line]) -> bool:
+    """A "table" whose border slices through lines of text is a chart grid or a frame, not a table."""
+    for ln in lines:
+        w = max(ln.x1 - ln.x0, 1e-6)
+        inside_x = min(ln.x1, bbox[2]) - max(ln.x0, bbox[0])
+        inside_y = min(ln.y1, bbox[3]) - max(ln.y0, bbox[1])
+        if inside_y > 0.5 * (ln.y1 - ln.y0) and 0.1 * w < inside_x < 0.9 * w and len(ln.text) > 3:
+            return True
+    return False
+
+
 def _clean_table(rows: list[list[str | None]]) -> list[list[str]] | None:
     """Clean cell text, drop empty rows/columns; None if it isn't really a table."""
     grid = [[clean_display_text(c or "") for c in row] for row in rows if row]
@@ -798,9 +835,17 @@ def _clean_table(rows: list[list[str | None]]) -> list[list[str]] | None:
     grid = [[r[j] for j in keep] for r in grid]
     if len(grid) < 2 or len(keep) < 2:
         return None
-    filled = sum(1 for r in grid for c in r if c)
-    if filled < 0.4 * len(grid) * len(keep):
-        return None
+    cells = [c for r in grid for c in r if c]
+    fill = len(cells) / (len(grid) * len(keep))
+    if fill < 0.5 or (len(grid) <= 4 and fill < 0.75):
+        return None  # mostly empty: a diagram or chart drawn with lines
+    chars = "".join(cells).replace(" ", "")
+    if sum(1 for c in chars if c.isalpha()) < 0.2 * len(chars) and not any(c.isalpha() for c in "".join(grid[0])):
+        return None  # tick labels of a chart grid
+    wordy = any(re.search(r"[^\W\d_]{3,}", c) for c in cells)
+    numeric = sum(1 for c in cells if re.fullmatch(r"[-+−]?[\d.,%$€£ ]+", c)) >= 0.5 * len(cells)
+    if not wordy and not numeric:
+        return None  # labels of a geometric figure ("x 1", "U")
     return grid
 
 
@@ -818,6 +863,11 @@ def _inside(line: _Line, rect: tuple, tol: float = 2.0) -> bool:
     cx = (line.x0 + line.x1) / 2
     cy = (line.y0 + line.y1) / 2
     return rect[0] - tol <= cx <= rect[2] + tol and rect[1] - tol <= cy <= rect[3] + tol
+
+
+def _garbled(pg: _Page) -> bool:
+    """Is the text layer mostly undecodable (fonts without a Unicode mapping)?"""
+    return pg.raw_chars >= 20 and pg.bad_chars >= 0.3 * pg.raw_chars
 
 
 def _needs_ocr(page: pymupdf.Page, pg: _Page) -> bool:
@@ -887,7 +937,20 @@ def _ocr_paragraphs(text: str) -> list[str]:
             current.append(ln)
         if current:
             paras.append("\n".join(current))
-    return [p for p in paras if any(c.isalnum() for c in p)]
+    return [p for p in paras if _plausible_ocr_text(p)]
+
+
+def _plausible_ocr_text(text: str) -> bool:
+    """Reject OCR noise from pictures (logos, cover art): mostly symbols, or no real word."""
+    chars = [c for c in text if not c.isspace()]
+    if not chars:
+        return False
+    letters = sum(1 for c in chars if c.isalpha())
+    if letters < 0.5 * len(chars):
+        return bool(re.fullmatch(r"[\d\s.,:;%$€£()+\-–/]+", text)) and len(chars) >= 4  # a line of numbers
+    if len(chars) < 15:
+        return bool(re.search(r"[A-Za-z]{4,}", text))
+    return True
 
 
 def _ocr_chunks(pg: _Page, stats: _Stats) -> list[_Chunk]:
@@ -984,11 +1047,15 @@ def _mark_headers_footers(pages: list[_Page], stats: _Stats) -> None:
     n_pages = sum(1 for p in pages if p.lines)
     occurrences: dict[tuple, list[tuple[int, float]]] = defaultdict(list)
     candidates: list[tuple[tuple, _Line]] = []
+    slots: dict[tuple, set[int]] = defaultdict(set)  # header "slot" -> pages using it
+    slot_lines: list[tuple[tuple, _Line]] = []
     for pg in pages:
         if not pg.lines:
             continue
         top_band = pg.height * _BAND
         bottom_band = pg.height * (1 - _BAND)
+        top_y = min(ln.y0 for ln in pg.lines)
+        bottom_y = max(ln.y1 for ln in pg.lines)
         for ln in pg.lines:
             if ln.y1 <= top_band:
                 zone = "top"
@@ -1008,8 +1075,15 @@ def _mark_headers_footers(pages: list[_Page], stats: _Stats) -> None:
             key = (zone, _margin_key(ln.text), round(ln.size))
             if not key[1]:
                 continue
-            occurrences[key].append((pg.index, ln.y0 if zone == "top" else pg.height - ln.y1))
+            edge = ln.y0 if zone == "top" else pg.height - ln.y1
+            occurrences[key].append((pg.index, edge))
             candidates.append((key, ln))
+            outermost = ln.y0 <= top_y + 2 if zone == "top" else ln.y1 >= bottom_y - 2
+            if outermost:
+                font = max(ln.spans, key=lambda sp: len(sp[0]))[3].split("+", 1)[-1]
+                slot = (zone, round(edge / 3), round(ln.size * 2), font)
+                slots[slot].add(pg.index)
+                slot_lines.append((slot, ln))
 
     threshold = 2 if n_pages <= 6 else 3
     repeated = set()
@@ -1022,13 +1096,17 @@ def _mark_headers_footers(pages: list[_Page], stats: _Stats) -> None:
         plist = sorted({p for p, y in occ if abs(y - median) <= 4})
         if len(plist) >= threshold and any(b - a <= 2 for a, b in zip(plist, plist[1:])):
             repeated.add(key)
+    # Headers whose text changes (the current section's name) still sit in the same
+    # spot, in the same font, on a large share of the pages.
+    busy_slots = {slot for slot, pset in slots.items() if len(pset) >= max(3, 0.4 * n_pages)}
+    drop = [ln for key, ln in candidates if key in repeated]
+    drop += [ln for slot, ln in slot_lines if slot in busy_slots]
     total = sum(ln.chars for pg in pages for ln in pg.lines if not ln.drop)
-    removed = sum(ln.chars for key, ln in candidates if key in repeated)
+    removed = sum(ln.chars for ln in {id(ln): ln for ln in drop}.values())
     if total and removed > 0.5 * total:
         return  # the "header" is the content itself (e.g. one line per page)
-    for key, ln in candidates:
-        if key in repeated:
-            ln.drop = True
+    for ln in drop:
+        ln.drop = True
 
 
 # --------------------------------------------------------------------------- page layout
@@ -1596,9 +1674,11 @@ def _continues(
     size = max(prev.size, ln.size)
     if abs(prev.size - ln.size) > max(0.6, 0.08 * size):
         return False
-    if prev.mono != ln.mono:
-        return False
     closed = _ends_terminal(prev.text) or prev.x1 < col_right - max(3 * prev.size, 0.15 * width)
+    if prev.mono != ln.mono and (closed or cur.lines[0].mono or len(ln.text) > 60):
+        return False  # a code block starts or ends (a short mono line mid-sentence is inline code)
+    if _LEADER_RE.search(prev.text) or _LEADER_RE.search(ln.text):
+        return False  # table-of-contents entries: one per line
     if prev.bold != ln.bold and not (prev.mono and ln.mono) and closed:
         return False  # a bold heading line, or a bold line after a finished paragraph
     dy = ln.baseline - prev.baseline
@@ -1610,7 +1690,7 @@ def _continues(
         return False  # no horizontal overlap with the chunk
     if ln.role == "footnote" and (_FOOTNOTE_START_RE.match(ln.text) or ln.lead_marker):
         return False
-    if prev.mono and ln.mono:
+    if prev.mono and ln.mono and cur.lines[0].mono:
         return True
     if eq:
         return True
@@ -1666,6 +1746,10 @@ def _classify(chunks: list[_Chunk], stats: _Stats) -> None:
             ch.text = text
             if _heading_like(ch, body):  # "1. Introduction" set as a heading
                 ch.kind = BlockKind.HEADING
+            continue
+        if _LEADER_RE.search(text):
+            ch.kind = BlockKind.LIST_ITEM  # a table-of-contents entry: "Cells … 45"
+            ch.text = re.sub(r"\s*(?:[.·…_]\s?){3,}\s*", " … ", text)
             continue
         if _is_caption_text(text):
             ch.kind = BlockKind.CAPTION
@@ -2076,5 +2160,5 @@ def _was_were(pages0: list[int]) -> str:
     return "was" if len(set(pages0)) == 1 else "were"
 
 
-def _is_are(pages0: list[int], one: str = "is", many: str = "are") -> str:
-    return one if len(set(pages0)) == 1 else many
+def _it_they(pages0: list[int]) -> str:
+    return "it" if len(set(pages0)) == 1 else "they"

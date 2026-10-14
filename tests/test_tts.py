@@ -397,7 +397,8 @@ def test_piper_real_reader_rates(piper_voice_path):
         assert max(abs(s) for s in samples) > 1000
         durations.append(len(samples) / sr)
     assert durations == sorted(durations, reverse=True)
-    assert durations[0] / durations[1] == pytest.approx(2.0, rel=0.25)  # native slow-down (stochastic)
+    # Native slow-down: natural, but sub-linear (tokens at Piper's 1-frame minimum don't lengthen).
+    assert 1.3 < durations[0] / durations[1] < 2.5
     assert durations[1] / durations[4] == pytest.approx(3.0, rel=0.1)
 
 

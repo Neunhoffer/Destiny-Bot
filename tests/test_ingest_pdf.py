@@ -565,8 +565,7 @@ def test_ocr_turned_off(tmp_path, monkeypatch):
     monkeypatch.setattr(pdf_mod, "_ocr_function", lambda: pytest.fail("OCR must not run"))
     scan = scanned_pdf(tmp_path / "scan.pdf", [["one"]])
     doc = load(scan, ocr=False)
-    assert any("Page 1 is a scanned image" in w or "Page 1 is scanned" in w or "Page 1 " in w for w in doc.warnings)
-    assert any("OCR is turned off" in w for w in doc.warnings)
+    assert "Page 1 is a scanned image with no text. Turn on OCR to have it read aloud." in doc.warnings
 
 
 def test_ocr_failure_on_a_page_is_a_warning(tmp_path, monkeypatch):
@@ -575,7 +574,7 @@ def test_ocr_failure_on_a_page_is_a_warning(tmp_path, monkeypatch):
 
     monkeypatch.setattr(pdf_mod, "_ocr_function", lambda: (broken, ""))
     doc = load(scanned_pdf(tmp_path / "scan.pdf", [["one"]]))
-    assert any("OCR failed on page 1" in w for w in doc.warnings)
+    assert "OCR failed on page 1, so it was skipped." in doc.warnings
 
 
 # --------------------------------------------------------------------------- errors & metadata

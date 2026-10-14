@@ -2165,7 +2165,20 @@ function renderLibrary() {
   $('#library-empty').hidden = state.books.length > 0;
 }
 
-const renderLibraryProgress = debounce(() => renderLibrary(), 400);
+/** Refresh progress hints in place, so keyboard focus in the list is never lost. */
+const renderLibraryProgress = debounce(() => {
+  for (const item of $$('.book-item[data-book-id]')) {
+    const book = state.books.find((b) => b.id === item.dataset.bookId);
+    if (!book) continue;
+    const info = progressInfo(book);
+    const parts = [TYPE_LABELS[book.source_type] || book.source_type];
+    if (book.section_count) parts.push(plural(book.section_count, 'section'));
+    const sub = item.querySelector('.book-sub');
+    if (sub) sub.textContent = `${parts.join(' · ')} · ${info.text}`;
+    const bar = item.querySelector('.book-progress > span');
+    if (bar) bar.style.width = `${Math.round(info.fraction * 100)}%`;
+  }
+}, 400);
 
 async function refreshLibrary() {
   try {
@@ -3326,7 +3339,7 @@ function renderCatalog() {
     let side;
     if (voice.installed) {
       side = el('span', { class: 'badge badge-success' }, icon('check'), 'Installed');
-    } else if (job && job.status === 'running') {
+    } else if (job && !['done', 'error', 'cancelled'].includes(job.status)) {
       const bar = el('div', { class: 'progress-bar' });
       bar.style.width = `${Math.round((job.progress || 0) * 100)}%`;
       side = el('div', null,

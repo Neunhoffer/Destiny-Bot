@@ -40,7 +40,7 @@ ABBREVIATIONS = [
     ("Cats vs. dogs", "Cats versus dogs"),
     ("cats vs dogs", "cats versus dogs"),
     ("Brown v. Board of Education", "Brown versus Board of Education"),
-    ("the four chambers, viz. the atria and ventricles", "the four chambers, namely the atria and ventricles"),
+    ("two chambers, viz. the atria", "two chambers, namely the atria"),
     ("approx. 5 cells", "approximately 5 cells"),
     ("It took approx. ten years.", "It took approximately ten years."),
     ("Built c. 1500.", "Built circa 1500."),
@@ -181,8 +181,10 @@ CITATIONS_KEPT = [
     ("It happened (Fall 2019).", "It happened (Fall 2019)."),
     ("Data (Census 2010) show it.", "Data (Census 2010) show it."),
     ("It is in (Room 2019) now.", "It is in (Room 2019) now."),
-    ("Jane Austen's Pride and Prejudice (1813) is a novel.", "Jane Austen's Pride and Prejudice (1813) is a novel."),
+    ("Austen's Pride and Prejudice (1813) is a novel.", "Austen's Pride and Prejudice (1813) is a novel."),
     ("Hurricane Katrina (2005) hit.", "Hurricane Katrina (2005) hit."),
+    ("Jane Austen's Emma (1815) is long.", "Jane Austen's Emma (1815) is long."),
+    ("Then Darwin's On the Origin (1859) appeared.", "Then Darwin's On the Origin (1859) appeared."),
     ("The years (1990, 1995) were good.", "The years (1990, 1995) were good."),
     ("In 2019 (the year of the study) it rained.", "In 2019 (the year of the study) it rained."),
     ("The ratio (2:1) holds.", "The ratio (2:1) holds."),
@@ -265,7 +267,7 @@ def test_links(text, expected, mode):
 
 @pytest.mark.parametrize(
     "text",
-    ["Node.js is fast.", "Use e.g. and i.e. carefully.", "The U.S. is large.", "It ends.In the next", "3.14 is pi."],
+    ["Node.js is fast.", "Use e.g. and i.e. here.", "The U.S. is big.", "It ends.In the next", "3.14 is pi"],
 )
 def test_things_that_are_not_links(text):
     assert norm(text, urls="skip") == norm(text, urls="domain") == norm(text, urls="full")
@@ -284,6 +286,8 @@ SYMBOLS = [
     ("x = 5", "x equals 5"),
     ("y ≈ 3", "y is approximately equal to 3"),
     ("costs ≈ 5 dollars", "costs approximately 5 dollars"),
+    ("DNA (≈ 3 billion pairs)", "DNA (approximately 3 billion pairs)"),
+    ("(≤ 5 mm)", "(at most 5 millimeters)"),
     ("a ≠ b", "a is not equal to b"),
     ("x ≤ 5", "x is less than or equal to 5"),
     ("x ≥ 5", "x is greater than or equal to 5"),
@@ -348,6 +352,8 @@ UNITS = [
     ("5 Ω resistor", "5 ohms resistor"),
     ("60 Hz", "60 hertz"),
     ("120 mmHg", "120 millimeters of mercury"),
+    ("3 × 10⁸ m/s", "3 times 10 to the power of 8 meters per second"),
+    ("6.02 × 10²³ mol⁻¹", "6.02 times 10 to the power of 23 per mole"),
 ]
 
 UNIT_NEGATIVES = [
@@ -448,7 +454,9 @@ def test_punctuation_and_leftovers(text, expected):
     assert norm(text) == expected
 
 
-@pytest.mark.parametrize("text", ["", "   ", "...", "—", "• ▪ ◦", "()", "[ ]", "* * *", "| |", "---", "#", "…", "※"])
+@pytest.mark.parametrize(
+    "text", ["", "   ", "...", "—", "• ▪ ◦", "()", "[ ]", "* * *", "| |", "---", "#", "…", "※"]
+)
 def test_unspeakable_text_becomes_empty(text):
     assert norm(text) == ""
 
@@ -613,7 +621,7 @@ def test_all_caps_negatives(text):
 
 def test_normalize_never_returns_only_punctuation():
     rng = random.Random(7)
-    pieces = ["(", ")", "[", "]", ".", ",", "—", "…", "•", "*", "#", "|", "~", "-", " ", "!", "?", ";", ":", "▪"]
+    pieces = list("()[].,—…•*#|~- !?;:▪")
     for _ in range(300):
         text = "".join(rng.choice(pieces) for _ in range(rng.randint(1, 12)))
         out = norm(text)
@@ -624,6 +632,36 @@ def test_normalize_default_options_and_whitespace():
     assert normalize_for_speech("Fig. 2 (Smith, 2019)") == "Figure 2"
     out = normalize_for_speech("a\tb\n\nc")
     assert out == "a b c"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Text (" + "see also e.g. " * 25 + "Smith 2019 z)",
+        "Text (" + "Smith, " * 50 + "2019, p. " + "1, " * 30 + "x)",
+        "Text (" + "Smith " * 60 + "2019 x)",
+        "Text (" + "van de " * 60 + "Smith, 2019 q)",
+        "Text (Smith, 2019" + ", 2020" * 50 + " q)",
+        "Text " + "Smith and Jones, " * 20 + "(2019) found",
+        "(" + "A " * 200 + ")",
+        "[" + "1, " * 300 + "x]",
+    ],
+)
+def test_near_miss_citations_are_fast(text):
+    assert _timed(lambda: norm(text)) < 0.25
+
+
+def test_normalize_survives_random_unicode():
+    rng = random.Random(99)
+    alphabet = list("abcXYZ 0123456789.,;:!?()[]{}<>=+-*/\\^_~#@&%$|'\"`") + list(
+        "—–…•²³⁴⁻⁺₁₂αβΔΩµμ°×÷±≈≠≤≥→←↔√∑∫∂∞½¼¾§¶©®™†‡\n\t "
+    ) + ["e.g.", "Fig.", "(Smith, 2019)", "[12]", "https://x.org/a", "Chapter IV", "CELLS", " Dr. ", "a@b.co"]
+    for _ in range(2000):
+        text = "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 40)))
+        out = normalize_for_speech(text, random_options(rng))
+        assert out == out.strip()
+        assert out == "" or re.search(r"[^\W_]", out), (text, out)
+        assert not any(0xF0000 <= ord(ch) <= 0xFFFFD for ch in out), (text, out)
 
 
 # --------------------------------------------------------------------------- math
@@ -698,7 +736,8 @@ def test_verbalize_math_empty(text):
 
 def test_verbalize_math_survives_garbage():
     rng = random.Random(3)
-    alphabet = list("x^_{}()[]\\+-=/|!'2a ") + [r"\frac", r"\sqrt", r"\sum", r"\int", r"\lim", r"\left", r"\right"]
+    alphabet = list("x^_{}()[]\\+-=/|!'2a ")
+    alphabet += [r"\frac", r"\sqrt", r"\sum", r"\int", r"\lim", r"\left", r"\right"]
     for _ in range(500):
         src = "".join(rng.choice(alphabet) for _ in range(rng.randint(1, 25)))
         out = verbalize_math(src)
@@ -782,9 +821,10 @@ def test_split_sentences_empty(text):
 
 def _random_prose(rng: random.Random, n_words: int) -> str:
     words = [
-        "cell", "Dr.", "e.g.", "i.e.", "etc.", "Fig.", "3.14", "U.S.", "J.", "K.", "Rowling", "(Smith,", "2019).",
-        "[12]", "What?", "Yes!", "Wait...", "“Stop!”", "end.", "The", "It", "and", "No.", "5", "p.", "12", "et",
-        "al.", "a.m.", "vs.", "…", "x²", "—", "-", ";", ":", ",", "https://example.com.", "pp.", "10–12.", "\n\n",
+        "cell", "Dr.", "e.g.", "i.e.", "etc.", "Fig.", "3.14", "U.S.", "J.", "K.", "Rowling", "(Smith,",
+        "2019).", "[12]", "What?", "Yes!", "Wait...", "“Stop!”", "end.", "The", "It", "and", "No.", "5", "p.",
+        "12", "et", "al.", "a.m.", "vs.", "…", "x²", "—", "-", ";", ":", ",", "https://example.com.", "pp.",
+        "10–12.", "\n\n",
     ]
     return " ".join(rng.choice(words) for _ in range(n_words))
 
@@ -936,7 +976,9 @@ def make_section(*blocks: Block, title: str = "Cell Biology") -> Section:
 
 def test_plan_paragraph_sentences_and_pauses():
     text = "Cells are small. They divide (Smith, 2019). Fig. 3 shows this."
-    sec = make_section(Block(kind=K.HEADING, text="Chapter 1: Cells", level=1), Block(kind=K.PARAGRAPH, text=text))
+    sec = make_section(
+        Block(kind=K.HEADING, text="Chapter 1: Cells", level=1), Block(kind=K.PARAGRAPH, text=text)
+    )
     plan = check_plan(sec, ReadingOptions())
     assert [(u.block, u.speech, u.pause_after_ms) for u in plan] == [
         (0, "Chapter 1: Cells", 750),
@@ -956,7 +998,9 @@ def test_plan_section_title_announcement():
     assert plan[0].pause_after_ms == 750 and plan[0].kind == K.HEADING
     no_title = check_plan(sec, ReadingOptions(announce_section_title=False))
     assert no_title[0].block == 0
-    with_heading = make_section(Block(kind=K.HEADING, text="Intro", level=1), Block(kind=K.PARAGRAPH, text="Body."))
+    with_heading = make_section(
+        Block(kind=K.HEADING, text="Intro", level=1), Block(kind=K.PARAGRAPH, text="Body.")
+    )
     assert check_plan(with_heading, ReadingOptions())[0].block == 0
 
 
@@ -994,7 +1038,9 @@ def test_plan_captions_footnotes_figures():
         "Figure 2.1 A cell.", "Footnote: See the appendix.", "It helps.", "Image: A diagram of a plant cell"
     ]
     assert plan[3].start == 0 and plan[3].end == len("A diagram of a plant cell")
-    quiet = ReadingOptions(announce_section_title=False, read_captions=False, read_footnotes=False, read_figures=False)
+    quiet = ReadingOptions(
+        announce_section_title=False, read_captions=False, read_footnotes=False, read_figures=False
+    )
     assert check_plan(sec, quiet) == []
     assert kinds_in(check_plan(sec, ReadingOptions(announce_section_title=False))) == {K.CAPTION, K.FIGURE}
 
@@ -1021,7 +1067,9 @@ def test_plan_code_modes():
     ]
     read = check_plan(sec, base.model_copy(update={"code": "read"}))
     assert [code[u.start : u.end] for u in read] == ["def area(r):", "return 3.14 * r ** 2", "# done"]
-    assert [u.speech for u in read] == ["def area(r):", "return 3.14 times r to the power of 2", "Comment: done"]
+    assert [u.speech for u in read] == [
+        "def area(r):", "return 3.14 times r to the power of 2", "Comment: done"
+    ]
     assert [u.pause_after_ms for u in read] == [220, 220, 450]
 
 
@@ -1078,9 +1126,10 @@ def test_table_header_detection(rows, header):
 
 def test_table_header_hint_from_loader():
     rows = [["1", "2"], ["3", "4"]]
-    plan = check_plan(make_section(table_block(rows, header=True)), ReadingOptions(announce_section_title=False))
+    opts = ReadingOptions(announce_section_title=False)
+    plan = check_plan(make_section(table_block(rows, header=True)), opts)
     assert plan[1].speech == "Row 1: 1, 3; 2, 4"
-    plan = check_plan(make_section(table_block(PEOPLE, header=False)), ReadingOptions(announce_section_title=False))
+    plan = check_plan(make_section(table_block(PEOPLE, header=False)), opts)
     assert plan[0].speech == "Table with 3 rows and 2 columns."
 
 
@@ -1088,14 +1137,18 @@ def test_table_announce_and_skip():
     block = table_block([["A", "B"], ["1", "2"], ["3", "4"], ["5", "6"]])
     opts = ReadingOptions(announce_section_title=False, tables="announce")
     plan = check_plan(make_section(block), opts)
-    assert [(u.speech, u.pause_after_ms) for u in plan] == [("There is a table here with 3 rows and 2 columns.", 450)]
+    assert [(u.speech, u.pause_after_ms) for u in plan] == [
+        ("There is a table here with 3 rows and 2 columns.", 450)
+    ]
     one = table_block([["Name", "Age"], ["Alice", "30"]])
     assert check_plan(make_section(one), opts)[0].speech == "There is a table here with 1 row and 2 columns."
     assert check_plan(make_section(block), opts.model_copy(update={"tables": "skip"})) == []
 
 
 def test_table_cells_are_normalized_and_empty_cells_skipped():
-    rows = [["Term", "Notes"], ["Mitosis", "Cell division (Smith, 2019), e.g. in skin"], ["Meiosis", ""], ["", ""]]
+    rows = [
+        ["Term", "Notes"], ["Mitosis", "Cell division (Smith, 2019), e.g. in skin"], ["Meiosis", ""], ["", ""]
+    ]
     plan = check_plan(make_section(table_block(rows)), ReadingOptions(announce_section_title=False))
     assert [u.speech for u in plan] == [
         "Table with 2 rows and 2 columns.",
@@ -1164,7 +1217,8 @@ def test_empty_speech_is_skipped_but_indices_stay_contiguous():
 
 
 def test_long_sentences_are_chunked_with_short_pauses():
-    text = "This sentence keeps going, " + ", ".join(f"adding clause number {i}" for i in range(40)) + ". Done."
+    clauses = ", ".join(f"adding clause number {i}" for i in range(40))
+    text = f"This sentence keeps going, {clauses}. Done."
     sec = make_section(Block(kind=K.PARAGRAPH, text=text))
     plan = check_plan(sec, ReadingOptions(announce_section_title=False, max_chars=100))
     assert len(plan) > 5
@@ -1205,7 +1259,9 @@ def test_plan_empty_section():
 
 
 def test_plan_uses_default_options():
-    sec = make_section(Block(kind=K.FOOTNOTE, text="Hidden by default."), Block(kind=K.PARAGRAPH, text="Shown."))
+    sec = make_section(
+        Block(kind=K.FOOTNOTE, text="Hidden by default."), Block(kind=K.PARAGRAPH, text="Shown.")
+    )
     assert [u.speech for u in plan_section(sec)] == ["Cell Biology", "Shown."]
 
 
@@ -1234,7 +1290,8 @@ SENTENCE_BANK = [
 def random_text(rng: random.Random) -> str:
     parts = [rng.choice(SENTENCE_BANK) for _ in range(rng.randint(1, 6))]
     if rng.random() < 0.2:
-        parts.append(" ".join(rng.choice(["lorem", "ipsum,", "dolor;", "sit:", "amet", "—"]) for _ in range(150)) + ".")
+        filler = ["lorem", "ipsum,", "dolor;", "sit:", "amet", "—"]
+        parts.append(" ".join(rng.choice(filler) for _ in range(150)) + ".")
     if rng.random() < 0.1:
         parts.append("X" * rng.randint(100, 500))
     return " ".join(parts)
@@ -1244,14 +1301,16 @@ def random_block(rng: random.Random) -> Block:
     kind = rng.choice(list(K))
     meta = {"speaker_notes": True} if rng.random() < 0.1 else {}
     if kind == K.HEADING:
-        return Block(kind=kind, text=rng.choice(["Intro", "CHAPTER IV: THE CELL", random_text(rng)]), level=rng.randint(1, 3))
+        text = rng.choice(["Intro", "CHAPTER IV: THE CELL", random_text(rng)])
+        return Block(kind=kind, text=text, level=rng.randint(1, 3))
     if kind == K.TABLE:
         n_rows, n_cols = rng.randint(0, 5), rng.randint(1, 4)
         rows = [[rng.choice(["Name", "Age", "30", "", "Alice", random_text(rng)]) for _ in range(n_cols)]
                 for _ in range(n_rows)]
         return Block(kind=kind, text=random_text(rng), rows=rows or None, meta=meta)
     if kind == K.EQUATION:
-        return Block(kind=kind, text=rng.choice(["x^2 + 1", r"\frac{a}{b}", r"\sum_{i=1}^{n} i", "E = mc²", "{}"]))
+        equations = ["x^2 + 1", r"\frac{a}{b}", r"\sum_{i=1}^{n} i", "E = mc²", "{}"]
+        return Block(kind=kind, text=rng.choice(equations))
     if kind == K.CODE:
         return Block(kind=kind, text=rng.choice(["x = 1\ny = 2", "  # comment\n\nprint(x)", "a" * 600]))
     if kind == K.FIGURE:
@@ -1322,7 +1381,7 @@ def test_plan_covers_every_word_of_plain_paragraphs():
                     for i in range(u.start, u.end):
                         assert not covered[i], "overlapping highlights"
                         covered[i] = True
-            assert all(c or ch.isspace() for c, ch in zip(covered, block.text))
+            assert all(c or ch.isspace() for c, ch in zip(covered, block.text, strict=True))
             spoken = " ".join(u.speech for u in plan if u.block == bi)
             assert re.findall(r"\w+", spoken) == re.findall(r"\w+", block.text)
 

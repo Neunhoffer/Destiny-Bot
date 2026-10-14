@@ -141,7 +141,9 @@ _TLDS = (
     "com|org|net|edu|gov|mil|int|info|biz|io|ai|app|dev|co|us|uk|ca|au|nz|ie|de|fr|nl|eu|jp|cn|ru|br|"
     "tv|ly|news|online|site|xyz|tech|blog|museum"
 )
-_EMAIL = re.compile(r"(?<![\w.+-])[A-Za-z0-9][A-Za-z0-9._%+-]{0,63}@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
+_EMAIL = re.compile(
+    r"(?<![\w.+-])[A-Za-z0-9][A-Za-z0-9._%+-]{0,63}@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}"
+)
 _URL = re.compile(
     r"(?<![\w@/.-])(?:"
     r"(?i:(?:https?|ftp)://|www\d?\.)[^\s<>\"'“”]+"
@@ -252,7 +254,10 @@ _PREFIX = (
 _ITEM = rf"{_PREFIX}{{0,2}}{_AUTHORS}(?:\s*,\s*|\s+){_YEARS}{_LOCATOR}"
 _ITEM_SEP = r"(?:\s*;\s*|\s*,\s*(?=(?i:see|cf|as\s+cited|cited|quoted|reviewed)\b))"
 _CITE_CONTENT = re.compile(rf"\s*{_ITEM}(?:{_ITEM_SEP}{_ITEM})*\s*[.;,]?\s*")
-_YEARISH = re.compile(r"(?:1[5-9]|20)\d\d|n\.\s?d\.|(?i:in\s+press|forthcoming|preparation|under\s+review|submitted|unpublished)")
+_YEARISH = re.compile(
+    r"(?:1[5-9]|20)\d\d|n\.\s?d\."
+    r"|(?i:in\s+press|forthcoming|preparation|under\s+review|submitted|unpublished)"
+)
 _PAREN_GROUP = re.compile(r"\s*\(([^()]{4,400})\)")
 _BRACKET_GROUP = re.compile(r"\s*\[([^\[\]]{4,400})\]")
 _NARRATIVE_YEAR = re.compile(rf"\s*\(\s*{_YEARS}{_LOCATOR}\s*\)")
@@ -303,7 +308,8 @@ _REF_LEADS = frozenset(
     "in see from by of cf cf. to and also e.g. e.g., compare following per after like than with".split()
 )
 _INTERVAL_LEADS = frozenset(
-    "interval intervals range ranges domain on over within between matrix vector array list element index".split()
+    "interval intervals range ranges domain on over within between matrix vector array list element "
+    "index".split()
 )
 
 
@@ -333,6 +339,8 @@ def _narrative_citation(text: str, pos: int) -> bool:
     word = lw.group(1)
     if word.lower() in _DETERMINERS:
         return False  # "the Smith (2019) study", "the Act (1970)"
+    if re.search(r"['’]s?$", word):
+        return False  # "Austen's Pride and Prejudice (1813)": a title, not authors
     if word[0].isupper():
         # Only OK when that capital is the start of the sentence ("As Smith (2019) noted");
         # otherwise the name is part of a longer proper noun ("Clean Air Act (1970)").
@@ -441,7 +449,8 @@ _ABBREVIATIONS: list[_Rule] = [
           lambda m: _cap_like(m.group(), "Equation" + ("s " if m.group("s") else " ")), "eq"),
     _rule(r"\b[Cc]hs\.\s*(?=\d|[IVXLC]+\b)", "chapters ", "chs."),
     _rule(r"\b(?:Ch|Chap|ch|chap)\.\s*(?=\d|[IVXLC]+\b)", "chapter ", "ch"),
-    _rule(r"\bSec(?P<s>s?)\.\s*(?=\d|[IVXLC]+\b)", lambda m: "Sections " if m.group("s") else "Section ", "sec"),
+    _rule(r"\bSec(?P<s>s?)\.\s*(?=\d|[IVXLC]+\b)",
+          lambda m: "Sections " if m.group("s") else "Section ", "sec"),
     _rule(r"§§\s*", "Sections ", "§§"),
     _rule(r"§\s*", "Section ", "§"),
     _rule(r"(?<![\w.])pp\.\s*(?=\d|[ivxlc]+\b)", "pages ", "pp."),
@@ -563,7 +572,10 @@ _REGNAL_NAMES = (
 _REGNAL = re.compile(
     rf"\b((?i:{_REGNAL_NAMES}))\s+([IVXL]+)(['’]s)?\b(?!['’]\w)"
 )
-_ONES = "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen".split()
+_ONES = (
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen "
+    "sixteen seventeen eighteen nineteen"
+).split()
 _TENS = "_ _ twenty thirty forty fifty sixty seventy eighty ninety".split()
 _ORD_IRREGULAR = {"one": "first", "two": "second", "three": "third", "five": "fifth", "eight": "eighth",
                   "nine": "ninth", "twelve": "twelfth"}
@@ -671,7 +683,8 @@ _FRACTIONS = {
     "¼": ("one quarter", "a quarter"), "¾": ("three quarters", "three quarters"),
     "⅕": ("one fifth", "a fifth"), "⅖": ("two fifths", "two fifths"), "⅗": ("three fifths", "three fifths"),
     "⅘": ("four fifths", "four fifths"), "⅙": ("one sixth", "a sixth"), "⅚": ("five sixths", "five sixths"),
-    "⅐": ("one seventh", "a seventh"), "⅛": ("one eighth", "an eighth"), "⅜": ("three eighths", "three eighths"),
+    "⅐": ("one seventh", "a seventh"), "⅛": ("one eighth", "an eighth"),
+    "⅜": ("three eighths", "three eighths"),
     "⅝": ("five eighths", "five eighths"), "⅞": ("seven eighths", "seven eighths"),
     "⅑": ("one ninth", "a ninth"), "⅒": ("one tenth", "a tenth"),
 }
@@ -832,32 +845,35 @@ def _unit_alternation(keys: list[str]) -> str:
 
 
 _UNIT_AFTER_NUMBER = re.compile(
-    rf"(?<![\w.])([$£€¥]?)(\d{{1,3}}(?:,\d{{3}})+(?:\.\d+)?|\d+(?:\.\d+)?|\.\d+)\s?"
+    rf"(?<![\w.])([$£€¥]?)(\d{{1,3}}(?:,\d{{3}})+(?:\.\d+)?|\d+(?:\.\d+)?|\.\d+)([⁰¹²³⁴⁵⁶⁷⁸⁹⁻]*)\s?"
     rf"({_unit_alternation(list(_UNITS))})"
-    rf"(?:/({_unit_alternation(list(_PER_UNITS))}))?([²³])?(?![\w/])"
+    rf"(?:/({_unit_alternation(list(_PER_UNITS))}))?([²³]|⁻¹)?(?![\w/])"
 )
 _UNIT_AFTER_PER = re.compile(
-    rf"(?:(?<=\bper )|(?<=[a-z]{{3}})/)({_unit_alternation([k for k in _UNITS if len(k) > 1])})([²³])?(?![\w/])"
+    rf"(?:(?<=\bper )|(?<=[a-z]{{3}})/)"
+    rf"({_unit_alternation([k for k in _UNITS if len(k) > 1])})([²³])?(?![\w/])"
 )
+# Micro-units can't be anything else, so they are read even without a number ("measured in µm").
 _SPECIAL_UNITS = re.compile(
-    r"(?<![\w])(" + "|".join(re.escape(k) for k in sorted(_UNITS, key=len, reverse=True) if re.search("[µμ]", k))
-    + r")(?![\w])"
+    rf"(?<![\w])({_unit_alternation([k for k in _UNITS if re.search('[µμ]', k)])})(?![\w])"
 )
 _DEGREES = re.compile(r"(?<![\w.])(-?\d+(?:\.\d+)?)\s?(?:°\s?([CFK])\b|(℃)|(℉)|°)")
 
 
 def _unit_repl(m: re.Match[str]) -> str:
-    money, number, unit, per, power = m.groups()
+    money, number, exponent, unit, per, power = m.groups()
     if money and unit in _MONEY_AMBIGUOUS:
         return m.group()
     if unit in ("K", "M") and not re.search(r"\d\s", m.group()):
         return m.group()  # "10K run", "5M users"
     singular, plural = _UNITS[unit]
-    one = number in ("1", "1.0")
+    one = number in ("1", "1.0") and not exponent
     name = singular if one else plural
+    if power == "⁻¹":
+        return f"{money}{number}{exponent} per {singular}" + (f" per {_PER_UNITS[per]}" if per else "")
     if power and not per:
         name = ("square " if power == "²" else "cubic ") + name
-    out = f"{money}{number} {name}"
+    out = f"{money}{number}{exponent} {name}"
     if per:
         out += f" per {_PER_UNITS[per]}"
         if power:
@@ -953,8 +969,8 @@ _NUMBER_TOKEN = re.compile(r"^[-−]?(?:\d[\d,]*(?:\.\d+)?|\.\d+)%?$")
 def _is_operand(token: str) -> bool:
     """A number, a single-letter variable, a Greek-letter name, or a bracketed expression."""
     token = token.strip("$£€")
-    if not token:
-        return False
+    if not _SPEAKABLE.search(token):
+        return False  # a lone "(" is not an operand
     if _NUMBER_TOKEN.match(token):
         return True
     core = token.strip("'′")
@@ -1079,12 +1095,15 @@ _SIMPLE_SYMBOLS = [
     ("→", " leads to "), ("⟵", " comes from "), ("←", " comes from "), ("↔", " corresponds to "),
     ("⟷", " corresponds to "), ("⇒", " implies "), ("⟹", " implies "), ("⇐", " is implied by "),
     ("⇔", " if and only if "), ("⟺", " if and only if "), ("↑", " up "), ("↓", " down "),
-    ("∞", " infinity "), ("∑", " sum of "), ("∏", " product of "), ("∫", " integral of "), ("∬", " double integral of "),
-    ("∮", " contour integral of "), ("∂", " partial "), ("∇", " del "), ("∈", " is in "), ("∉", " is not in "),
+    ("∞", " infinity "), ("∑", " sum of "), ("∏", " product of "), ("∫", " integral of "),
+    ("∬", " double integral of "), ("∮", " contour integral of "), ("∂", " partial "), ("∇", " del "),
+    ("∈", " is in "), ("∉", " is not in "),
     ("⊂", " is a subset of "), ("⊆", " is a subset of or equal to "), ("⊃", " is a superset of "),
-    ("⊇", " is a superset of or equal to "), ("∪", " union "), ("∩", " intersection "), ("∅", " the empty set "),
+    ("⊇", " is a superset of or equal to "), ("∪", " union "), ("∩", " intersection "),
+    ("∅", " the empty set "),
     ("∀", " for all "), ("∃", " there exists "), ("¬", " not "), ("∧", " and "), ("∨", " or "),
-    ("∴", " therefore "), ("∵", " because "), ("∠", " angle "), ("△", " triangle "), ("⊥", " is perpendicular to "),
+    ("∴", " therefore "), ("∵", " because "), ("∠", " angle "), ("△", " triangle "),
+    ("⊥", " is perpendicular to "),
     ("∥", " is parallel to "), ("∘", " composed with "), ("‰", " per mille "), ("‱", " per ten thousand "),
     ("©", " copyright "), ("¶", " paragraph "), ("§", " section "), ("ℝ", " the real numbers "),
     ("ℤ", " the integers "), ("ℕ", " the natural numbers "), ("ℚ", " the rational numbers "),
@@ -1309,7 +1328,8 @@ _MATH_SYMBOLS: dict[str, tuple[str, str]] = {
     "propto": ("rel", "is proportional to"), "lt": ("rel", "is less than"), "gt": ("rel", "is greater than"),
     "ll": ("rel", "is much less than"), "gg": ("rel", "is much greater than"), "to": ("rel", "goes to"),
     "rightarrow": ("rel", "goes to"), "longrightarrow": ("rel", "goes to"), "Rightarrow": ("rel", "implies"),
-    "Longrightarrow": ("rel", "implies"), "implies": ("rel", "implies"), "Leftarrow": ("rel", "is implied by"),
+    "Longrightarrow": ("rel", "implies"), "implies": ("rel", "implies"),
+    "Leftarrow": ("rel", "is implied by"),
     "leftarrow": ("rel", "comes from"), "gets": ("rel", "comes from"), "iff": ("rel", "if and only if"),
     "Leftrightarrow": ("rel", "if and only if"), "Longleftrightarrow": ("rel", "if and only if"),
     "leftrightarrow": ("rel", "corresponds to"), "rightleftharpoons": ("rel", "is in equilibrium with"),
@@ -1328,7 +1348,8 @@ _MATH_SYMBOLS: dict[str, tuple[str, str]] = {
     "vdots": ("atom", "and so on"), "ddots": ("atom", "and so on"), "prime": ("atom", "prime"),
     "mid": ("rel", "given"), "deg": ("atom", "degrees"), "degree": ("atom", "degrees"),
     "%": ("atom", "percent"), "&": ("op", "and"), "$": ("atom", "dollars"), "#": ("atom", "number"),
-    "_": ("atom", "underscore"), "bmod": ("op", "mod"), "pmod": ("op", "mod"), "mod": ("op", "mod"), "Re": ("atom", "the real part of"), "Im": ("atom", "the imaginary part of"),
+    "_": ("atom", "underscore"), "bmod": ("op", "mod"), "pmod": ("op", "mod"), "mod": ("op", "mod"),
+    "Re": ("atom", "the real part of"), "Im": ("atom", "the imaginary part of"),
 }
 _MATH_FUNCS = {
     "sin": "sine", "cos": "cosine", "tan": "tangent", "cot": "cotangent", "sec": "secant", "csc": "cosecant",
@@ -1350,7 +1371,9 @@ _MATH_ACCENTS = {
     "widetilde": "{} tilde", "dot": "{} dot", "ddot": "{} double dot", "vec": "vector {}",
     "overrightarrow": "vector {}", "underline": "{}", "boxed": "{}", "cancel": "{}",
 }
-_MATH_TEXT = {"text", "textrm", "textnormal", "mbox", "textit", "textbf", "texttt", "textsf", "emph", "operatorname"}
+_MATH_TEXT = {
+    "text", "textrm", "textnormal", "mbox", "textit", "textbf", "texttt", "textsf", "emph", "operatorname",
+}
 _MATH_FONTS = {
     "mathbf", "mathrm", "mathit", "mathsf", "mathtt", "mathcal", "mathscr", "mathfrak", "boldsymbol", "bm",
     "pmb", "mathnormal", "mathop", "displaystyle", "textstyle", "scriptstyle", "scriptscriptstyle",
@@ -1365,8 +1388,12 @@ _MATH_SKIP = {
 _MATH_DROP_ARG = {"label", "tag", "ref", "eqref", "hspace", "vspace", "phantom", "color", "textcolor"}
 _MATH_ROOTS = {"2": "square", "3": "cube", "4": "fourth", "5": "fifth", "n": "n-th"}
 _FUNC_LETTERS = frozenset("fghFGHPEL")
+_FUNC_POWERS = {"2": " squared", "3": " cubed", "minus 1": " inverse"}  # \sin^2 x, \sin^{-1} x
+_MATH_OR_EQUAL = {"<": "is less than or equal to", ">": "is greater than or equal to", "=": "equals"}
+_SUBSCRIPT_WORDS = frozenset({"max", "min", "eff", "avg", "tot"})  # v_{max} is read as a word
 _LINEAR_FUNCS = re.compile(
-    r"(?<![\\A-Za-z])(arcsin|arccos|arctan|sinh|cosh|tanh|sin|cos|tan|cot|sec|csc|log|ln|exp|sqrt|lim|det|gcd)(?![A-Za-z])"
+    r"(?<![\\A-Za-z])"
+    r"(arcsin|arccos|arctan|sinh|cosh|tanh|sin|cos|tan|cot|sec|csc|log|ln|exp|sqrt|lim|det|gcd)(?![A-Za-z])"
 )
 _MATH_UNICODE = {
     "×": r"\times ", "·": r"\cdot ", "⋅": r"\cdot ", "÷": r"\div ", "±": r"\pm ", "∓": r"\mp ",
@@ -1531,10 +1558,11 @@ class _MathParser:
         if tok in (")", "]", "}", "\\}"):
             return None
         if tok in ("|", "\\|", "\\lvert", "\\rvert", "\\vert", "\\lVert", "\\rVert", "\\Vert"):
-            close = {"|", "\\rvert", "\\vert"} if tok in ("|", "\\lvert", "\\vert") else {"\\|", "\\rVert", "\\Vert"}
+            absolute = tok in ("|", "\\lvert", "\\vert")
+            close = {"|", "\\rvert", "\\vert"} if absolute else {"\\|", "\\rVert", "\\Vert"}
             words, _ = self.parse(frozenset(close))
             self.take()
-            what = "the absolute value of" if tok in ("|", "\\lvert", "\\vert") else "the norm of"
+            what = "the absolute value of" if absolute else "the norm of"
             return _MathItem(f"{what} {words},", "atom", True)
         if tok[0].isdigit() or (tok[0] == "." and len(tok) > 1):
             return _MathItem(tok if tok[0] != "." else "0" + tok)
@@ -1561,14 +1589,15 @@ class _MathParser:
         table = {
             "+": ("op", "plus"), "-": ("op", "minus"), "*": ("op", "times"), "/": ("op", "over"),
             "=": ("rel", "equals"), "<": ("rel", "is less than"), ">": ("rel", "is greater than"),
-            ",": ("sep", ","), ";": ("sep", ";"), "&": ("sep", ","), ":": ("sep", ","), "%": ("atom", "percent"),
+            ",": ("sep", ","), ";": ("sep", ";"), "&": ("sep", ","), ":": ("sep", ","),
+            "%": ("atom", "percent"),
             "!": ("atom", "factorial"), "'": ("atom", "prime"), "~": ("rel", "is similar to"),
         }
         if tok in table:
             kind, words = table[tok]
             if tok in "<>=" and self.peek(skip_space=False) == "=":
                 self.take()
-                words = {"<": "is less than or equal to", ">": "is greater than or equal to", "=": "equals"}[tok]
+                words = _MATH_OR_EQUAL[tok]
             return _MathItem(words, kind)
         if tok in ("$", ".", "\\", "^", "_", "?", '"', "`"):
             return None
@@ -1648,7 +1677,7 @@ class _MathParser:
         if self.peek() == "^":  # \sin^2 x
             self.take()
             power, _ = self.arg()
-            words += {"2": " squared", "3": " cubed", "minus 1": " inverse"}.get(power, f" to the power {power}")
+            words += _FUNC_POWERS.get(power, f" to the power of {power}")
         return _MathItem(words, "atom", False, func=True)
 
     def bigop(self, name: str) -> _MathItem:
@@ -1683,7 +1712,7 @@ class _MathParser:
             if nxt == "_":
                 self.take()
                 sub, _ = self.arg()
-                if re.fullmatch(r"[A-Za-z]{2,3}", sub) and sub.lower() not in {"max", "min", "eff", "avg", "tot"}:
+                if re.fullmatch(r"[A-Za-z]{2,3}", sub) and sub.lower() not in _SUBSCRIPT_WORDS:
                     sub = " ".join(sub)
                 item = item.but(f"{item.words} sub {sub}", True)
             elif nxt == "^":
