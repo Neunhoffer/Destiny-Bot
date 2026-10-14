@@ -1,8 +1,9 @@
 """Build the Athena desktop app and its installer.
 
 Steps:
-    1. put the bundled voice(s) in packaging/build/voices (Piper en_US-lessac-medium;
-       the Kokoro int8 model too with --with-kokoro or ATHENA_BUNDLE_KOKORO=1)
+    1. put the bundled voices in packaging/build/voices: Piper en_US-lessac-medium in
+       piper/ and the Kokoro int8 voice pack in kokoro/ (leave Kokoro out with
+       --no-kokoro or ATHENA_BUNDLE_KOKORO=0)
     2. draw the icons (packaging/make_icons.py)
     3. run PyInstaller (packaging/destiny.spec) -> dist/Athena (dist/Athena.app on macOS)
     4. smoke test: run the built app with --self-test-quick; it must pass
@@ -11,7 +12,7 @@ Steps:
 
 Run from the repository root with the build extras installed:
     python -m pip install -e ".[build]"
-    python packaging/build.py [--with-kokoro] [--voice-source DIR] [--skip-installer] [--skip-smoke-test]
+    python packaging/build.py [--no-kokoro] [--voice-source DIR] [--skip-installer] [--skip-smoke-test]
 """
 
 from __future__ import annotations
@@ -89,12 +90,21 @@ def fetch_voices(*, kokoro: bool, source: Path | None) -> None:
 
     if kokoro:
         kokoro_dir = VOICES / "kokoro"
-        catalog.download_kokoro_model(voices_dir=kokoro_dir, variant="int8", progress=_progress)
+        kokoro_dir.mkdir(parents=True, exist_ok=True)
+        model = catalog.download_kokoro_model(voices_dir=kokoro_dir, variant="int8", progress=_progress)
         print()
-        for name in (catalog.KOKORO_FILES["fp32"].name,):  # only the int8 model is bundled
-            (kokoro_dir / name).unlink(missing_ok=True)
-        for path in sorted(kokoro_dir.iterdir()):
+        # The files must sit directly in voices/kokoro/, wherever the downloader put them.
+        table = model.with_name(catalog.KOKORO_FILES["voices"].name)
+        for path in (model, table):
+            if path.parent != kokoro_dir:
+                shutil.move(str(path), kokoro_dir / path.name)
+        (kokoro_dir / catalog.KOKORO_FILES["fp32"].name).unlink(missing_ok=True)  # only int8 is bundled
+        if catalog.find_kokoro_model(kokoro_dir, variant="int8") is None:
+            raise SystemExit(f"The Kokoro voice pack isn't complete in {kokoro_dir}")
+        for path in sorted(p for p in kokoro_dir.iterdir() if p.is_file()):
             print(f"  kokoro/{path.name}: {path.stat().st_size / 1e6:.1f} MB")
+    else:
+        shutil.rmtree(VOICES / "kokoro", ignore_errors=True)
 
 
 def make_icons() -> None:
@@ -238,10 +248,11 @@ def linux_archive(app: Path, ver: str) -> Path:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build the Athena desktop app and installer.")
     parser.add_argument(
-        "--with-kokoro",
-        action="store_true",
-        default=os.environ.get("ATHENA_BUNDLE_KOKORO", "").lower() in ("1", "true", "yes"),
-        help="also bundle the Kokoro voice model (adds ~120 MB)",
+        "--no-kokoro",
+        dest="with_kokoro",
+        action="store_false",
+        default=os.environ.get("ATHENA_BUNDLE_KOKORO", "1").strip().lower() not in ("0", "false", "no"),
+        help="leave out the Kokoro voice pack (makes the app ~120 MB smaller)",
     )
     parser.add_argument(
         "--voice-source", type=Path, help="copy the Piper voice from this folder instead of downloading"

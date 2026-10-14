@@ -1,13 +1,13 @@
 # Builds the Athena installer for Windows: dist\Athena-Setup-<version>.exe
 #
-#   powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1 [-WithKokoro] [-SkipInstaller]
+#   powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1 [-NoKokoro] [-SkipInstaller]
 #
 # Needs Python 3.10+ (3.12 recommended) and Inno Setup 6 (https://jrsoftware.org/isdl.php,
 # or: winget install JRSoftware.InnoSetup). Uses a private build environment in
-# packaging\build\venv, downloads the bundled voice, builds with PyInstaller, runs the
+# packaging\build\venv, downloads the bundled voices (Piper and Kokoro), builds with PyInstaller, runs the
 # built app's self-test, then compiles the installer. See packaging\README.md.
 param(
-    [switch]$WithKokoro,
+    [switch]$NoKokoro,
     [switch]$SkipInstaller,
     [string]$Python = ""
 )
@@ -31,7 +31,7 @@ if ($LASTEXITCODE -ne 0) { throw 'pip upgrade failed' }
 if ($LASTEXITCODE -ne 0) { throw 'Installing the build requirements failed' }
 
 $buildArgs = @()
-if ($WithKokoro) { $buildArgs += '--with-kokoro' }
+if ($NoKokoro) { $buildArgs += '--no-kokoro' }
 if ($SkipInstaller) { $buildArgs += '--skip-installer' }
 & $py packaging\build.py @buildArgs
 if ($LASTEXITCODE -ne 0) { throw "The build failed (exit code $LASTEXITCODE)" }

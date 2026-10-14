@@ -39,9 +39,12 @@ if [ ! -f "$VENV/destiny-installed.txt" ]; then
       read -r -p "  Press Return to close."
       exit 1
     }
-  # The natural offline voices are optional: keep going if this computer can't install them.
+  # The natural offline voices are optional: keep going if this computer can't install them
+  # (they need onnxruntime, which can lag behind the newest Python for a while).
   "$VENV/bin/python" -m pip install "piper-tts>=1.3" ||
     echo "  Note: natural offline voices aren't available on this computer; the system voice will be used."
+  "$VENV/bin/python" -m pip install -e ".[kokoro]" ||
+    echo "  Note: the Kokoro voices aren't available on this computer."
   # The app window is optional too: without it Athena opens in a browser window.
   "$VENV/bin/python" -m pip install "pywebview>=5.0" || true
   echo installed > "$VENV/destiny-installed.txt"

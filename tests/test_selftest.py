@@ -112,21 +112,27 @@ def test_benchmark_measures_cold_and_warm_runs():
     engine = FakeEngine()
     result = selftest._benchmark(engine, "v1", quick=False)
     assert "error" not in result
-    assert result["cold_s"] >= 0 and result["audio"]["duration_s"] == pytest.approx(1.5, abs=0.01)
-    assert result["cold_rtf"] == pytest.approx(result["cold_s"] / 1.5, abs=0.01)
-    assert len(result["warm_runs"]) == 2 and "warm_rtf" in result
-    assert engine.spoken == [selftest.TEST_SENTENCE, *selftest.WARM_SENTENCES]
+    assert result["audio"]["duration_s"] == pytest.approx(1.5, abs=0.01)
+    assert result["latency_cold_s"] >= 0 and result["latency_warm_s"] >= 0
+    assert result["rtf_cold"] == pytest.approx(result["latency_cold_s"] / 1.5, abs=0.01)
+    assert result["rtf_warm"] is not None and result["rtf_warm_first"] is not None
+    assert result["load_s"] >= 0
+    assert len(result["warm_runs"]) == 3
+    assert engine.spoken == [selftest.TEST_SENTENCE, selftest.TEST_SENTENCE, *selftest.WARM_SENTENCES]
 
 
-def test_quick_benchmark_speaks_once():
+def test_quick_benchmark_still_measures_warm_latency():
     engine = FakeEngine()
     result = selftest._benchmark(engine, "v1", quick=True)
-    assert "warm_s" not in result and len(engine.spoken) == 1
+    assert "latency_warm_s" in result and len(result["warm_runs"]) == 1
+    assert len(engine.spoken) == 2
 
 
 def test_benchmark_reports_errors_and_timeouts(monkeypatch):
     broken = selftest._benchmark(FakeEngine(error=EngineUnavailable("No voice installed.")), None, quick=True)
     assert broken["error"] == "EngineUnavailable: No voice installed."
+    silent = selftest._benchmark(FakeEngine(audio=make_wav(1.0, amplitude=0)), None, quick=True)
+    assert silent["error"].startswith("the audio is silent")
     monkeypatch.setattr(selftest, "COLD_TIMEOUT_S", 0.2)
     release = threading.Event()
     hung = selftest._benchmark(FakeEngine(hang=release), None, quick=True)

@@ -29,9 +29,12 @@ if errorlevel 1 goto failed
 "%VENV%\Scripts\python.exe" -m pip install --upgrade pip
 "%VENV%\Scripts\python.exe" -m pip install -e ".[ai,edge,ocr,system]"
 if errorlevel 1 goto failed
-rem The natural offline voices are optional: keep going if this computer can't install them.
+rem The natural offline voices are optional: keep going if this computer can't install them
+rem (they need onnxruntime, which can lag behind the newest Python for a while).
 "%VENV%\Scripts\python.exe" -m pip install "piper-tts>=1.3"
 if errorlevel 1 echo  Note: natural offline voices aren't available on this computer; the system voice will be used.
+"%VENV%\Scripts\python.exe" -m pip install -e ".[kokoro]"
+if errorlevel 1 echo  Note: the Kokoro voices aren't available on this computer.
 rem The app window is optional too: without it Athena opens in a Microsoft Edge window.
 "%VENV%\Scripts\python.exe" -m pip install "pywebview>=5.0"
 echo installed> "%VENV%\destiny-installed.txt"

@@ -1,10 +1,10 @@
 #!/bin/bash
 # Builds Athena for macOS: dist/Athena.app and dist/Athena-<version>.dmg
 #
-#   bash packaging/build_macos.sh [--with-kokoro] [--skip-installer]
+#   bash packaging/build_macos.sh [--no-kokoro] [--skip-installer]
 #
 # Needs Python 3.10+ (3.12 recommended; python.org or Homebrew). Uses a private build
-# environment in packaging/build/venv, downloads the bundled voice, builds Athena.app
+# environment in packaging/build/venv, downloads the bundled voices, builds Athena.app
 # with PyInstaller, runs its self-test, then packs it into a .dmg with hdiutil.
 # The app is not code-signed: see packaging/README.md for signing and notarizing.
 set -euo pipefail

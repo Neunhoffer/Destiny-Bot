@@ -454,12 +454,11 @@ def _check_engines(report: Report, quick: bool) -> None:
             continue
         working += 1
         detail = (
-            f"voice {result['voice']}: {result['audio']['duration_s']:.1f} s of audio, "
-            f"first {result['cold_s']:.2f} s (RTF {result['cold_rtf']:.2f})"
+            f"voice {result['voice']}: first sentence {result['latency_cold_s']:.2f} s cold "
+            f"(RTF {result['rtf_cold']:.2f}), {result['latency_warm_s']:.2f} s warm; "
+            f"RTF {result['rtf_warm']:.2f} while reading"
         )
-        if "warm_s" in result:
-            detail += f", then {result['warm_s']:.2f} s (RTF {result['warm_rtf']:.2f})"
-        report.add("synthesis", f"{engine.name} speaks", PASS, detail, seconds=result["cold_s"])
+        report.add("synthesis", f"{engine.name} speaks", PASS, detail, seconds=result["latency_cold_s"])
     for name in sorted(bundled - {e.name for e in engines}):
         report.add("synthesis", f"{name} speaks", FAIL, "voices for it are bundled, but the engine is missing")
     if working == 0:
@@ -477,37 +476,52 @@ def _check_engines(report: Report, quick: bool) -> None:
     report.extra["synthesis"] = synth_results
 
 
+def _speak_timed(engine: Any, text: str, voice: str | None, timeout: float) -> tuple[dict[str, Any], float]:
+    """Synthesize ``text``: (audio stats, seconds). Raises ValueError if the audio isn't speech."""
+    speak: Callable[[], Any] = functools.partial(engine.synthesize, text, voice)
+    clip, seconds = _run_with_timeout(speak, timeout)
+    stats = _wav_stats(clip)
+    problem = _valid_speech(stats)
+    if problem:
+        raise ValueError(problem)
+    return stats, seconds
+
+
+def _rtf(seconds: float, stats: dict[str, Any]) -> float | None:
+    """Real-time factor: synthesis time / audio length (below 1 is faster than speaking)."""
+    duration = stats.get("duration_s") or 0.0
+    return round(seconds / duration, 3) if duration else None
+
+
 def _benchmark(engine: Any, voice: str | None, quick: bool) -> dict[str, Any]:
-    """Speak a test sentence: cold (includes loading the voice) and, unless quick, warm runs."""
+    """Time the first sentence cold (loading the voice included) and warm, plus real-time factors.
+
+    ``latency_cold_s`` is how long the very first sentence takes after starting the
+    app; ``latency_warm_s`` is the same sentence once the voice is loaded, i.e. the
+    wait before each sentence while reading. Unless ``quick``, more sentences give a
+    steadier warm real-time factor (``rtf_warm``, the median).
+    """
     result: dict[str, Any] = {"engine": engine.name, "voice": voice}
+    stage = "the first sentence"
     try:
-        clip, cold = _run_with_timeout(lambda: engine.synthesize(TEST_SENTENCE, voice), COLD_TIMEOUT_S)
-        stats = _wav_stats(clip)
-        problem = _valid_speech(stats)
-        result.update(cold_s=round(cold, 3), audio=stats)
-        if problem:
-            result["error"] = problem
-            return result
-        duration = stats.get("duration_s") or 0.0
-        result["cold_rtf"] = round(cold / duration, 3) if duration else None
-        if quick:
-            return result
-        runs: list[tuple[float, float]] = []
-        for sentence in WARM_SENTENCES:
-            speak: Callable[[], Any] = functools.partial(engine.synthesize, sentence, voice)
-            warm_clip, seconds = _run_with_timeout(speak, WARM_TIMEOUT_S)
-            warm_stats = _wav_stats(warm_clip)
-            if _valid_speech(warm_stats):
-                result["error"] = f"a second sentence failed: {_valid_speech(warm_stats)}"
-                return result
-            runs.append((seconds, warm_stats.get("duration_s") or 0.0))
-        best = min(runs, key=lambda r: r[0] / r[1] if r[1] else math.inf)
-        result["warm_s"] = round(best[0], 3)
-        result["warm_audio_s"] = round(best[1], 3)
-        result["warm_rtf"] = round(best[0] / best[1], 3) if best[1] else None
+        stats, cold = _speak_timed(engine, TEST_SENTENCE, voice, COLD_TIMEOUT_S)
+        result.update(latency_cold_s=round(cold, 3), rtf_cold=_rtf(cold, stats), audio=stats)
+        stage = "the same sentence again"
+        warm_stats, warm = _speak_timed(engine, TEST_SENTENCE, voice, WARM_TIMEOUT_S)
+        result.update(latency_warm_s=round(warm, 3), rtf_warm_first=_rtf(warm, warm_stats))
+        result["load_s"] = round(max(cold - warm, 0.0), 3)
+        runs = [(warm, warm_stats.get("duration_s") or 0.0)]
+        if not quick:
+            for index, sentence in enumerate(WARM_SENTENCES, start=2):
+                stage = f"sentence {index}"
+                more_stats, seconds = _speak_timed(engine, sentence, voice, WARM_TIMEOUT_S)
+                runs.append((seconds, more_stats.get("duration_s") or 0.0))
+        rtfs = sorted(s / a for s, a in runs if a)
+        result["rtf_warm"] = round(rtfs[len(rtfs) // 2], 3) if rtfs else None
         result["warm_runs"] = [{"seconds": round(s, 3), "audio_s": round(a, 3)} for s, a in runs]
     except Exception as exc:
-        result["error"] = _short_error(exc)
+        message = _short_error(exc) if not isinstance(exc, ValueError) else str(exc)
+        result["error"] = message if stage == "the first sentence" else f"{stage} failed: {message}"
     return result
 
 

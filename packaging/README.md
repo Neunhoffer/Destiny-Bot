@@ -1,8 +1,9 @@
 # Packaging Athena as a desktop app
 
 This folder turns Athena into an app that a non-technical person can install
-with a double-click. They don't need Python, there's no console window, and a
-natural voice is built in.
+with a double-click. They don't need Python, there's no console window, and two
+natural offline voices are built in: Kokoro (the most natural) and Piper Lessac.
+It works fully offline from the first launch.
 
 | Platform | What you get | How it opens |
 |---|---|---|
@@ -34,18 +35,20 @@ then run `packaging/build.py`. If you already have an environment with
 `pip install -e ".[build]"`, you can run that script directly:
 
 ```bash
-python packaging/build.py                  # Piper voice only
-python packaging/build.py --with-kokoro    # also bundle the Kokoro model (+~90 MB)
-python packaging/build.py --voice-source ~/voices/piper   # copy the voice instead of downloading it
+python packaging/build.py                  # bundles Piper Lessac and the Kokoro voice pack
+python packaging/build.py --no-kokoro      # Piper only (about 100 MB smaller installer)
+python packaging/build.py --voice-source ~/voices/piper   # copy the Piper voice instead of downloading it
 ```
 
 `build.py` runs these steps:
 
 1. **Voices.** Downloads Piper `en_US-lessac-medium` (63 MB) from Hugging Face
-   into `packaging/build/voices/piper/`. It uses
-   `destiny_bot.tts.catalog.download_piper_voice`. With `--with-kokoro` (or
-   `ATHENA_BUNDLE_KOKORO=1`) it also downloads the Kokoro int8 model and voice
-   table into `packaging/build/voices/kokoro/`.
+   into `packaging/build/voices/piper/`, using
+   `destiny_bot.tts.catalog.download_piper_voice`. It also downloads the Kokoro
+   int8 voice pack (`kokoro-v1.0.int8.onnx`, 92 MB, and `voices-v1.0.bin`, 28 MB)
+   from the kokoro-onnx GitHub release into `packaging/build/voices/kokoro/`,
+   using `download_kokoro_model(variant="int8")`, which checks the SHA-256 of each
+   file. Use `--no-kokoro` or `ATHENA_BUNDLE_KOKORO=0` to leave Kokoro out.
 2. **Icons.** Runs `make_icons.py`, which draws the book, sound waves and laurel
    icon with Pillow, matching `src/destiny_bot/web/icon.svg`. It writes
    `icons/icon.ico`, `icon.icns` and `icon-512.png`, which are committed. It also
@@ -56,11 +59,15 @@ python packaging/build.py --voice-source ~/voices/piper   # copy the voice inste
    web files, the Piper/espeak-ng data, the onnxruntime libraries, PyMuPDF,
    the python-docx/python-pptx templates, certifi, edge-tts, uvicorn's
    dynamically loaded modules, pywebview with this platform's backend
-   (pythonnet on Windows), kokoro-onnx, espeakng-loader and phonemizer, plus the
-   voices from step 1 (in `_internal/voices`).
+   (pythonnet on Windows), kokoro-onnx, espeakng-loader (its espeak-ng library
+   and data) and phonemizer, plus the voices from step 1 (in `_internal/voices`,
+   which the voice engines search read-only through `DESTINY_EXTRA_VOICE_DIRS`).
 4. **Smoke test.** Runs the built app with `--self-test-quick` in a throwaway
-   data folder. The build stops if it fails. The report is copied to
-   `dist/self-test-<platform>.json`.
+   data folder. Both bundled voices must speak, or the build stops. The report
+   is copied to `dist/self-test-<platform>.json`. For each offline engine it
+   records the first-sentence latency cold (`latency_cold_s`, which includes
+   loading the voice) and warm (`latency_warm_s`), and the real-time factor
+   (`rtf_cold`, `rtf_warm`; below 1 means faster than speech).
 5. **Package.** On Windows, Inno Setup compiles `windows/DestinyBot.iss`. On
    macOS, `hdiutil` makes the `.dmg`. On Linux, it makes a `.tar.gz`.
 

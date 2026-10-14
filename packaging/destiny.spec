@@ -10,7 +10,7 @@ Output: dist/Athena/Athena.exe (Windows), dist/Athena.app (macOS), dist/Athena/A
 
 Environment:
     ATHENA_VOICES_DIR      voices to bundle (default packaging/build/voices; holds piper/ and kokoro/)
-    ATHENA_BUNDLE_KOKORO   "1" to include voices/kokoro (the ~120 MB Kokoro model) when present
+    ATHENA_BUNDLE_KOKORO   "0" to leave out voices/kokoro (the ~120 MB Kokoro voice pack)
 """
 
 import os
@@ -32,7 +32,7 @@ APP_NAME = "Athena"
 BUNDLE_ID = "com.athena.reader"
 VERSION = re.search(r'__version__\s*=\s*"([^"]+)"', (SRC / "destiny_bot" / "__init__.py").read_text()).group(1)
 VOICES = Path(os.environ.get("ATHENA_VOICES_DIR") or HERE / "build" / "voices")
-BUNDLE_KOKORO = os.environ.get("ATHENA_BUNDLE_KOKORO", "").strip().lower() in ("1", "true", "yes")
+BUNDLE_KOKORO = os.environ.get("ATHENA_BUNDLE_KOKORO", "1").strip().lower() not in ("0", "false", "no")
 IS_WIN = sys.platform == "win32"
 IS_MAC = sys.platform == "darwin"
 

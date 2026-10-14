@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       bundle_kokoro:
-        description: "Also bundle the Kokoro voice model (makes the installer about 90 MB bigger)"
+        description: "Bundle the Kokoro voice pack too (the most natural voice; about 100 MB of the installer)"
         type: boolean
-        default: false
+        default: true
       build_macos:
         description: "Also build the macOS app (.dmg)"
         type: boolean
@@ -31,7 +31,7 @@ concurrency:
 
 env:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
-  ATHENA_BUNDLE_KOKORO: ${{ (github.event_name == 'workflow_dispatch' && inputs.bundle_kokoro) && '1' || '0' }}
+  ATHENA_BUNDLE_KOKORO: ${{ (github.event_name == 'workflow_dispatch' && !inputs.bundle_kokoro) && '0' || '1' }}
 
 jobs:
   windows-installer:
