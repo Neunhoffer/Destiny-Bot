@@ -1674,3 +1674,9 @@ def test_warm_up_never_touches_online_voices(fakes):
 def test_warm_up_failure_is_harmless(fakes):
     fakes.tts.engines["piper"].error = RuntimeError("model missing")
     server._warm_up_voice()  # must not raise
+
+
+def test_catalog_marks_kokoro_pack_installed(client, fakes):
+    fakes.catalog.installed_catalog_ids = lambda: {"en_GB-alba-medium"}
+    voices = {v["id"]: v["installed"] for v in client.get("/api/voices/catalog").json()["voices"]}
+    assert voices == {"en_US-lessac-medium": False, "en_GB-alba-medium": True}

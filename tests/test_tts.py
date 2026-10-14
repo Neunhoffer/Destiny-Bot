@@ -565,6 +565,28 @@ def test_kokoro_reloads_when_files_change(fake_kokoro):
     assert len(fake_kokoro.loads) == 2
 
 
+def test_kokoro_session_settings(monkeypatch):
+    import onnxruntime
+
+    from destiny_bot.tts import kokoro_engine
+
+    write_fake_kokoro(config.voices_dir() / "kokoro")
+    seen = {}
+
+    def fake_session(path, sess_options=None, providers=None):
+        seen.update(path=path, opts=sess_options, providers=providers)
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(onnxruntime, "InferenceSession", fake_session)
+    monkeypatch.setattr(kokoro_engine, "physical_cores", lambda: 3)
+    with pytest.raises(EngineUnavailable):
+        KokoroEngine().synthesize("Hello")
+    opts = seen["opts"]
+    assert seen["path"].endswith("kokoro-v1.0.int8.onnx") and seen["providers"] == ["CPUExecutionProvider"]
+    assert (opts.intra_op_num_threads, opts.inter_op_num_threads) == (3, 1)
+    assert opts.get_session_config_entry("session.intra_op.allow_spinning") == "0"
+
+
 def test_kokoro_damaged_model_is_friendly():
     write_fake_kokoro(config.voices_dir() / "kokoro")
     with pytest.raises(EngineUnavailable, match="damaged"):

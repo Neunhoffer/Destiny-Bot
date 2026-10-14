@@ -1072,7 +1072,7 @@ def create_app(
     @app.get("/api/voices/catalog")
     def voice_catalog() -> dict[str, Any]:
         catalog = _catalog()
-        installed = {path.stem for path in catalog.installed_piper_voices()}
+        installed = _installed_catalog_ids(catalog)
         return {
             "voices": [
                 {**voice.model_dump(mode="json"), "installed": voice.id in installed} for voice in catalog.CATALOG
@@ -1405,6 +1405,14 @@ def _bind_free_port(host: str, port: int, attempts: int = PORT_ATTEMPTS) -> tupl
         f"Couldn't start Athena: ports {port} to {port + attempts - 1} are all in use. "
         "Close the other program, or choose another port with --port."
     ) from last_error
+
+
+def _installed_catalog_ids(catalog: Any) -> set[str]:
+    """Catalog ids already on disk (Piper voices and the Kokoro pack, bundled or downloaded)."""
+    finder = getattr(catalog, "installed_catalog_ids", None)
+    if finder is not None:
+        return set(finder())
+    return {path.stem for path in catalog.installed_piper_voices()}
 
 
 def _warm_up_voice() -> None:

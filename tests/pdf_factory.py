@@ -16,9 +16,7 @@ import pymupdf
 # PyMuPDF base-14 font codes
 REGULAR = "helv"
 BOLD = "hebo"
-ITALIC = "heit"
 SERIF = "tiro"
-SERIF_BOLD = "tibo"
 MONO = "cour"
 
 
@@ -226,14 +224,20 @@ class PdfBuilder:
             self.y += pitch
         self.y += 2
 
-    def footnote(self, text: str, *, size: float = 8) -> None:
-        """Place a footnote below the text area of the current page (in the bottom margin)."""
+    def footnote(self, text: str, *, size: float = 8, page: int | None = None) -> None:
+        """Place a footnote below the text area (in the bottom margin) of the current page,
+        or of page number ``page`` (0-based)."""
+        current = self.page
+        if page is not None:
+            self.page = self.doc[page]
         lines = self.wrap(text, self.x1 - self.x0, size, self.font)
         y = self.bottom + 12
         self.page.draw_line((self.x0, y - 6), (self.x0 + 120, y - 6), width=0.5)
         for ln in lines:
             self._draw_line(ln, self.x0, y + size, size, self.font)
             y += size * 1.25
+        self.flush()
+        self.page = current
 
     def table(self, rows: list[list[str]], *, col_widths: list[float] | None = None, size: float = 10) -> pymupdf.Rect:
         """Draw a ruled table at the current position (full column width)."""
@@ -324,5 +328,3 @@ def scanned_pdf(path: Path, pages: list[list[str]]) -> Path:
     doc.save(path)
     doc.close()
     return Path(path)
-
-

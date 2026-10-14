@@ -643,13 +643,14 @@ def _cmd_voices(args: argparse.Namespace) -> int:
 
 def _voices_catalog() -> int:
     catalog = _catalog()
-    installed = {path.stem for path in catalog.installed_piper_voices()}
+    finder = getattr(catalog, "installed_catalog_ids", None)
+    installed = set(finder()) if finder else {path.stem for path in catalog.installed_piper_voices()}
     recommended = getattr(catalog, "RECOMMENDED_VOICE", DEFAULT_VOICE_ID)
-    print("Natural offline voices you can download (Piper):")
+    print("Natural offline voices you can download:")
     width = max((len(v.id) for v in catalog.CATALOG), default=10)
     for voice in catalog.CATALOG:
         mark = "installed" if voice.id in installed else f"{voice.size_mb:.0f} MB"
-        star = " (recommended)" if voice.id == recommended else ""
+        star = " (recommended)" if voice.id == recommended or getattr(voice, "recommended", False) else ""
         print(f"  {voice.id:<{width}}  {mark:>9}  {voice.name}{star}")
         if voice.description:
             print(f"  {'':<{width}}             {voice.description}")

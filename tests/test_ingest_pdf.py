@@ -199,12 +199,7 @@ def test_cross_page_paragraph_merge_with_footnote(tmp_path):
     long = para(rng, 14, "SPLIT")
     b.paragraph(long, first_indent=14)
     b.paragraph("AFTER " + para(rng, 2), first_indent=14)
-    # put a footnote at the bottom of page 1
-    b.doc[0]  # noqa: B018 - ensure page exists
-    page1 = b.doc[0]
-    b.page, saved = page1, b.page
-    b.footnote("1 Data adapted from Smith (2019), Journal of Cell Science.")
-    b.page = saved
+    b.footnote("1 Data adapted from Smith (2019), Journal of Cell Science.", page=0)
     doc = load(b.save(tmp_path / "flow.pdf"))
     assert doc.page_count == 2
     split = [bl for bl in blocks(doc) if "SPLIT" in bl.text]
@@ -778,3 +773,276 @@ def test_textbook_like_integration(tmp_path):
     assert all(bl.page for bl in blocks(doc))
     for s in doc.sections[1:4]:
         assert s.blocks[0].kind == BlockKind.HEADING
+
+
+# --------------------------------------------------------------------------- harder layouts
+
+
+def test_running_header_with_changing_section_name_removed(tmp_path):
+    rng = random.Random(30)
+    names = ["CELL STRUCTURE", "MEMBRANES", "TRANSPORT", "ENERGY", "ENZYMES", "SIGNALS"]
+    b = PdfBuilder()
+    for i in range(12):
+        if i:
+            b.new_page()
+        for _ in range(3):
+            b.paragraph(para(rng, 4), first_indent=14)
+    b.decorate(header=lambda n: names[(n - 1) // 2], footer=lambda n: str(n))
+    doc = load(b.save(tmp_path / "slots.pdf"))
+    all_text = full_text(doc)
+    for name in names:
+        assert name not in all_text
+
+
+def test_table_of_contents_entries(tmp_path):
+    b = PdfBuilder()
+    b.heading("Contents", size=16)
+    entries = [("1 Cells", 1), ("1.1 Membranes", 4), ("2 Energy", 12), ("Index", 140)]
+    for name, page in entries:
+        dots = "." * int((b.x1 - b.x0 - text_width(f"{name} {page}", REGULAR, 11)) / text_width(".", REGULAR, 11) - 2)
+        b.line(f"{name} {dots} {page}")
+    doc = load(b.save(tmp_path / "toc.pdf"))
+    items = [bl.text for bl in blocks(doc) if bl.kind == BlockKind.LIST_ITEM]
+    assert items == ["1 Cells … 1", "1.1 Membranes … 4", "2 Energy … 12", "Index … 140"]
+
+
+def test_code_with_comments_stays_one_block(tmp_path):
+    b = PdfBuilder()
+    b.paragraph("The loop below adds the numbers:")
+    rows = [("total = 0", "# start at zero"), ("for n in numbers:", "# visit each item"), ("    total += n", "# add it")]
+    for code, comment in rows:
+        y = b.y + 10
+        b.text((b.x0, y), code, font=MONO, size=10)
+        b.text((b.x0 + 260, y), comment, font=MONO, size=10)
+        b.y += 13
+    b.space(8)
+    b.paragraph("After the loop, total holds the sum.")
+    doc = load(b.save(tmp_path / "code2.pdf"))
+    code = [bl for bl in blocks(doc) if bl.kind == BlockKind.CODE]
+    assert len(code) == 1
+    lines = code[0].text.splitlines()
+    assert lines[0].startswith("total = 0") and lines[0].endswith("# start at zero")
+    assert lines[2].startswith("    total += n")
+
+
+def test_vector_diagram_labels_are_dropped(tmp_path):
+    rng = random.Random(31)
+    b = PdfBuilder()
+    b.paragraph("BEFORE " + para(rng, 2))
+    top = b.y
+    for k in range(16):  # a diagram: shapes joined by connector lines
+        x = b.x0 + 20 + (k % 8) * 50
+        y = top + 20 + (k // 8) * 60
+        b.page.draw_circle((x, y), 12, color=(0, 0, 0), fill=(0.8, 0.9, 1.0))
+        if k % 8:
+            b.page.draw_line((x - 38, y), (x - 12, y))
+        if k < 8:
+            b.page.draw_line((x, y + 12), (x, y + 48))
+    for label, (x, y) in [("Nucleus", (b.x0 + 10, top + 52)), ("Ribosome", (b.x0 + 160, top + 52)), ("ER", (b.x0 + 300, top + 110))]:
+        b.text((x, y), label, size=8)
+    b.y = top + 150
+    b.lines(["Figure 2.4 Parts of an animal cell."], size=9)
+    b.paragraph("AFTER " + para(rng, 2))
+    doc = load(b.save(tmp_path / "diagram.pdf"))
+    ts = texts(doc)
+    assert not any(t in ("Nucleus", "Ribosome", "ER") for t in ts)
+    assert any(t.startswith("BEFORE") for t in ts) and any(t.startswith("AFTER") for t in ts)
+    assert "Figure 2.4 Parts of an animal cell." in ts
+
+
+def test_booktabs_table_without_vertical_lines(tmp_path):
+    b = PdfBuilder()
+    b.paragraph("The table compares two kinds of transport.")
+    x0, x1 = b.x0, b.x1
+    y = b.y + 4
+    cols = [x0 + 4, x0 + 150, x0 + 300]
+    rows = [["Process", "Energy", "Example"], ["Diffusion", "None", "Oxygen entering"], ["Pumping", "ATP", "Sodium leaving"]]
+    b.page.draw_line((x0, y), (x1, y), width=1)
+    yy = y + 14
+    for r, row in enumerate(rows):
+        for c, cell in enumerate(row):
+            b.text((cols[c], yy), cell, font=BOLD if r == 0 else REGULAR, size=10)
+        if r == 0:
+            b.page.draw_line((x0, yy + 5), (x1, yy + 5), width=0.5)
+        yy += 16
+    b.page.draw_line((x0, yy - 6), (x1, yy - 6), width=1)
+    b.y = yy + 6
+    b.paragraph("AFTER the table.")
+    doc = load(b.save(tmp_path / "booktabs.pdf"))
+    tables = [bl for bl in blocks(doc) if bl.kind == BlockKind.TABLE]
+    assert len(tables) == 1 and tables[0].rows == rows
+    assert not any("Oxygen" in t for t in texts(doc) if not t.startswith("Process"))
+
+
+def test_small_print_at_column_bottom_does_not_split_paragraph(tmp_path):
+    rng = random.Random(32)
+    b = PdfBuilder()
+    b.set_columns(2)
+    while b.y < b.bottom - 90:
+        b.paragraph(para(rng, 2), first_indent=12)
+    long = para(rng, 8, "SPLIT")
+    b.paragraph(long, first_indent=12)
+    assert b.col == 1  # the paragraph flowed into the right column
+    left = b.columns[0][0]
+    b.text((left, b.bottom + 16), "Copyright 2026 by the authors. Classroom use is permitted.", size=7)
+    b.paragraph("NEXT " + para(rng, 2), first_indent=12)
+    doc = load(b.save(tmp_path / "note.pdf"))
+    ts = texts(doc)
+    split = [t for t in ts if "SPLIT" in t]
+    assert len(split) == 1 and split[0].endswith(long.split()[-1])
+    i = ts.index(split[0])
+    assert ts[i + 1].startswith("Copyright 2026") and ts[i + 2].startswith("NEXT")
+
+
+def test_centered_multiline_title_is_one_heading(tmp_path):
+    rng = random.Random(33)
+    b = PdfBuilder()
+    for line in ["An Overview of the Technology", "Acceptance Model in Education"]:
+        w = text_width(line, BOLD, 18)
+        b.line(line, size=18, font=BOLD, x=(b.width - w) / 2)
+    b.space(10)
+    b.paragraph(para(rng, 3))
+    doc = load(b.save(tmp_path / "centered.pdf"))
+    heads = [bl.text for bl in blocks(doc) if bl.kind == BlockKind.HEADING]
+    assert heads == ["An Overview of the Technology Acceptance Model in Education"]
+    assert doc.title == heads[0]
+
+
+def test_title_page_lines_fold_into_first_section(tmp_path):
+    rng = random.Random(34)
+    b = PdfBuilder()
+    b.line("Lecture Notes on Genetics", size=20, font=BOLD)
+    b.line("Dr. Maria Gomez", size=13)
+    b.line("September 2026", size=13)
+    b.space(10)
+    for name in ["Inheritance", "Mutations", "Gene Expression"]:
+        b.heading(name, size=14)
+        b.paragraph(para(rng, 3))
+    doc = load(b.save(tmp_path / "titlepage.pdf"))
+    assert [s.title for s in doc.sections] == ["Lecture Notes on Genetics", "Inheritance", "Mutations", "Gene Expression"]
+    assert [bl.text for bl in doc.sections[0].blocks] == ["Lecture Notes on Genetics", "Dr. Maria Gomez September 2026"]
+
+
+def test_single_or_junk_outline_entries_fall_back_to_headings(tmp_path):
+    rng = random.Random(35)
+    b = PdfBuilder()
+    for name in ["Photosynthesis", "Respiration"]:
+        b.heading(name, size=16)
+        for _ in range(3):
+            b.paragraph(para(rng, 3))
+    path = b.save(tmp_path / "one.pdf", toc=[[1, "lecture_notes_final.docx", 1], [1, "Untitled", 1]])
+    doc = load(path)
+    assert [s.title for s in doc.sections] == ["Photosynthesis", "Respiration"]
+
+
+def test_rotated_page_and_sideways_text(tmp_path):
+    rng = random.Random(36)
+    b = PdfBuilder()
+    for i in range(3):
+        b.paragraph(f"ROT{i} " + para(rng, 2))
+    b.flush()
+    b.page.set_rotation(90)
+    b.new_page()
+    words = [f"SIDE{i} " + sentence(rng, 6) for i in range(4)]
+    b.flush()
+    for i, w in enumerate(words):
+        b.page.insert_text((80 + 15 * i, 700), w, fontsize=11, rotate=90)
+    doc = load(b.save(tmp_path / "rot.pdf"))
+    ts = texts(doc)
+    assert [t.split()[0] for t in ts if t.startswith("ROT")] == ["ROT0", "ROT1", "ROT2"]
+    # text running up the page is read line by line, in order
+    assert [w for t in ts for w in t.split() if w.startswith("SIDE")] == ["SIDE0", "SIDE1", "SIDE2", "SIDE3"]
+    assert all(bl.page == 2 for bl in blocks(doc) if "SIDE" in bl.text)
+
+
+def _garbled_pdf(path: Path, pages: int = 2) -> Path:
+    """Pages whose text layer is made of undecodable codes (like PDFs with broken fonts)."""
+    doc = pymupdf.open()
+    for _ in range(pages):
+        page = doc.new_page()
+        for i in range(12):
+            page.insert_text((72, 80 + 18 * i), "\x02\x03\x04\x05 \x06\x07\x08 \x0e\x0f\x10\x11 \x12\x13", fontsize=11)
+    doc.save(path)
+    doc.close()
+    return path
+
+
+def test_undecodable_text_layer_is_read_with_ocr(tmp_path, monkeypatch):
+    def fake_ocr(data: bytes, *, lang: str = "eng") -> str:
+        return "Proteins fold into shapes that\ndetermine their function.\n"
+
+    monkeypatch.setattr(pdf_mod, "_ocr_function", lambda: (fake_ocr, ""))
+    doc = load(_garbled_pdf(tmp_path / "garbled.pdf"))
+    assert texts(doc) == ["Proteins fold into shapes that determine their function."] * 2
+    assert doc.warnings == [
+        "The text of pages 1-2 couldn't be decoded, so they were read with OCR instead. "
+        "Recognition mistakes are possible."
+    ]
+
+
+def test_undecodable_text_layer_without_ocr_warns(tmp_path, monkeypatch):
+    monkeypatch.setattr(pdf_mod, "_ocr_function", lambda: (None, "Tesseract OCR isn't installed."))
+    doc = load(_garbled_pdf(tmp_path / "garbled.pdf", pages=1))
+    assert len(doc.warnings) == 1
+    assert doc.warnings[0].startswith("The text of page 1 is stored in a way that can't be turned back into letters")
+    assert doc.warnings[0].endswith("Install Tesseract OCR to have it read aloud.")
+    assert all(not any(c < " " for c in t) for t in texts(doc))
+
+
+def test_ocr_running_headers_and_headings(tmp_path, monkeypatch):
+    pages_text = [
+        "Biology Reader 2026\n\nIntroduction\n\n" + "Cells are the units of life and they divide often. " * 5
+        + "Around every cell\n\n7",
+        "Biology Reader 2026\n\n" + "the membrane controls what enters the cell and what leaves it. " * 4 + "\n\n8",
+        "Biology Reader 2026\n\nTransport Across Membranes\n\n" + "Molecules move by diffusion and by active pumps. " * 5 + "\n\n9",
+    ]
+    calls = iter(pages_text)
+    monkeypatch.setattr(pdf_mod, "_ocr_function", lambda: (lambda data, lang="eng": next(calls), ""))
+    doc = load(scanned_pdf(tmp_path / "scan3.pdf", [["a"], ["b"], ["c"]]))
+    kinds = [(bl.kind, bl.text[:20]) for bl in blocks(doc)]
+    assert not any("Biology Reader" in t for _, t in kinds)
+    assert [t for k, t in kinds if k == BlockKind.HEADING] == ["Introduction", "Transport Across Mem"]
+    # the paragraph on page 1 continues on page 2 (lowercase start)
+    assert sum(1 for k, _ in kinds if k == BlockKind.PARAGRAPH) == 2
+    assert [s.title for s in doc.sections] == ["Introduction", "Transport Across Membranes"]
+
+
+# --------------------------------------------------------------------------- line-level helpers
+
+
+def _span(text, size=10.0, font="Helvetica", x0=0.0, flags=0, oy=10.0):
+    width = len(text) * size * 0.5
+    return (text, size, flags, font, x0, oy - size, x0 + width, oy + 2, oy)
+
+
+def _line(*spans) -> pdf_mod._Line:
+    ln = pdf_mod._Line(page=0, x0=0, y0=0, x1=100, y1=12, spans=list(spans))
+    pdf_mod._finish_line(ln)
+    return ln
+
+
+def test_line_text_handles_icons_bullets_and_superscripts():
+    icon = _line(_span("", size=24, font="FontAwesome5Free-Solid"), _span("Note the version.", x0=30), _span(" Check it.", x0=120))
+    assert icon.text == "Note the version. Check it." and not icon.symbol_lead
+    bullet = _line(_span("l", font="Wingdings"), _span("First point", x0=15))
+    assert bullet.text == "First point" and bullet.symbol_lead
+    assert pdf_mod._list_marker(bullet) == "bullet"
+    greek = _line(_span("α", font="Symbol"), _span(" = 0.05", x0=6))
+    assert greek.text == "α = 0.05" and not greek.symbol_lead
+    sup = _line(_span("energy"), _span("12", size=6, x0=31, flags=1, oy=6), _span(" is stored", x0=38))
+    assert sup.text == "energy is stored"
+    exp = _line(_span("10"), _span("-3", size=6, x0=11, flags=1, oy=6), _span(" m", x0=18))
+    assert exp.text == "10⁻³ m"
+    lead = _line(_span("3", size=6, flags=1, oy=6), _span("See chapter 4.", x0=5, size=8))
+    assert lead.text == "3 See chapter 4." and lead.lead_marker
+    ctrl = _line(_span("Ha\x03bi\x00bi"))
+    assert ctrl.text == "Habibi"
+
+
+def test_page_number_and_margin_key_patterns():
+    for t in ["12", "xii", "Page 12", "page 3 of 10", "- 7 -", "12 | Chapter 3 Cells", "Chapter 3 | 12", "iv"]:
+        assert pdf_mod._is_page_number(t), t
+    for t in ["2026 Edition", "Chapter 3", "12 apples", "Figure 3", "mix"]:
+        assert not pdf_mod._is_page_number(t), t
+    assert pdf_mod._margin_key("Chapter 3 · Cells · 47") == pdf_mod._margin_key("Chapter 4 · Cells · 52")
+    assert pdf_mod._margin_key("xii | Preface") == pdf_mod._margin_key("xiv | Preface")

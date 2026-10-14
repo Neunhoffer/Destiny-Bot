@@ -70,6 +70,7 @@ _CAPTION_RE = re.compile(
 _FOOTNOTE_START_RE = re.compile(r"^(?:\d{1,3}|[*†‡§¶]{1,3})(?:[.)]?\s+|(?=[A-Z\"“(]))")
 _REF_MARK_RE = re.compile(r"^[\d,\-–*†‡§¶]+$")
 _ROMAN_RE = re.compile(r"^(?=[ivxlcdm]+$)m{0,3}(?:cm|cd|d?c{0,3})(?:xc|xl|l?x{0,3})(?:ix|iv|v?i{0,3})$", re.I)
+_PAGE_ROMAN_RE = re.compile(r"^(?=[ivxlc]+$)c{0,3}(?:xc|xl|l?x{0,3})(?:ix|iv|v?i{0,3})$", re.I)  # i .. cccxcix
 _PAGE_NUM_RE = re.compile(
     r"^(?:page|pg\.?|p\.)?\s*[-–—]?\s*(?P<n>\d{1,4}|[ivxlcdm]{1,8})\s*[-–—]?\s*(?:(?:of|/)\s*\d{1,4})?$", re.I
 )
@@ -806,8 +807,9 @@ def _vector_figures(paths: list[dict], pg: _Page, exclude: list[tuple]) -> list[
             continue  # rules, underlines, axis lines and page backgrounds don't make a figure
         if any(_overlap_frac(r, ex) > 0.8 for ex in exclude):
             continue
-        i0, i1 = int(max(x0 - 3, 0) // cell), int(min(x1 + 3, pg.width) // cell)
-        j0, j1 = int(max(y0 - 3, 0) // cell), int(min(y1 + 3, pg.height) // cell)
+        # Grow each shape a little so that the parts of one diagram connect.
+        i0, i1 = int(max(x0 - 15, 0) // cell), int(min(x1 + 15, pg.width) // cell)
+        j0, j1 = int(max(y0 - 15, 0) // cell), int(min(y1 + 15, pg.height) // cell)
         for i in range(i0, i1 + 1):
             for j in range(j0, j1 + 1):
                 occupied.add((i, j))
@@ -835,7 +837,8 @@ def _vector_figures(paths: list[dict], pg: _Page, exclude: list[tuple]) -> list[
         xs = [c[0] for c in cells]
         ys = [c[1] for c in cells]
         rect = (min(xs) * cell, min(ys) * cell, (max(xs) + 1) * cell, (max(ys) + 1) * cell)
-        if (rect[2] - rect[0]) * (rect[3] - rect[1]) <= 0.6 * area:
+        w, h = rect[2] - rect[0], rect[3] - rect[1]
+        if w * h <= 0.6 * area and w >= 80 and h >= 60:  # (a column of drawn bullets is too narrow)
             regions.append(rect)
     return regions
 
@@ -1124,11 +1127,11 @@ def _is_page_number(text: str) -> bool:
     m = _PAGE_NUM_RE.match(t)
     if m:
         n = m.group("n")
-        return n.isdigit() or bool(_ROMAN_RE.match(n))
+        return n.isdigit() or bool(_PAGE_ROMAN_RE.match(n))
     m = _PAGE_NUM_SIDE_RE.match(t)
     if m:
         n = m.group("a") or m.group("b") or ""
-        return n.isdigit() or bool(_ROMAN_RE.match(n))
+        return n.isdigit() or bool(_PAGE_ROMAN_RE.match(n))
     return False
 
 
@@ -1260,13 +1263,15 @@ def _page_chunks(pg: _Page, stats: _Stats) -> list[_Chunk]:
     chunks: list[_Chunk] = []
     interrupted = False
     for key, items in groups:
+        group_lines = [e.line for e in items if e.kind == "line"]
+        bounds = (min(ln.x0 for ln in group_lines), max(ln.x1 for ln in group_lines)) if group_lines else None
         pending_lines: list[_Line] = []
         for el in items:
             if el.kind == "line":
                 pending_lines.append(el.line)
                 continue
             if pending_lines:
-                chunks.extend(_group_lines(pending_lines, (pg.index,) + key, stats, interrupted))
+                chunks.extend(_group_lines(pending_lines, (pg.index,) + key, stats, interrupted, bounds))
                 interrupted = False
                 pending_lines = []
             if el.kind == "table":
@@ -1293,7 +1298,7 @@ def _page_chunks(pg: _Page, stats: _Stats) -> list[_Chunk]:
                     chunks.append(ch)
             interrupted = True
         if pending_lines:
-            chunks.extend(_group_lines(pending_lines, (pg.index,) + key, stats, interrupted))
+            chunks.extend(_group_lines(pending_lines, (pg.index,) + key, stats, interrupted, bounds))
             interrupted = False
     return chunks
 
@@ -1678,12 +1683,20 @@ def _is_equation_line(line: _Line) -> bool:
     return math_chars >= max(2, 0.3 * line.chars) and (line.operators > 0 or line.math >= 0.5)
 
 
-def _group_lines(lines: list[_Line], col: tuple, stats: _Stats, interrupted: bool) -> list[_Chunk]:
-    """Group a column's ordered lines into chunks using spacing, indentation and style."""
+def _group_lines(
+    lines: list[_Line],
+    col: tuple,
+    stats: _Stats,
+    interrupted: bool,
+    bounds: tuple[float, float] | None = None,
+) -> list[_Chunk]:
+    """Group a column's ordered lines into chunks using spacing, indentation and style.
+
+    ``bounds`` is the column's (left, right) edge when ``lines`` is only part of it.
+    """
     if not lines:
         return []
-    col_left = min(ln.x0 for ln in lines)
-    col_right = max(ln.x1 for ln in lines)
+    col_left, col_right = bounds or (min(ln.x0 for ln in lines), max(ln.x1 for ln in lines))
     width = max(col_right - col_left, 1.0)
     chunks: list[_Chunk] = []
     cur: _Chunk | None = None
@@ -1828,7 +1841,7 @@ def _chunk_text(ch: _Chunk) -> str:
 
 def _classify(chunks: list[_Chunk], stats: _Stats) -> None:
     body = stats.body_size
-    for k, ch in enumerate(chunks):
+    for ch in chunks:
         if ch.kind == BlockKind.TABLE or not ch.lines:
             continue
         if ch.kind not in (BlockKind.FOOTNOTE, BlockKind.EQUATION) and all(ln.mono for ln in ch.lines):
@@ -1840,7 +1853,6 @@ def _classify(chunks: list[_Chunk], stats: _Stats) -> None:
             continue
         text = ch.text
         if ch.kind == BlockKind.LIST_ITEM:
-            first = ch.lines[0]
             if text[:1] in _BULLETS or _DASH_BULLET_RE.match(text):
                 text = text[1:].lstrip()
             ch.text = text
@@ -2247,8 +2259,9 @@ def _heading_title(blocks: list[Block]) -> str | None:
         if (b.page or 1) > 3:
             break
         if b.kind == BlockKind.HEADING and b.level == 1 and 2 <= len(b.text) <= 200:
-            if _norm_title(b.text) in _GENERIC_HEADINGS:
-                continue
+            letters = sum(1 for c in b.text if c.isalpha())
+            if _norm_title(b.text) in _GENERIC_HEADINGS or letters < 0.5 * len(b.text.replace(" ", "")):
+                continue  # "Contents", or a scale bar like "0 50 100 200 Miles"
             return b.text
     return None
 
