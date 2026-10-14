@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import clamp_rate, disable_onnx_telemetry
+from . import clamp_rate, disable_onnx_telemetry, espeak_data_path, espeak_path_reason
 from .base import AudioClip, EngineUnavailable, TTSEngine, TTSError, Voice
 from .catalog import CATALOG, RECOMMENDED_VOICE, catalog_voice, installed_piper_voices, piper_voices_dir
 
@@ -43,6 +43,7 @@ class PiperEngine(TTSEngine):
         self._load_locks: dict[str, threading.Lock] = {}
         self._import_error: str | None = None
         self._imported = False
+        self._espeak_dir: str | None = None  # espeak-ng data folder to hand Piper, when not its default
         self._meta_cache: dict[Path, tuple[tuple[int, int], dict[str, Any]]] = {}
 
     # -- TTSEngine
@@ -160,8 +161,22 @@ class PiperEngine(TTSEngine):
                 )
             except Exception as exc:  # e.g. onnxruntime failing to load its DLLs
                 self._import_error = f"The natural voice engine couldn't start: {exc}"
+            else:
+                self._import_error = self._check_espeak_dir()
             self._imported = True
         return self._import_error
+
+    def _check_espeak_dir(self) -> str | None:
+        """Make sure espeak-ng can open its data (else it would end the program)."""
+        try:
+            from piper.phonemize_espeak import ESPEAK_DATA_DIR
+        except ImportError:  # piper-tts < 1.3 brings its own phonemizer
+            return None
+        usable = espeak_data_path(ESPEAK_DATA_DIR)
+        if usable is None:
+            return espeak_path_reason(ESPEAK_DATA_DIR)
+        self._espeak_dir = usable if usable != str(ESPEAK_DATA_DIR) else None
+        return None
 
     def _get_voice(self, voice_id: str) -> _Loaded:
         path = self._model_path(voice_id)
@@ -191,9 +206,10 @@ class PiperEngine(TTSEngine):
 
         config_path = path.with_name(path.name + ".json")
         disable_onnx_telemetry()  # privacy: nothing about this computer goes to Microsoft
+        extra = {"espeak_data_dir": self._espeak_dir} if self._espeak_dir else {}
         try:
             try:
-                return PiperVoice.load(str(path), config_path=str(config_path), download_dir=str(path.parent))
+                return PiperVoice.load(str(path), config_path=str(config_path), download_dir=str(path.parent), **extra)
             except TypeError:  # older piper-tts without download_dir
                 return PiperVoice.load(str(path), config_path=str(config_path))
         except Exception as exc:

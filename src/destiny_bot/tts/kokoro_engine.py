@@ -14,7 +14,7 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-from . import clamp_rate, disable_onnx_telemetry
+from . import clamp_rate, disable_onnx_telemetry, espeak_data_path, espeak_path_reason
 from .base import AudioClip, EngineUnavailable, TTSEngine, TTSError, Voice
 from .catalog import find_kokoro_model
 
@@ -120,6 +120,39 @@ def _windows_physical_cores() -> int | None:
     return cores or None
 
 
+def _espeak_data() -> tuple[str, str | None]:
+    """(espeak-ng data folder kokoro-onnx uses, the spelling espeak-ng can open or None)."""
+    import espeakng_loader
+
+    data = espeakng_loader.get_data_path()
+    return data, espeak_data_path(data)
+
+
+def _check_espeak_data() -> str | None:
+    try:
+        data, usable = _espeak_data()
+    except Exception:  # kokoro-onnx reports a missing espeak-ng itself
+        return None
+    return espeak_path_reason(data) if usable is None else None
+
+
+def _use_short_espeak_path() -> None:
+    """Point espeak-ng at an ASCII spelling of its data folder when the real one isn't.
+
+    phonemizer resolves a folder it is given back to its long (non-ASCII) name, so the
+    short name goes through ESPEAK_DATA_PATH, which espeak-ng reads itself when it is
+    given no folder. Call after creating Kokoro (its tokenizer sets phonemizer's folder).
+    """
+    data, usable = _espeak_data()
+    if usable is None or usable == data:
+        return
+    from phonemizer.backend.espeak.wrapper import EspeakWrapper
+
+    os.environ["ESPEAK_DATA_PATH"] = usable
+    os.environ.pop("PHONEMIZER_ESPEAK_DATA_PATH", None)
+    EspeakWrapper.set_data_path(None)
+
+
 def voice_table_ids(voices_path: Path) -> set[str]:
     """Voice ids stored in a Kokoro voices file (an .npz archive), without loading it."""
     with zipfile.ZipFile(voices_path) as archive:
@@ -214,6 +247,8 @@ class KokoroEngine(TTSEngine):
                 self._package_problem = NO_PACKAGE_REASON
             except Exception as exc:  # e.g. onnxruntime failing to load its DLLs
                 self._package_problem = f"The Kokoro voice engine couldn't start: {exc}"
+            else:
+                self._package_problem = _check_espeak_data()
             self._package_checked = True
         return self._package_problem
 
@@ -261,7 +296,9 @@ class KokoroEngine(TTSEngine):
         opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
         try:
             session = rt.InferenceSession(str(model), sess_options=opts, providers=["CPUExecutionProvider"])
-            return Kokoro.from_session(session, str(voices))
+            kokoro = Kokoro.from_session(session, str(voices))
+            _use_short_espeak_path()
+            return kokoro
         except Exception as exc:
             raise EngineUnavailable(
                 "The Kokoro voice pack couldn't be loaded; it may be damaged. "

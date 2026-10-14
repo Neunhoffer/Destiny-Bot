@@ -37,7 +37,7 @@ def test_onnxruntime_telemetry_is_off_before_any_voice_loads(tmp_path):
     pytest.importorskip("onnxruntime")
     home = tmp_path / "user"
     home.mkdir()
-    env = {k: v for k, v in os.environ.items() if k != "ORT_DISABLE_TELEMETRY" and "proxy" not in k.lower()}
+    env = {k: v for k, v in os.environ.items() if k != "ORT_DISABLE_TELEMETRY"}
     env.update(HOME=str(home), XDG_CACHE_HOME=str(home / ".cache"), LOCALAPPDATA=str(home / "AppData" / "Local"),
                APPDATA=str(home / "AppData" / "Roaming"), USERPROFILE=str(home), DESTINY_HOME=str(tmp_path / "data"))
     code = """
@@ -118,3 +118,42 @@ def test_wipe_also_empties_the_log_files():
         live.write("after wipe\n")
     remaining = "".join(p.read_text(encoding="utf-8") for p in logs.iterdir() if p.is_file())
     assert "Therapy" not in remaining and "Diary" not in remaining and "Fatal" not in remaining
+
+
+def _browser_storage(name: str) -> Path:
+    storage = config.data_dir() / name / "EBWebView" / "Default" / "Local Storage" / "leveldb"
+    storage.mkdir(parents=True)
+    (storage / "000003.log").write_bytes(b"destiny.lastBook=3fa2")
+    (storage / "LOCK").write_bytes(b"")
+    return storage
+
+
+def test_wipe_erases_the_reader_window_browser_data():
+    for name in ("webview", "browser-profile"):
+        _browser_storage(name)
+    wipe_user_data()
+    assert not (config.data_dir() / "webview").exists()
+    assert not (config.data_dir() / "browser-profile").exists()
+
+
+def test_browser_data_the_open_window_holds_is_erased_at_next_start(monkeypatch):
+    """On Windows the open window locks some of its files; the wipe must still succeed."""
+    from destiny_bot import library
+
+    storage = _browser_storage("webview")
+    real_unlink = os.unlink
+
+    def locked(path, *args, **kwargs):
+        if os.fspath(path).endswith("LOCK"):
+            raise PermissionError(13, "The process cannot access the file because it is being used by another process")
+        return real_unlink(path, *args, **kwargs)
+
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr(os, "unlink", locked)
+        m.setattr(os, "remove", locked)
+        wipe_user_data()  # doesn't raise
+    assert (storage / "LOCK").exists() and not (storage / "000003.log").exists()
+
+    library.finish_pending_erase()  # next start, before the window opens
+    assert not (config.data_dir() / "webview").exists()
+    library.finish_pending_erase()  # nothing left to do

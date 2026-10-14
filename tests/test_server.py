@@ -7,6 +7,7 @@ integration tests at the end use the real modules when they're available.
 
 from __future__ import annotations
 
+import errno
 import io
 import re
 import struct
@@ -1281,6 +1282,124 @@ def test_wipe(client, tmp_path, fakes):
     calls = len(fakes.tts.engines["piper"].calls)
     client.post("/api/tts", json={"text": "cached"})
     assert len(fakes.tts.engines["piper"].calls) == calls + 1
+
+
+class _QuickClearJobs(JobManager):
+    """Wipe normally waits 10 s for jobs to stop; these tests don't need to wait that long."""
+
+    def clear(self, *, wait: float = 0.0) -> None:
+        super().clear(wait=min(wait, 0.2))
+
+
+def test_wipe_during_a_slow_import_does_not_bring_the_book_back(app_factory, monkeypatch):
+    """A loader that never reports progress outlives the wipe's wait; it must not save the book afterwards."""
+    started, release = threading.Event(), threading.Event()
+
+    def slow_loader(path, *, source_name=None, ocr=True, progress=None):
+        data = Path(path).read_bytes()
+        started.set()
+        release.wait(10)
+        # On Windows the loader keeps the upload open, so the wipe can't delete it.
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_bytes(data)
+        return fake_load_document(path, source_name=source_name, ocr=ocr)
+
+    monkeypatch.setattr(ingest, "load_document", slow_loader)
+    with TestClient(app_factory(jobs=_QuickClearJobs()), headers=AUTH) as client:
+        job_id = upload(client, "Private diary.md", b"# Dear diary\nSecrets.\n").json()["job_id"]
+        assert started.wait(5)
+        assert client.post("/api/wipe", json={"confirm": "DELETE"}).json() == {"ok": True}
+        release.set()
+        assert wait_job(client, job_id)["status"] == "cancelled"
+        assert client.get("/api/library").json() == {"books": []}
+        assert not any(config.library_dir().iterdir())
+
+
+def test_wipe_erases_the_reader_window_browser_data(client):
+    root = config.data_dir()
+    for name in ("webview", "browser-profile"):
+        storage = root / name / "Default" / "Local Storage" / "leveldb"
+        storage.mkdir(parents=True)
+        (storage / "000003.log").write_bytes(b"destiny.lastBook")
+    assert client.post("/api/wipe", json={"confirm": "DELETE"}).json() == {"ok": True}
+    assert not (root / "webview").exists() and not (root / "browser-profile").exists()
+
+
+def test_startup_finishes_an_interrupted_erase(app_factory):
+    root = config.data_dir()
+    leftover = root / "webview" / "EBWebView" / "Default" / "LOCK"
+    leftover.parent.mkdir(parents=True)
+    leftover.write_bytes(b"")
+    (root / ".erase-pending").write_text("x", encoding="utf-8")
+    app_factory()
+    assert not (root / "webview").exists() and not (root / ".erase-pending").exists()
+    # Without the marker, the window's data is left alone.
+    leftover.parent.mkdir(parents=True)
+    app_factory()
+    assert leftover.parent.is_dir()
+
+
+def test_settings_save_waits_for_a_briefly_locked_file(client, monkeypatch):
+    """On Windows, replacing settings.json fails while another thread or a virus scanner reads it."""
+    real_replace, attempts = config.os.replace, []
+
+    def replace(src, dst):
+        attempts.append(Path(dst).name)
+        if len(attempts) <= 2:
+            raise PermissionError(13, "The process cannot access the file because it is being used by another process")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(config, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(config.os, "replace", replace)
+    monkeypatch.setattr(config.time, "sleep", lambda seconds: None)
+    response = client.put("/api/settings", json={"speed": 1.25})
+    assert response.status_code == 200, response.text
+    assert attempts == ["settings.json"] * 3
+    assert config.load_settings().speed == 1.25
+    assert [p.name for p in config.data_dir().glob(".settings-*")] == []
+
+
+@pytest.mark.parametrize("key", ["sk-ant-api03-AB CD", "sk-ant-api03-AB​CD", "sk-ant-api03-AB\nCD"])
+def test_api_key_with_invisible_characters_is_refused(client, key):
+    response = client.put("/api/settings", json={"anthropic_api_key": key})
+    assert response.status_code == 422
+    assert "spaces or invisible characters" in response.json()["detail"]
+    assert "AB" not in response.json()["detail"]  # the key itself is never echoed back
+    assert client.get("/api/settings").json()["anthropic_api_key_set"] is False
+
+
+def test_disk_full_is_explained_plainly(client, tmp_path, monkeypatch):
+    book = import_book(client, tmp_path)
+
+    def full(*args, **kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device", str(config.data_dir() / "library" / "x"))
+
+    monkeypatch.setattr(config.os, "replace", full)
+    response = client.put(f"/api/books/{book['id']}/progress", json={"section_id": "s1", "utterance": 2})
+    assert response.status_code == 500
+    assert "disk is full" in response.json()["detail"].lower()
+    assert str(config.data_dir()) not in response.json()["detail"]
+    assert client.get(f"/api/books/{book['id']}/progress").json() == {"progress": None}
+
+
+def test_friendly_error_for_a_full_disk():
+    message = friendly_error(OSError(errno.ENOSPC, "No space left on device", "/home/me/.local/share/athena/x"))
+    assert "disk is full" in message.lower() and "/home/me" not in message
+    assert friendly_error(OSError(errno.EACCES, "Permission denied")).startswith("Something went wrong")
+
+
+def test_uvicorn_starts_without_a_console(monkeypatch):
+    """A windowed app (pythonw) has no stdout/stderr; uvicorn's default log config would crash on that."""
+    jobs = JobManager(max_workers=1)
+    try:
+        app = create_app(token=TOKEN, jobs=jobs)
+        with monkeypatch.context() as m:
+            m.setattr("sys.stdout", None)
+            m.setattr("sys.stderr", None)
+            uv = server._uvicorn_server(app, "127.0.0.1", 8765)
+    finally:
+        jobs.shutdown(wait=True)
+    assert uv.config.log_config is None
 
 
 def test_validation_errors_are_strings(client):

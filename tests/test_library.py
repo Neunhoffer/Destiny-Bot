@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import errno
 import json
+import os
 import re
 import threading
+import types
 from pathlib import Path
 
 import pytest
@@ -141,7 +144,23 @@ def test_import_uses_original_name_for_type_and_title(tmp_path, loader):
 def test_import_reports_progress(tmp_path, loader):
     seen: list[tuple[float, str]] = []
     Library().import_file(write(tmp_path, "a.md", BIO), progress=lambda f, m: seen.append((f, m)))
-    assert seen == [(0.5, "Reading")]
+    assert seen == [(0.5, "Reading"), (1.0, "Saving to your library")]
+
+
+def test_import_cancelled_after_reading_saves_nothing(tmp_path, loader):
+    """The progress callback is the job's cancel checkpoint: "Erase all my data" may have run meanwhile."""
+
+    class Cancelled(Exception):
+        pass
+
+    def progress(fraction: float, message: str) -> None:
+        if message.startswith("Saving"):
+            raise Cancelled()
+
+    lib = Library()
+    with pytest.raises(Cancelled):
+        lib.import_file(write(tmp_path, "a.md", BIO), progress=progress)
+    assert lib.list() == [] and list(lib.root.iterdir()) == []
 
 
 def test_import_dedups_by_content_and_refreshes_last_opened(tmp_path, loader, clock):
@@ -445,3 +464,95 @@ def test_real_markdown_import(tmp_path):
     assert lib.get(doc.id) == doc
     pasted = lib.import_text("Pasted", "# Title\n\nSome text to read.\n")
     assert lib.summary(pasted.id).source_type == "paste"
+
+
+# -- robustness: full disks, Windows file locks, concurrent imports
+
+
+def _disk_full(*args, **kwargs):
+    raise OSError(errno.ENOSPC, "No space left on device")
+
+
+def test_disk_full_during_import_leaves_no_half_written_book(tmp_path, loader, monkeypatch):
+    lib = Library()
+    real_write = library_module._atomic_write
+
+    def write_or_fail(path: Path, data: bytes) -> None:
+        if path.name == "document.json":
+            _disk_full()
+        real_write(path, data)
+
+    monkeypatch.setattr(library_module, "_atomic_write", write_or_fail)
+    with pytest.raises(OSError) as info:
+        lib.import_file(write(tmp_path, "big.md", BIO))
+    assert info.value.errno == errno.ENOSPC
+    assert list(lib.root.iterdir()) == []  # no hidden folder holding a copy of the book
+    monkeypatch.setattr(library_module, "_atomic_write", real_write)
+    doc = lib.import_file(write(tmp_path, "big.md", BIO))  # works once there is room again
+    assert [b.id for b in lib.list()] == [doc.id]
+
+
+def test_disk_full_while_saving_progress_keeps_the_old_progress(tmp_path, loader, monkeypatch):
+    lib = Library()
+    doc = lib.import_file(write(tmp_path, "a.md", BIO))
+    lib.set_progress(doc.id, "s0", 4)
+    with monkeypatch.context() as m, pytest.raises(OSError):
+        m.setattr(library_module.os, "fsync", _disk_full)
+        lib.set_progress(doc.id, "s1", 9)
+    assert lib.get_progress(doc.id).utterance == 4
+    assert [p.name for p in (lib.root / doc.id).iterdir() if p.name.startswith(".tmp-")] == []
+
+
+def test_meta_writes_wait_for_a_briefly_locked_file(tmp_path, loader, monkeypatch):
+    """Windows refuses to replace a file another program (a virus scanner) has open for a moment."""
+    lib = Library()
+    doc = lib.import_file(write(tmp_path, "a.md", BIO))
+    real_replace, attempts = os.replace, []
+
+    def replace(src, dst):
+        attempts.append(Path(dst).name)
+        if len(attempts) <= 2:
+            raise PermissionError(13, "The process cannot access the file because it is being used by another process")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(config, "sys", types.SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(os, "replace", replace)
+    monkeypatch.setattr(config.time, "sleep", lambda seconds: None)
+    lib.set_progress(doc.id, "s1", 2)
+    assert attempts == ["meta.json"] * 3
+    assert lib.get_progress(doc.id).utterance == 2
+
+
+def test_concurrent_imports_of_the_same_file(tmp_path, loader):
+    lib = Library()
+    paths = [write(tmp_path, f"copy{i}.md", BIO) for i in range(8)]
+    results: list[str] = []
+    errors: list[BaseException] = []
+
+    def run(path: Path) -> None:
+        try:
+            results.append(lib.import_file(path).id)
+        except BaseException as exc:  # pragma: no cover - reported below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run, args=(p,)) for p in paths]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == [] and len(set(results)) == 1
+    assert [b.id for b in lib.list()] == results[:1]
+    assert sorted(p.name for p in (lib.root / results[0]).iterdir()) == ["document.json", "meta.json", "source.md"]
+
+
+def test_delete_while_the_book_is_being_read(tmp_path, loader):
+    lib = Library()
+    doc = lib.import_file(write(tmp_path, "a.md", BIO))
+    opened = lib.get(doc.id)  # e.g. an export job holding the document
+    lib.delete(doc.id)
+    assert opened.sections[0].title == "Cells"  # the reader's copy still works
+    with pytest.raises(KeyError):
+        lib.set_progress(doc.id, "s0", 1)
+    with pytest.raises(KeyError):
+        lib.add_bookmark(doc.id, "s0", 1, "x")
+    assert lib.list() == []

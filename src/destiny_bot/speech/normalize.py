@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import html
 import re
+import unicodedata
 from typing import Callable
 
 from ..models import ReadingOptions
@@ -43,11 +44,16 @@ def normalize_for_speech(text: str, options: ReadingOptions | None = None) -> st
         t = _remove_citations(t)
     if opts.expand_abbreviations:
         t = _expand_abbreviations(t)
+    t = _phone_numbers(t, vault)
+    t = _money(t, vault)
     t = _number_ranges(t)
     t = _roman_numerals(t)
+    t = _dates(t)
+    t = _prose_math(t, vault)
     t = _symbols(t)
     t = _fix_caps(t)
     t = vault.restore(t)
+    t = _spoken_numbers(t)
     t = _tidy(t)
     return t if _SPEAKABLE.search(t) else ""
 
@@ -213,8 +219,8 @@ def _links(text: str, mode: str, vault: _Vault) -> str:
             return raw
         if mode == "skip":
             return " " + tail
-        if mode == "domain":
-            return vault.put(f"a link to {host}") + tail
+        if mode == "domain":  # "dot" spelled out: Kokoro's phonemizer reads "example.com" as "example. com"
+            return vault.put(f"a link to {_spell_url_part(host)}") + tail
         spoken = _spell_url_part(host)
         if path:
             spoken += " slash " + _spell_url_part(path)
@@ -423,6 +429,36 @@ def _rule(
     return regex, fn, needle
 
 
+# Titles before a name ("Gen. Grant", "Mt. Everest"); voices spell most of them out ("L T Dan").
+_TITLES = {
+    "Gen": "General", "Gov": "Governor", "Sen": "Senator", "Rep": "Representative", "Pres": "President",
+    "Lt": "Lieutenant", "Capt": "Captain", "Col": "Colonel", "Sgt": "Sergeant", "Cpl": "Corporal",
+    "Pvt": "Private", "Adm": "Admiral", "Maj": "Major", "Cmdr": "Commander", "Rev": "Reverend",
+    "Hon": "Honorable", "Prof": "Professor", "Supt": "Superintendent", "Msgr": "Monsignor", "Mt": "Mount",
+    "Ft": "Fort",
+}
+_MONTH_ABBREVIATIONS = {
+    "Jan": "January", "Feb": "February", "Mar": "March", "Apr": "April", "Jun": "June", "Jul": "July",
+    "Aug": "August", "Sep": "September", "Sept": "September", "Oct": "October", "Nov": "November",
+    "Dec": "December",
+}
+# Numbered things in math and law books: "Thm. 3", "Art. I", "cl. 3", "ext. 22".
+_NUMBERED_ABBREVIATIONS = {
+    "Thm": "Theorem", "Def": "Definition", "Defn": "Definition", "Prop": "Proposition", "Cor": "Corollary",
+    "Lem": "Lemma", "Prob": "Problem", "Exer": "Exercise", "Art": "Article", "cl": "clause", "ext": "extension",
+    "Ext": "Extension",
+}
+
+
+def _name_suffix(m: re.Match[str]) -> str:
+    """"King Jr." -> "King Junior" ("Sr." before a name is "Sister", so it is left alone)."""
+    suffix = m.group(2)
+    if suffix == "Sr" and re.match(rf"\s+[{_UP}][a-z]", m.string[m.end() :]):
+        return m.group()
+    out = m.group(1) + ("Junior" if suffix == "Jr" else "Senior")
+    return out + "." if _at_end(m) else out
+
+
 _ORDINAL_EDITION = (
     r"\d+(?:st|nd|rd|th)|[Ff]irst|[Ss]econd|[Tt]hird|[Ff]ourth|[Ff]ifth|[Ss]ixth|[Ss]eventh|[Ee]ighth|"
     r"[Nn]inth|[Tt]enth|[Ee]leventh|[Tt]welfth|[Nn]ew|[Rr]evised|[Ii]nternational|[Gg]lobal|[Ss]tudent|"
@@ -470,7 +506,14 @@ _ABBREVIATIONS: list[_Rule] = [
           lambda m: f"{m.group(1)} {m.group(2).upper()} M", "m"),
     _rule(r"\b((?:1[0-2]|0?[1-9]):[0-5]\d)\s([AaPp])[Mm]\b",
           lambda m: f"{m.group(1)} {m.group(2).upper()} M", ":"),
-    _rule(r"\s*&\s*", " and ", "&"),
+    _rule(rf"\b({'|'.join(_TITLES)})\.\s+(?=[{_UP}])", lambda m: _TITLES[m.group(1)] + " ", "."),
+    _rule(rf"(\b[{_UP}][\w'’\-]*,?\s+)(Jr|Sr)\.", _name_suffix, "r."),
+    _rule(rf"\b({'|'.join(_MONTH_ABBREVIATIONS)})\.(?=\s+\d)", lambda m: _MONTH_ABBREVIATIONS[m.group(1)], "."),
+    _rule(rf"\b({'|'.join(_NUMBERED_ABBREVIATIONS)})\.\s*(?=\d|[IVXLC]+[,.;:)]|[IVXLC]{{2,}}\b)",
+          lambda m: _NUMBERED_ABBREVIATIONS[m.group(1)] + " ", "."),
+    _rule(r"\b[Aa]vg\.", "average", "avg.", end_period=True),
+    _rule(r"\b[Gg]ovt\.", "government", "govt.", end_period=True),
+    _rule(r"\s*&&?\s*", " and ", "&"),
 ]
 
 
@@ -486,7 +529,7 @@ def _expand_abbreviations(text: str) -> str:
 # --------------------------------------------------------------------------- number ranges
 
 _NUM = r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?"
-_RANGE = re.compile(rf"(?<![\w.,\-–—−/:+])({_NUM})(\s*)([–—-])(\s*)({_NUM})(?![\w\-–—−/]|[.,:]\d)")
+_RANGE = re.compile(rf"(?<![\w.,\-–—−/:+])({_NUM})(\s*)([–—-])(\s*)({_NUM})(?![\w\-–—−]|/\d|[.,:]\d)")
 _PHONE_WORDS = re.compile(r"(?i)\b(?:phone|tel|telephone|call|fax|cell|mobile|text|contact|dial|ext)\b")
 _DECADE_RANGE = re.compile(r"\b(\d{2,4}s)\s?[–—]\s?(\d{2,4}s)\b")
 _TIME_RANGE = re.compile(r"\b(\d{1,2}:\d{2})\s*[–—-]\s*(\d{1,2}:\d{2})\b")
@@ -495,7 +538,7 @@ _NUMBERED_THINGS = frozenset(
     """
     figure fig table tab equation eq eqn exhibit example exercise problem box panel plate chart graph map
     diagram activity lesson unit model case question item appendix theorem lemma definition formula
-    step rule listing algorithm section sec chapter ch program code form
+    step rule listing algorithm section sec chapter ch program code form issn isbn
     """.split()
 )
 
@@ -663,6 +706,234 @@ def _roman_numerals(text: str) -> str:
     return _REGNAL.sub(_regnal, text)
 
 
+# --------------------------------------------------------------------------- numbers people say in words
+
+# Voices read every number as a quantity: "in 1990" comes out "nineteen hundred ninety",
+# "1066" "one thousand sixty-six", "the 1990s" "nineteen hundred ninety z", "$3.50"
+# "dollar three point five zero", "9:00" "nine zero zero" and a phone number as one big
+# number. These passes say them the way people do.
+
+_MONTHS = "January|February|March|April|May|June|July|August|September|October|November|December"
+_ERA = r"(?:BCE|BC|CE|AD|B\.C\.E\.|B\.C\.|C\.E\.|A\.D\.)(?![\w])"
+_YEAR_LEAD = re.compile(
+    r"(?:\b(?i:in|since|by|from|until|till|during|before|after|circa|c\.|ca\.|year|early|mid|late|spring|"
+    r"summer|autumn|winter)|\b(?:" + _MONTHS + r")(?:\s+\d{1,2}(?:st|nd|rd|th)?,?)?|\bAD|\bA\.D\.|[(\[]"
+    rf"|\b[{_UP}][\w'’\-]*(?:\s+et\s+al\.?)?,)\s*$"
+)
+_YEAR = re.compile(r"(?<![\w.,$£€¥/:#'’\-])(1\d{3}|20\d\d)(?![\w%]|[.,:/]\d)")
+_YEAR_RANGE_NEXT = re.compile(r"\s*(?:to|and|or|through|until|till|[-–—])\s*$")
+_DECADE = re.compile(r"(?<![\w.,$£€¥/:#'’])(1[1-9]\d0|20\d0)['’]?s\b")
+_SHORT_DECADE = re.compile(
+    r"(?:(?<=\bthe )|(?<=\bearly )|(?<=\bmid )|(?<=\bmid-)|(?<=\blate )|(?<=\bhis )|(?<=\bher )"
+    r"|(?<=\btheir )|(?<=\bmy )|(?<=\byour )|(?<=\bour )|['’])([2-9])0['’]?s\b"
+)
+_MONTH_DAY = re.compile(
+    rf"\b({_MONTHS})\s+([1-9]|[12]\d|3[01])(?:(\s+(?:to|and|or|through)\s+|[-–])([1-9]|[12]\d|3[01]))?"
+    r"(?![\d:]|\.\d|st\b|nd\b|rd\b|th\b|\s*(?:%|percent))"
+)
+_DAY_MONTH = re.compile(rf"(?<![\w.,$£€¥:/])([1-9]|[12]\d|3[01])\s+({_MONTHS})\b")
+
+
+def _ordinal_suffix(n: int) -> str:
+    if 10 <= n % 100 <= 20:
+        return "th"
+    return {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+
+
+def _ordinal_digits(day: str) -> str:
+    return day + _ordinal_suffix(int(day))
+
+
+def _month_day_repl(m: re.Match[str]) -> str:
+    """"July 4" -> "July 4th", "June 6 to 8" -> "June 6th to 8th"."""
+    month, day, joiner, last = m.groups()
+    out = f"{month} {_ordinal_digits(day)}"
+    if last:
+        out += (joiner if joiner.strip() not in ("-", "–") else " to ") + _ordinal_digits(last)
+    return out
+
+
+def _plural_number_word(n: int) -> str:
+    """"ninety" -> "nineties", "ten" -> "tens" (for decades)."""
+    word = _cardinal_word(n)
+    return word[:-1] + "ies" if word.endswith("y") else word + "s"
+
+
+def _year_words(n: int) -> str:
+    """1066 -> "ten sixty-six", 1905 -> "nineteen oh five", 2008 -> "two thousand eight"."""
+    hi, lo = divmod(n, 100)
+    if n == 1000 or 2000 <= n <= 2009:
+        return f"{_cardinal_word(hi // 10)} thousand" + (f" {_ONES[lo]}" if lo else "")
+    if lo == 0:
+        return f"{_cardinal_word(hi)} hundred"
+    if lo < 10:
+        return f"{_cardinal_word(hi)} oh {_ONES[lo]}"
+    return f"{_cardinal_word(hi)} {_cardinal_word(lo)}"
+
+
+def _decade_words(n: int) -> str:
+    """1990 -> "nineteen nineties", 1800 -> "eighteen hundreds", 2000 -> "two thousands"."""
+    hi, lo = divmod(n, 100)
+    if lo == 0:
+        return "two thousands" if n == 2000 else f"{_cardinal_word(hi)} hundreds"
+    return f"{_cardinal_word(hi)} {_plural_number_word(lo)}"
+
+
+def _unit_follows(text: str, end: int) -> bool:
+    nxt = re.match(r"\s?([^\W\d_]+|%)", text[end : end + 12])
+    return bool(nxt) and (nxt.group(1) in _UNITS or nxt.group(1) in ("%", "percent"))
+
+
+def _dates(text: str) -> str:
+    """Month days as ordinals, and years and decades as words ("in nineteen ninety")."""
+    if not any(c.isdigit() for c in text):
+        return text
+    if re.search(_MONTHS, text):
+        text = _MONTH_DAY.sub(_month_day_repl, text)
+        text = _DAY_MONTH.sub(lambda m: f"{_ordinal_digits(m.group(1))} {m.group(2)}", text)
+    if "0s" in text or "0's" in text or "0’s" in text:
+        text = _DECADE.sub(lambda m: _decade_words(int(m.group(1))), text)
+        text = _SHORT_DECADE.sub(lambda m: _plural_number_word(int(m.group(1)) * 10), text)
+    last_year_end = -1
+
+    def year(m: re.Match[str]) -> str:
+        nonlocal last_year_end
+        n = int(m.group(1))
+        s = m.string
+        after = s[m.end() :]
+        is_year = bool(re.match(rf"\s*{_ERA}", after)) and n >= 1000
+        if not is_year and 1100 <= n <= 2099 and not _unit_follows(s, m.end()):
+            if last_year_end >= 0 and _YEAR_RANGE_NEXT.fullmatch(s[last_year_end : m.start()]):
+                is_year = True  # "from 1914 to 1918"
+            elif _YEAR_LEAD.search(s[max(0, m.start() - 40) : m.start()]):
+                is_year = True
+            else:  # "He lived 1809 to 1882."
+                nxt = re.match(r"\s+(?:to|and)\s+(1\d{3}|20\d\d)\b", after)
+                is_year = bool(nxt) and n < int(nxt.group(1)) <= 2099 and not _unit_follows(s, m.end() + nxt.end())
+        if not is_year:
+            return m.group()
+        last_year_end = m.end()
+        return _year_words(n)
+
+    return _YEAR.sub(year, text)
+
+
+# Money: "$3.50" -> "3 dollars and 50 cents", "$21.4 trillion" -> "21.4 trillion dollars".
+_CURRENCIES = {
+    "$": ("dollar", "dollars", "cent", "cents"),
+    "€": ("euro", "euros", "cent", "cents"),
+    "£": ("pound", "pounds", "penny", "pence"),
+    "¥": ("yen", "yen", "", ""),
+    "₹": ("rupee", "rupees", "paisa", "paise"),
+}
+_SCALE_ABBREVIATIONS = {"k": "thousand", "K": "thousand", "m": "million", "M": "million", "mn": "million",
+                        "b": "billion", "B": "billion", "bn": "billion", "tn": "trillion"}
+_AMOUNT = r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?"
+_MONEY = re.compile(
+    rf"(?<![\w$£€¥₹.,])([-−]?)([$£€¥₹])\s?({_AMOUNT})"
+    rf"(?:\s?(?:[–—-]|to)\s?[-−]?[$£€¥₹]?({_AMOUNT}))?"
+    r"(?:\s?(thousand|million|billion|trillion)\b|\s?(bn|mn|tn|[kKmMbB])(?![\w]))?"
+)
+_CENTS = re.compile(r"(?<![\w.])(\d+)\s?¢")
+
+
+def _amount_words(amount: str, names: tuple[str, str, str, str]) -> str:
+    one, many, sub_one, sub_many = names
+    whole, _, cents = amount.replace(",", "").partition(".")
+    if cents and len(cents) == 2 and sub_one:
+        w, c = int(whole), int(cents)
+        sub = f"{c} {sub_one if c == 1 else sub_many}"
+        if w == 0:
+            return sub
+        main = f"{w} {one if w == 1 else many}"
+        return main if c == 0 else f"{main} and {sub}"
+    if cents:
+        return f"{whole}.{cents} {many}"
+    return f"{whole} {one if whole == '1' else many}"
+
+
+def _money(text: str, vault: _Vault) -> str:
+    if "¢" in text:
+        text = _CENTS.sub(lambda m: vault.put(f"{m.group(1)} cent" + ("" if m.group(1) == "1" else "s")), text)
+    if not any(c in text for c in _CURRENCIES):
+        return text
+
+    def repl(m: re.Match[str]) -> str:
+        sign, symbol, first, second, scale_word, scale_abbr = m.groups()
+        names = _CURRENCIES[symbol]
+        if _ARTICLE_BEFORE.search(m.string[: m.start()]):
+            names = (names[0], names[0], names[2], names[2])  # "a $5 tax" -> "a 5 dollar tax"
+        scale = scale_word or _SCALE_ABBREVIATIONS.get(scale_abbr or "", "")
+        minus = "minus " if sign else ""
+        plain = [a.replace(",", "") for a in (first, second) if a]
+        if scale:
+            return vault.put(f"{minus}{' to '.join(plain)} {scale} {names[1]}")
+        if second is None:
+            return vault.put(minus + _amount_words(first, names))
+        if "." in first or "." in second:
+            return vault.put(f"{minus}{_amount_words(first, names)} to {_amount_words(second, names)}")
+        return vault.put(f"{minus}{' to '.join(plain)} {names[1]}")
+
+    return _MONEY.sub(repl, text)
+
+
+# Phone numbers are read digit by digit, in their groups.
+_PHONE = re.compile(
+    r"(?<![\w+\-.(])(?:(\+?1)[\s.-])?(?:\((\d{3})\)\s?|(\d{3})[.-])(\d{3})[.-](\d{4})(?![\w-]|\.\d)"
+)
+_LOCAL_PHONE = re.compile(r"(?<![\w+\-.(])(\d{3})-(\d{4})(?![\w-]|\.\d)")
+
+
+def _phone_numbers(text: str, vault: _Vault) -> str:
+    if not re.search(r"\d{3}[-.]\d{4}", text):
+        return text
+
+    def spoken(groups: tuple[str | None, ...]) -> str:
+        return vault.put(", ".join(" ".join(g.lstrip("+")) for g in groups if g))
+
+    text = _PHONE.sub(lambda m: spoken(m.groups()), text)
+    return _LOCAL_PHONE.sub(
+        lambda m: spoken(m.groups()) if _PHONE_WORDS.search(m.string[max(0, m.start() - 30) : m.start()]) else m.group(),
+        text,
+    )
+
+
+# Clock times, ratios, thousands separators and decimals, as the very last step. Decimals become
+# "3 point 5": Kokoro's phonemizer cuts "3.5" in two ("three. five") whenever the utterance also
+# ends with a period, and "2,500" in two when it ends with a comma.
+_RATIO_WORDS = re.compile(r"(?i)\b(?:ratios?|odds|proportions?|dilut\w*|mix\w*|scale)\b")
+_RATIO = re.compile(r"(?<![\d:.])(\d{1,4}):(\d{1,4})(?![\d:]|\.\d)")
+_CLOCK = re.compile(r"(?<![\d:.])([01]?\d|2[0-4]):([0-5]\d)(?![\d:]|\.\d)")
+_AM_PM_NEXT = re.compile(r"\s?[AaPp]\.?\s?[Mm]\b")
+_THOUSANDS = re.compile(r"(?<![\d.,])\d{1,3}(?:,\d{3})+(?![\d]|,\d)")
+_DECIMAL = re.compile(r"(?<![\w.])(\d+)\.(\d+)(?![\d]|\.\d)")
+
+
+def _clock_repl(m: re.Match[str]) -> str:
+    hour, minutes = int(m.group(1)), m.group(2)
+    if minutes == "00":
+        if _AM_PM_NEXT.match(m.string, m.end()):
+            return str(hour)  # "9:00 A M" -> "9 A M"
+        return f"{hour} o'clock" if 1 <= hour <= 12 else f"{hour} hundred"
+    if minutes[0] == "0":
+        return f"{hour} oh {minutes[1]}"  # "10:05" -> "ten oh five"
+    return f"{hour} {minutes}"  # "3:30" -> "three thirty" (Kokoro pauses at a colon)
+
+
+def _spoken_numbers(text: str) -> str:
+    if not any(c.isdigit() for c in text):
+        return text
+    if ":" in text:
+        if _RATIO_WORDS.search(text):
+            text = _RATIO.sub(r"\1 to \2", text)
+        text = _CLOCK.sub(_clock_repl, text)
+    if "," in text:
+        text = _THOUSANDS.sub(lambda m: m.group().replace(",", ""), text)
+    if "." in text:
+        text = _DECIMAL.sub(lambda m: f"{m.group(1)} point {' '.join(m.group(2))}", text)
+    return text
+
+
 # --------------------------------------------------------------------------- symbols
 
 _GREEK = {
@@ -701,7 +972,9 @@ _FORMULA = re.compile(
 )
 _SUP_RUN = re.compile("[" + _SUPERSCRIPTS + "]+")
 _SUB_RUN = re.compile("[" + _SUBSCRIPTS + "]+")
-_PROSE_POWER = re.compile(r"(?<![\w^\\])([A-Za-z]|\d+(?:\.\d+)?|\))\^(\{[^{}]{1,40}\}|[-−+]?[A-Za-z0-9]+)")
+_PROSE_POWER = re.compile(
+    r"(?<![\w^\\])([A-Za-z]|\d+(?:\.\d+)?|\))\^(\{[^{}]{1,40}\}|\([^()]{1,40}\)|[-−+]?\d+\.\d+|[-−+]?[A-Za-z0-9]+)"
+)
 _PROSE_LATEX = re.compile(
     r"\\(?:frac|dfrac|tfrac|binom|sqrt)(?:\[[^\]]{1,5}\])?\{[^{}]{1,80}\}(?:\{[^{}]{1,80}\})?"
 )
@@ -830,8 +1103,14 @@ _add_units(
     Sv = sievert
     mSv = millisievert
     Bq = becquerel
+    mEq = milliequivalent
+    s sec = second
+    h = hour
     """
 )
+# Units that are also ordinary letters or words, read as units only after "<number> " ("3 s", "2 h").
+_SPACED_ONLY_UNITS = frozenset({"s", "sec", "h", "K", "M"})
+_ARTICLE_BEFORE = re.compile(r"(?:^|[\s(])[Aa]n?\s+$")
 # The unit after a "/" ("m/s", "mg/kg") is read in the singular.
 _PER_UNITS: dict[str, str] = {k: v[0] for k, v in _UNITS.items()}
 _PER_UNITS.update({"s": "second", "sec": "second", "h": "hour", "d": "day", "day": "day", "min": "minute",
@@ -844,11 +1123,16 @@ def _unit_alternation(keys: list[str]) -> str:
     return "|".join(re.escape(k) for k in sorted(keys, key=len, reverse=True))
 
 
+# The power after a unit: "m²", "s⁻¹", and the flattened forms PDFs and plain text use: "m/s^2",
+# "kg/m2", "cm3" (a bare 2 or 3 only after a length unit).
+_UNIT_POWER = r"([²³]|⁻¹|\^\{?[23]\}?|\^\{?[-−]1\}?|(?<=m)[23](?![\d.,]\d))?"
 _UNIT_AFTER_NUMBER = re.compile(
-    rf"(?<![\w.])([$£€¥]?)(\d{{1,3}}(?:,\d{{3}})+(?:\.\d+)?|\d+(?:\.\d+)?|\.\d+)([⁰¹²³⁴⁵⁶⁷⁸⁹⁻]*)\s?"
+    rf"(?<![\w.])([$£€¥]?)(\d{{1,3}}(?:,\d{{3}})+(?:\.\d+)?|\d+(?:\.\d+)?|\.\d+)([⁰¹²³⁴⁵⁶⁷⁸⁹⁻]*)(\s?|-)"
     rf"({_unit_alternation(list(_UNITS))})"
-    rf"(?:/({_unit_alternation(list(_PER_UNITS))}))?([²³]|⁻¹)?(?![\w/])"
+    rf"(?:/({_unit_alternation(list(_PER_UNITS))}))?{_UNIT_POWER}(?![\w/+])"
 )
+# "120/min", "3/day": a count per unit of time.
+_PER_AFTER_NUMBER = re.compile(r"(?<=\d)/(min|h|hr|s|sec|d|day|wk|week|mo|month|yr|year)(?![\w/])")
 _UNIT_AFTER_PER = re.compile(
     rf"(?:(?<=\bper )|(?<=[a-z]{{3}})/)"
     rf"({_unit_alternation([k for k in _UNITS if len(k) > 1])})([²³])?(?![\w/])"
@@ -861,19 +1145,23 @@ _DEGREES = re.compile(r"(?<![\w.])(-?\d+(?:\.\d+)?)\s?(?:°\s?([CFK])\b|(℃)|(�
 
 
 def _unit_repl(m: re.Match[str]) -> str:
-    money, number, exponent, unit, per, power = m.groups()
+    money, number, exponent, sep, unit, per, power = m.groups()
     if money and unit in _MONEY_AMBIGUOUS:
         return m.group()
-    if unit in ("K", "M") and not re.search(r"\d\s", m.group()):
-        return m.group()  # "10K run", "5M users"
+    if unit in _SPACED_ONLY_UNITS and sep != " ":
+        return m.group()  # "10K run", "5M users", "1s orbital"
     singular, plural = _UNITS[unit]
-    one = number in ("1", "1.0") and not exponent
+    # "1 kg", and attributive uses: "a 2 kg ball", "a 10-mL syringe".
+    one = (number in ("1", "1.0") and not exponent) or sep == "-" or bool(_ARTICLE_BEFORE.search(m.string[: m.start()]))
     name = singular if one else plural
+    power = {"^2": "²", "^{2}": "²", "2": "²", "^3": "³", "^{3}": "³", "3": "³"}.get(power or "", power)
+    if power and power not in "²³":
+        power = "⁻¹"
     if power == "⁻¹":
         return f"{money}{number}{exponent} per {singular}" + (f" per {_PER_UNITS[per]}" if per else "")
     if power and not per:
         name = ("square " if power == "²" else "cubic ") + name
-    out = f"{money}{number}{exponent} {name}"
+    out = f"{money}{number}{exponent}{sep or ' '}{name}"
     if per:
         out += f" per {_PER_UNITS[per]}"
         if power:
@@ -892,7 +1180,8 @@ def _per_unit_repl(m: re.Match[str]) -> str:
 
 def _degrees_repl(m: re.Match[str]) -> str:
     number, scale, celsius, fahrenheit = m.groups()
-    unit = "degree" if number in ("1", "-1", "1.0") else "degrees"
+    one = number in ("1", "-1", "1.0") or _ARTICLE_BEFORE.search(m.string[: m.start()])
+    unit = "degree" if one else "degrees"  # "a 45 degree angle"
     if scale == "K":
         return f"{number} kelvin"
     if scale == "C" or celsius:
@@ -902,11 +1191,105 @@ def _degrees_repl(m: re.Match[str]) -> str:
     return f"{number} {unit}"
 
 
+_ELEMENTS = frozenset(
+    """
+    H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe Co Ni Cu Zn Ga Ge As Se Br Kr Rb Sr Y
+    Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te I Xe Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu Hf Ta W Re
+    Os Ir Pt Au Hg Tl Pb Bi Po At Rn Fr Ra Ac Th Pa U Np Pu Am Cm Bk Cf Es Fm Md No Lr Rf Db Sg Bh Hs Mt Ds Rg
+    Cn Nh Fl Mc Lv Ts Og
+    """.split()
+)
+# Mixed-case words made of element symbols that are not formulas.
+_NOT_FORMULAS = frozenset({"HeLa", "NaN", "CoV", "SoC", "BeOS", "NiCd"})
+_STATES = {"(aq)": "aqueous", "(s)": "solid", "(l)": "liquid", "(g)": "gas"}
+# "CO2", "2H2O", "NaCl", "Ca2+", "SO42-", "Na+", "NaCl(aq)". The charge must end the token.
+_ASCII_FORMULA = re.compile(
+    r"(?<![\w.@'’])(\d{1,2}(?=[A-Z]))?((?:[A-Z][a-z]?\d{0,3}){1,12})(\d?[+\-−](?![\w+\-−]))?(\((?:aq|s|l|g)\))?"
+)
+_FORMULA_HINT = re.compile(r"[A-Z][a-z]?\d|[A-Z][a-z]?[+\-−](?![\w])|[a-z][A-Z]")
+
+
+def _spell_symbol(symbol: str) -> str:
+    """Voices say "Ca" as "kah" and "Na" as "nah"; chemists spell symbols: "C A", "N A"."""
+    return " ".join(symbol.upper())
+
+
+def _ascii_formula_repl(m: re.Match[str]) -> str:
+    coefficient, body, charge, state = m.groups()
+    s, end = m.string, m.end()
+    if end < len(s) and (s[end].isalnum() or s[end] == "_"):
+        return m.group()  # part of a longer word
+    tail = ""
+    if charge and charge[-1] in "-−" and re.match(r"\s+(?:and|or|to)\b", s[end:]):
+        body, charge, tail = body + charge[:-1], None, charge[-1]  # "CO2- and O2-rich": a hyphen
+    parts = re.findall(r"([A-Z][a-z]?)(\d*)", body)
+    if "".join(sym + n for sym, n in parts) != body or any(sym not in _ELEMENTS for sym, _ in parts):
+        return m.group()
+    counted = any(n for _, n in parts)
+    if not counted and not charge:
+        # Without digits or a charge only clear compounds count: "NaCl", "KOH" stays an acronym.
+        if len(parts) < 2 or body.isupper() or body in _NOT_FORMULAS or coefficient:
+            return m.group()
+    if charge and parts[-1][1] and len(parts[-1][1]) >= 2 and len(charge) == 1:
+        # "SO42-" is SO4 with a 2- charge, not 42 oxygens.
+        sym, n = parts[-1]
+        parts[-1] = (sym, n[:-1])
+        charge = n[-1] + charge
+    words = [coefficient] if coefficient else []
+    for sym, n in parts:
+        words.append(_spell_symbol(sym))
+        if n:
+            words.append(n)
+    if charge:
+        words.append(f"{charge[:-1]} {'plus' if charge[-1] == '+' else 'minus'}".strip())
+    if state:
+        words.append(_STATES[state])
+    return " ".join(words) + tail
+
+
+# Math in running text: "f(x)" is "f of x", "f'(x)" "f prime of x", "P(A|B)" "P of A given B".
+_FUNCTION_CALL = re.compile(
+    r"(?<![\w'’.\\])([fghpqruvwyFGPNOt])('{1,2}|′{1,2})?"
+    r"\(([A-Za-z0-9]{1,3}(?:\s?[,|]\s?[A-Za-z0-9]{1,3}){0,2})\)"
+)
+_TRIG = re.compile(r"\b(sin|cos|tan|ln)(?=\s?(?:\(|\^|\d|[A-Za-zα-ωθ](?![\w])))")
+_TRIG_WORDS = {"sin": "sine", "cos": "cosine", "tan": "tangent", "ln": "natural log"}
+_PAREN_DIVISION = re.compile(r"(?<=[\w)])/(?=\()|(?<=\))/(?=[\w(])")  # "sin(x)/x", "1/(1 - r)"
+_LIST_LETTER_A = re.compile(r"(?:^|(?<=[\s;:]))(\(?)a\)(?=\s)")  # "a) first": not the article "uh"
+
+
+def _function_call_repl(m: re.Match[str]) -> str:
+    name, primes, args = m.groups()
+    args = re.sub(r"\s?\|\s?", " given ", re.sub(r"\s?,\s?", ", ", args))
+    return f"{name}{' prime' * len(primes or '')} of {args}"
+
+
+def _prose_math(text: str, vault: _Vault) -> str:
+    """Chemical formulas, function notation and trig names in ordinary sentences."""
+    if _FORMULA_HINT.search(text):
+        text = _ASCII_FORMULA.sub(lambda m: _vault_if_changed(vault, m, _ascii_formula_repl(m)), text)
+    if "(" in text:
+        text = _FUNCTION_CALL.sub(_function_call_repl, text)
+        if "/" in text:
+            text = _PAREN_DIVISION.sub(" over ", text)
+    if ")" in text:
+        text = _LIST_LETTER_A.sub(r"\1A)", text)
+    if re.search(r"\b(?:sin|cos|tan|ln)\b", text):
+        text = _TRIG.sub(lambda m: _TRIG_WORDS[m.group(1)], text)
+    return text
+
+
+def _vault_if_changed(vault: _Vault, m: re.Match[str], spoken: str) -> str:
+    return spoken if spoken == m.group() else vault.put(spoken)
+
+
 def _formula_repl(m: re.Match[str]) -> str:
     body, charge = m.group(1), m.group(2)
     if not charge and not re.search("[₀-₉]", body):
         return m.group()
     parts = re.findall(r"[A-Z][a-z]?|[₀-₉]+", body)
+    if all(p in _ELEMENTS for p in parts if p[0].isalpha()):
+        parts = [_spell_symbol(p) if p[0].isalpha() else p for p in parts]
     words = [p.translate(_SUB_MAP) for p in parts]
     if charge:
         digits = charge[:-1].translate(_SUP_MAP)
@@ -948,10 +1331,39 @@ def _greek_repl(m: re.Match[str]) -> str:
 def _fraction_repl(m: re.Match[str]) -> str:
     whole, frac = m.groups()
     standalone, after_whole = _FRACTIONS[frac]
-    return f"{whole} and {after_whole}" if whole else f" {standalone}"
+    return f"{whole} and {after_whole} " if whole else f" {standalone} "
 
 
 _DENOMINATORS = {2: ("half", "halves"), 4: ("quarter", "quarters")}
+# "1/2 cup", "2/3 of the class", "3/4 time": halves, thirds and quarters. Other slashes ("24/7",
+# "9/11", "4/5 stars", dates) are left alone.
+_SIMPLE_FRACTION = re.compile(r"(?<![\w/.,])([1-3])/([2-4])(?![\w/]|[.,]\d)")
+_BLOOD_PRESSURE = re.compile(
+    r"(?:(?<=\bBP )|(?<=\bBP: )|(?<=\bBP of )|(?<=pressure )|(?<=pressure of )|(?<=pressure is )"
+    r"|(?<=pressure was ))(\d{2,3})/(\d{2,3})\b|\b(\d{2,3})/(\d{2,3})(?=\s?mm\s?Hg)"
+)
+# x̄ (x bar), p̂ (p hat): a letter with a combining accent, standing alone as a variable.
+_ACCENT_WORDS = {"\u0304": "bar", "\u0305": "bar", "\u0302": "hat", "\u0303": "tilde", "\u0307": "dot",
+                 "\u0308": "double dot", "\u20d7": "vector"}
+_ACCENTED_LETTERS = {
+    ch: (unicodedata.normalize("NFD", ch)[0], _ACCENT_WORDS[unicodedata.normalize("NFD", ch)[1]])
+    for ch in map(chr, (*range(0xC0, 0x250), *range(0x1E00, 0x1F00)))
+    if len(unicodedata.normalize("NFD", ch)) == 2
+    and unicodedata.normalize("NFD", ch)[0].isascii()
+    and unicodedata.normalize("NFD", ch)[1] in _ACCENT_WORDS
+}
+_ACCENTED_VARIABLE = re.compile(
+    "(?<![^\\W\\d_])(?:([A-Za-zα-ωΑ-Ω])([" + "".join(_ACCENT_WORDS) + "])|(["
+    + "".join(_ACCENTED_LETTERS) + "]))(?![^\\W\\d_])"
+)
+
+
+def _accented_variable_repl(m: re.Match[str]) -> str:
+    if m.group(3):
+        letter, word = _ACCENTED_LETTERS[m.group(3)]
+    else:
+        letter, word = m.group(1), _ACCENT_WORDS[m.group(2)]
+    return f"{letter} {word}" if word != "vector" else f"vector {letter}"
 
 
 def _fraction_slash_repl(m: re.Match[str]) -> str:
@@ -964,6 +1376,7 @@ def _fraction_slash_repl(m: re.Match[str]) -> str:
 
 
 _NUMBER_TOKEN = re.compile(r"^[-−]?(?:\d[\d,]*(?:\.\d+)?|\.\d+)%?$")
+_COEFFICIENT_TERM = re.compile(r"\d+(?:\.\d+)?[a-rt-z]")  # "2x" in "y = 2x - 1" (not "1980s")
 
 
 def _is_operand(token: str) -> bool:
@@ -976,6 +1389,7 @@ def _is_operand(token: str) -> bool:
     core = token.strip("'′")
     return (
         (len(core) == 1 and core.isalpha())
+        or bool(_COEFFICIENT_TERM.fullmatch(core))
         or core in _GREEK_NAMES
         or core in ("squared", "cubed")
         or token[-1] in ")]"
@@ -1021,6 +1435,9 @@ def _between_operands(spoken: str, otherwise: str) -> Callable[[re.Match[str]], 
     return fn
 
 
+_TERM = re.compile(r"[\w.]*\d[\w.]*|[A-Za-z]")  # "100", "2P", "x": a term of an equation
+
+
 def _spaced_hyphen(m: re.Match[str]) -> str:
     """" - " is minus between variables, a range between rising numbers, else a dash pause."""
     left = _left_token(m.string, m.start())
@@ -1036,6 +1453,8 @@ def _spaced_hyphen(m: re.Match[str]) -> str:
         return " to " if rising else " - "
     if _is_operand(left) and _is_operand(right):
         return " minus "
+    if " equals " in m.string and _TERM.fullmatch(left) and _TERM.fullmatch(right):
+        return " minus "  # "Qd = 100 - 2P"
     if left[-1:].isalnum() and right[:1].isalnum():
         return ", "  # "The cell - the basic unit - is"
     return " - "
@@ -1150,9 +1569,12 @@ _ASCII_STEPS = _steps(
     (_ARROW_ASCII.pattern, lambda m: " implies " if "=" in m.group() else " leads to ", ">"),
     (r"<=|=<", _comparison("is less than or equal to", "at most", strict=True), "="),
     (r">=|=>", _comparison("is greater than or equal to", "at least", strict=True), "="),
-    (r"!=", _between_operands("is not equal to", " "), "!="),
-    (r"={3,}", " ", "==="),
-    (r"==?", " equals ", "="),
+    (r"!==", _between_operands("is not identical to", " not triple equals "), "!=="),
+    (r"!=", _between_operands("is not equal to", " not equals "), "!="),
+    (r"={4,}", " ", "===="),
+    (r"===", _between_operands("is identical to", " triple equals "), "==="),  # "use === instead of =="
+    (r"==", _between_operands("equals", " double equals "), "=="),
+    (r"=", " equals ", "="),
     (r"<", _comparison("is less than", "less than", strict=True), "<"),
     (r">", _comparison("is greater than", "more than", strict=True), ">"),
     (r"~", _tilde_repl, "~"),
@@ -1186,8 +1608,18 @@ def _symbols(text: str) -> str:
     if "\\" in text:
         text = _PROSE_LATEX.sub(lambda m: " " + verbalize_math(m.group()) + " ", text)
         text = _LATEX_CMD.sub(lambda m: f" {_latex_word(m.group(1))} ", text)
+    has_digit = any(c.isdigit() for c in text)
+    if has_digit:
+        if "/" in text:
+            text = _BLOOD_PRESSURE.sub(r"\1 over \2", text)
+        # Units first, so "m/s^2" and "10^-3 M" keep their units.
+        text = _UNIT_AFTER_NUMBER.sub(_unit_repl, text)
+        if "/" in text:
+            text = _PER_AFTER_NUMBER.sub(lambda m: " per " + _PER_UNITS.get(m.group(1), m.group(1)), text)
+            text = _SIMPLE_FRACTION.sub(_fraction_slash_repl, text)
     if "^" in text:
         text = _PROSE_POWER.sub(lambda m: " " + verbalize_math(m.group()) + " ", text)
+        text = _WS.sub(" ", text)
     if "." in text:
         text = _LEADING_DOT.sub(r"0.\1", text)  # "p < .05": voices say "dot zero five"
     if not ascii_only:
@@ -1201,8 +1633,6 @@ def _symbols(text: str) -> str:
         text = _FRACTION_SLASH.sub(_fraction_slash_repl, text)
         text = _FRACTION_RE.sub(_fraction_repl, text)
         text = _SQRT.sub(_sqrt_repl, text)
-    if any(c.isdigit() for c in text):
-        text = _UNIT_AFTER_NUMBER.sub(_unit_repl, text)
     if "per " in text or "/" in text:
         text = _UNIT_AFTER_PER.sub(_per_unit_repl, text)
     if not ascii_only:
@@ -1211,7 +1641,10 @@ def _symbols(text: str) -> str:
         text = _FORMULA.sub(_formula_repl, text)
         text = _SUP_RUN.sub(_superscript_repl, text)
         text = _SUB_RUN.sub(lambda m: " " + " ".join(m.group().translate(_SUB_MAP)) + " ", text)
+        text = _ACCENTED_VARIABLE.sub(_accented_variable_repl, text)
         text = _GREEK_RE.sub(_greek_repl, text)
+        if "△" in text:  # "△ABC" is a triangle; a lone △ marks the end of a definition
+            text = re.sub(r"△(?!\s?[A-Z]{2,3}\b)", " ", text)
         for sym, words in _SIMPLE_SYMBOLS:
             if sym in text:
                 text = text.replace(sym, words)
@@ -1235,6 +1668,8 @@ _KEEP_CAPS = frozenset(
     """.split()
 )
 _CAPS_WORD = re.compile(r"[^\W\d_]+(?:['’\-][^\W\d_]+)*")
+_RHYME_WORDS = re.compile(r"(?i)\b(?:rhym\w*|scheme|stanzas?|sonnets?|quatrains?|couplets?|tercets?|sestets?)\b")
+_RHYME_SCHEME = re.compile(r"\b[A-H]{2,8}\b")
 _SHORT_ROMAN = re.compile(r"[IVX]{1,4}")
 
 
@@ -1242,6 +1677,8 @@ def _fix_caps(text: str) -> str:
     """Title-case shouted words ("CHAPTER ONE: THE CELL" -> "Chapter One: The Cell")."""
     if not re.search(r"[A-Z]{2}", text):
         return text
+    if _RHYME_WORDS.search(text):  # "the rhyme scheme ABAB CDCD": letters, not words
+        text = _RHYME_SCHEME.sub(lambda m: " ".join(m.group()), text)
     words = list(_CAPS_WORD.finditer(text))
     out: list[str] = []
     pos = 0

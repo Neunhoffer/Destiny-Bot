@@ -801,20 +801,18 @@ def _flat_blocks(root: Tag, page: int | None) -> list[Block]:
                 blocks.append(block)
             parts.clear()
 
+    # (dropped, nearest block-level ancestor) of every element, from its parent's: one pass, no recursion
+    state: dict[int, tuple[bool, Tag | None]] = {}
+    top = (False, None)
     for node in root.descendants:
-        if not isinstance(node, NavigableString) or isinstance(node, _IGNORED_STRINGS):
+        parent = node.parent
+        dropped, owner = top if parent is root else state.get(id(parent), top)
+        if isinstance(node, Tag):
+            name = _local(node)
+            block = name in _BLOCK_TAGS or name in _HEADINGS
+            state[id(node)] = (dropped or walker._skip(node), node if block else owner)
             continue
-        owner: Tag | None = None
-        dropped = False
-        for parent in node.parents:
-            if parent is root or not isinstance(parent, Tag):
-                break
-            if walker._skip(parent):
-                dropped = True
-                break
-            if owner is None and (_local(parent) in _BLOCK_TAGS or _local(parent) in _HEADINGS):
-                owner = parent
-        if dropped:
+        if not isinstance(node, NavigableString) or isinstance(node, _IGNORED_STRINGS) or dropped:
             continue
         if owner is not current:
             flush()

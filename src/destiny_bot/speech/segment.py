@@ -18,8 +18,8 @@ _CLOSERS = "\"'”’»)]}*†‡¹²³⁰⁴⁵⁶⁷⁸⁹"
 _TERMINAL = re.compile(r"[.!?‽…]+[" + re.escape(_CLOSERS) + r"]*(?=\s)")
 _PARAGRAPH_BREAK = re.compile(r"\n[^\S\n]*\n")
 _OPENERS = "\"'“‘«([{¿¡"
-# A following character that never starts a new sentence.
-_NO_SENTENCE_START = frozenset(",;:.!?)]}…%/-–—")
+# A following character that never starts a new sentence (operators: "x^2/2! + x^3/3!", "5! = 120").
+_NO_SENTENCE_START = frozenset(",;:.!?)]}…%/-–—+=×÷·^<>≤≥≈−")
 
 # Never end a sentence after these (case-sensitive, without the period).
 _ALWAYS_ABBREV = frozenset(
@@ -35,8 +35,11 @@ _NUMBER_ABBREV = frozenset(
     """
     No no Nos nos Nr nr p pp Art art Ref Refs ref refs Tab Thm Ex ex Pt pt Para para
     Jan Feb Mar Apr Jun Jul Aug Sep Sept Oct Nov Dec c ed Ed Op op Fn fn n nn l ll
+    Def Defn Prop Cor Lem Prob Exer Rem Conj Alg cl Cl ext Ext
     """.split()
 )
+# A Roman numeral that numbers something ("Art. I, § 8", "Pt. II covers"), not the pronoun "I".
+_ROMAN_NUMBER = re.compile(r"[IVXLC]+(?=[,.;:)])|[IVXLC]{2,}\b")
 # Usually mid-sentence ("John Smith Jr. said", "Apple Inc. announced"), but they can end one:
 # split only when a very common sentence opener follows.
 _WEAK_ABBREV = frozenset("Jr Sr Esq Inc Ltd Co Corp Bros Ave Blvd Rd Ln Hwy Pl Sq".split())
@@ -181,7 +184,9 @@ def _is_boundary(text: str, term_start: int, term_end: int, nxt: int, first: int
         return True
     if word in _ALWAYS_ABBREV:
         return False
-    if word in _NUMBER_ABBREV and (following.isdigit() or following == "("):
+    if word in _NUMBER_ABBREV and (
+        following.isdigit() or following == "(" or (word[0].isupper() and _ROMAN_NUMBER.match(text, nxt))
+    ):
         return False
     if len(word) == 1 and word.isalpha():
         if word == "v":  # Smith v. Jones

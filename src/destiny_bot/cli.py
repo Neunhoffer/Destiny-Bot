@@ -34,6 +34,7 @@ import threading
 import time
 import traceback
 from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from pathlib import Path
 from typing import Any, Callable, Sequence, TextIO
 
@@ -502,6 +503,15 @@ def _start_position(lib: Library, doc: Document, section_id: str | None) -> tupl
     return 0, 0, False
 
 
+def _wait(future: Future[AudioClip]) -> AudioClip:
+    """``future.result()`` in short waits: on Windows an endless wait doesn't notice Ctrl+C."""
+    while True:
+        try:
+            return future.result(timeout=0.2)
+        except FutureTimeout:
+            continue
+
+
 def _cmd_read(args: argparse.Namespace) -> int:
     lib = Library()
     doc = resolve_book(lib, args.book)
@@ -545,7 +555,7 @@ def _cmd_read(args: argparse.Namespace) -> int:
             for i in range(first, len(plan)):
                 utterance = plan[i]
                 assert pending is not None
-                clip = pending.result()
+                clip = _wait(pending)
                 pending = pool.submit(synthesize, plan[i + 1].speech) if i + 1 < len(plan) else None
                 lib.set_progress(doc.id, section.id, i)
                 print(_utterance_text(section, utterance), flush=True)

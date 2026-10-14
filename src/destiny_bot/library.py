@@ -22,7 +22,6 @@ import shutil
 import sys
 import tempfile
 import threading
-import time
 from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -150,6 +149,10 @@ class Library:
         doc = ingest.load_document(path, source_name=name, progress=progress)
         if doc.id != doc_id:
             doc = doc.model_copy(update={"id": doc_id})
+        if progress is not None:
+            # Also the job's last chance to stop: the user may have cancelled, or erased
+            # all their data, while a slow file was being read.
+            progress(1.0, "Saving to your library")
         self._store(doc, lambda dest_dir: _store_source_copy(path, dest_dir, _source_extension(name, path)))
         return doc
 
@@ -174,9 +177,15 @@ class Library:
     def _store(self, doc: Document, write_source: Callable[[Path], None]) -> None:
         book_dir = self.root / doc.id
         book_dir.mkdir(parents=True, exist_ok=True)
-        write_source(book_dir)
         doc_path = book_dir / "document.json"
-        _atomic_write(doc_path, doc.model_dump_json().encode("utf-8"))
+        try:
+            write_source(book_dir)
+            _atomic_write(doc_path, doc.model_dump_json().encode("utf-8"))
+        except BaseException:
+            # E.g. the disk is full: don't leave an unlisted folder holding a copy of the file.
+            if not doc_path.exists():
+                _rmtree(book_dir)
+            raise
         self._remember(doc, doc_path)
         now = utc_now()
         with self._meta_lock:
@@ -531,15 +540,7 @@ def _atomic_write(path: Path, data: bytes) -> None:
 
 def _replace(src: Path, dst: Path) -> None:
     """``os.replace`` that retries briefly on Windows, where a reader or virus scanner may hold the file."""
-    attempts = 8 if os.name == "nt" else 1
-    for attempt in range(attempts):
-        try:
-            os.replace(src, dst)
-            return
-        except PermissionError:
-            if attempt == attempts - 1:
-                raise
-            time.sleep(0.05 * (attempt + 1))
+    config.replace_file(src, dst)
 
 
 def _unlink(path: Path) -> None:
@@ -581,16 +582,26 @@ def _wipe_problem_message(problems: list[str]) -> str:
     return f"Some files couldn't be deleted ({shown}). Close other programs using them and try again."
 
 
+# The reader window's own browser storage (localStorage, cache), made by desktop.py:
+# the native window's profile and the Edge/Chrome app-mode fallback profile.
+BROWSER_DATA_DIRS = ("webview", "browser-profile")
+_ERASE_PENDING = ".erase-pending"
+
+
 def wipe_user_data() -> None:
-    """Delete the library, audio cache, exports, temp files and settings (with the API key).
+    """Delete the library, audio cache, exports, temp files, logs, the reader window's
+    browser data and settings (with the API key).
 
     Downloaded voices are kept. Empty folders are recreated afterwards. Raises OSError
-    with a friendly message if some files couldn't be deleted.
+    with a friendly message if some files couldn't be deleted. Browser data the open
+    window still holds (Windows locks those files) is erased the next time Athena starts.
     """
     root = config.data_dir()
     problems: list[str] = []
     for name in ("library", "cache", "exports", "tmp"):
         _rmtree(root / name, problems)
+    _empty_logs(root / "logs", problems)
+    _erase_browser_data(root)
     for path in [config.settings_path(), *root.glob(".settings-*")]:
         try:
             path.unlink()
@@ -603,3 +614,55 @@ def wipe_user_data() -> None:
     config.exports_dir()
     if problems:
         raise OSError(_wipe_problem_message(problems))
+
+
+def _empty_logs(folder: Path, problems: list[str]) -> None:
+    """Empty the log files (they can name books, e.g. in import errors).
+
+    Truncated rather than deleted: the running app keeps its log open, and on Windows
+    an open file can't be deleted.
+    """
+    try:
+        files = [p for p in folder.iterdir() if p.is_file()]
+    except OSError:
+        return
+    for path in files:
+        try:
+            os.truncate(path, 0)
+        except OSError:
+            problems.append(str(path))
+
+
+def _erase_browser_data(root: Path) -> None:
+    """Delete the reader window's browser profiles; what the open window still holds
+    is remembered and erased by :func:`finish_pending_erase` at the next start."""
+    leftovers: list[str] = []
+    for name in BROWSER_DATA_DIRS:
+        _rmtree(root / name, leftovers)
+    marker = root / _ERASE_PENDING
+    if not leftovers:
+        _unlink(marker)
+        return
+    log.warning("The reader window still holds %d file(s); they will be erased at the next start", len(leftovers))
+    try:
+        _atomic_write(marker, b"erase the reader window's browser data at the next start\n")
+    except OSError as exc:
+        log.warning("Couldn't remember to finish erasing: %s", exc)
+
+
+def finish_pending_erase() -> None:
+    """Finish an "Erase all my data" that the open reader window kept from completing.
+
+    Call at start-up, before the window opens.
+    """
+    root = config.data_dir()
+    marker = root / _ERASE_PENDING
+    if not marker.exists():
+        return
+    leftovers: list[str] = []
+    for name in BROWSER_DATA_DIRS:
+        _rmtree(root / name, leftovers)
+    if leftovers:
+        log.warning("Still couldn't erase %d file(s) of the reader window's data", len(leftovers))
+    else:
+        _unlink(marker)

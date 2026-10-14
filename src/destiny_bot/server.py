@@ -43,7 +43,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from . import __version__, config
 from .ingest import SUPPORTED_EXTENSIONS, IngestError, source_type_for
 from .jobs import Job, JobManager, friendly_error
-from .library import Library, temp_dir, wipe_user_data
+from .library import Library, finish_pending_erase, temp_dir, wipe_user_data
 from .models import Block, Document, Section
 from .tts.base import AudioClip, EngineUnavailable, TTSEngine, TTSError
 
@@ -712,6 +712,7 @@ def create_app(
 
     _remove_stale(temp_dir(), "upload-", 6 * 3600)
     _remove_stale(config.exports_dir(), "j_", 3600)
+    finish_pending_erase()  # before the reader window opens its browser profile again
 
     app = FastAPI(title="Athena", version=__version__, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.library = library
@@ -1453,6 +1454,7 @@ def _uvicorn_server(app: FastAPI, host: str, port: int) -> Any:
         host=host,
         port=port,
         log_level="warning",
+        log_config=None,  # uvicorn's default config needs a console; a windowed app has none
         access_log=False,
         lifespan="off",
         ws="none",

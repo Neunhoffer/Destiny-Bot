@@ -8,6 +8,7 @@ A job function receives its :class:`Job` handle, reports progress with
 
 from __future__ import annotations
 
+import errno
 import logging
 import secrets
 import shutil
@@ -77,11 +78,17 @@ def is_friendly_error(exc: BaseException) -> bool:
     return isinstance(exc, _friendly_types())
 
 
+DISK_FULL_MESSAGE = "Your computer's disk is full. Free up some space, then try again."
+_DISK_FULL_ERRNOS = frozenset(code for code in (getattr(errno, "ENOSPC", None), getattr(errno, "EDQUOT", None)) if code)
+
+
 def friendly_error(exc: BaseException) -> str:
     """A message for the UI: friendly errors pass through, anything else gets a short summary."""
     text = str(exc).strip()
     if is_friendly_error(exc) and text:
         return text
+    if isinstance(exc, OSError) and exc.errno in _DISK_FULL_ERRNOS:
+        return DISK_FULL_MESSAGE
     short = text.splitlines()[0] if text else type(exc).__name__
     if len(short) > _ERROR_DETAIL_CHARS:
         short = short[: _ERROR_DETAIL_CHARS - 1].rstrip() + "…"

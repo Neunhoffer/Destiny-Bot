@@ -4,6 +4,12 @@ Everything Athena stores lives under one folder (:func:`data_dir`) so that
 deleting that folder removes every trace of it. Set ``DESTINY_HOME`` to put the
 folder somewhere specific (the launcher scripts point it inside the app folder,
 so deleting the app folder removes the data too).
+
+Privacy from other users of the computer: on macOS and Linux the folder is made
+owner-only (0700) and settings.json, which may hold the API key, is 0600. Windows
+has no such mode bits; there the default folder, %LOCALAPPDATA%\\Athena, is
+readable only by the user (and administrators) through its inherited ACL. A
+``DESTINY_HOME`` elsewhere inherits that folder's ACL instead.
 """
 
 from __future__ import annotations
@@ -13,6 +19,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Any, Literal
 
@@ -37,8 +44,37 @@ def data_dir() -> Path:
     else:
         base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
         root = Path(base) / "athena"
-    root.mkdir(parents=True, exist_ok=True)
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if os.name == "posix":
+        _make_private(root)
     return root
+
+
+def _make_private(folder: Path) -> None:
+    """Keep other users of this computer out of the data folder (books, notes, audio).
+
+    Only for POSIX: on Windows the default folder is in the user's own %LOCALAPPDATA%.
+    """
+    try:
+        mode = folder.stat().st_mode
+        if mode & 0o077:
+            folder.chmod(mode & 0o700)
+    except OSError:  # a folder we don't own (e.g. a shared DESTINY_HOME): leave it alone
+        pass
+
+
+def replace_file(src: str | Path, dst: str | Path) -> None:
+    """``os.replace`` that retries briefly on Windows, where another reader or a virus
+    scanner holding ``dst`` open for a moment makes it fail with PermissionError."""
+    attempts = 8 if sys.platform == "win32" else 1
+    for attempt in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.05 * (attempt + 1))
 
 
 def library_dir() -> Path:
@@ -80,8 +116,9 @@ class Settings(BaseModel):
     online_tts_allowed: bool = False  # allow engines that send text to an online service
     ai_enabled: bool = False  # allow Claude study helpers (sends text to Anthropic)
     ai_model: str = DEFAULT_AI_MODEL
-    # Stored only in the local settings file (owner-only permissions). Never sent to the browser.
-    anthropic_api_key: str | None = None
+    # Stored only in the local settings file (owner-only permissions). Never sent to the browser,
+    # and left out of repr() so it can't end up in a log or a traceback.
+    anthropic_api_key: str | None = Field(default=None, repr=False)
 
     theme: Literal["system", "light", "dark"] = "system"
     font_scale: float = Field(default=1.0, ge=0.7, le=2.0)
@@ -122,7 +159,7 @@ def save_settings(settings: Settings) -> None:
                 fh.write(payload)
             if os.name == "posix":
                 os.chmod(tmp, 0o600)
-            os.replace(tmp, path)
+            replace_file(tmp, path)
         except BaseException:
             try:
                 os.unlink(tmp)
@@ -140,9 +177,20 @@ def update_settings(changes: dict[str, Any]) -> Settings:
         elif key == "voices" and isinstance(value, dict):
             current["voices"] = {**current["voices"], **value}
         elif key == "anthropic_api_key":
-            current[key] = (value or "").strip() or None
+            current[key] = _clean_api_key(value)
         else:
             current[key] = value
     settings = Settings.model_validate(current)
     save_settings(settings)
     return settings
+
+
+def _clean_api_key(value: Any) -> str | None:
+    """The pasted key without surrounding whitespace; ValueError if it can't be a real key."""
+    if value is not None and not isinstance(value, str):
+        raise ValueError("anthropic_api_key must be text.")
+    key = (value or "").strip()
+    if any(ch.isspace() for ch in key) or not key.isprintable():
+        # Never echo the key: the message may be shown or logged.
+        raise ValueError("That API key contains spaces or invisible characters. Copy it again and paste it.")
+    return key or None

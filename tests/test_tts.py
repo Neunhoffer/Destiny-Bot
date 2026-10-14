@@ -615,6 +615,95 @@ def test_onnx_telemetry_is_off_before_any_session(monkeypatch):
     assert events == ["telemetry off", "session"]
 
 
+# espeak-ng opens its data with the C library's narrow file functions: on Windows a UTF-8 path
+# like C:\Users\Zoë\... is read in the ANSI code page, isn't found, and espeak-ng calls exit(1).
+ZOE_DATA = r"C:\Users\Zoë\AppData\Local\Programs\Athena\_internal\espeak-ng-data"
+ZOE_SHORT = r"C:\Users\ZO7E2~1\AppData\Local\Programs\Athena\_internal\ESPEAK~1"
+
+
+def _windows_short_names(monkeypatch, short: str | None) -> list[str]:
+    asked: list[str] = []
+    monkeypatch.setattr(registry, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(registry, "_short_path_name", lambda path: asked.append(path) or short)
+    return asked
+
+
+def test_espeak_data_path_uses_windows_short_names(monkeypatch):
+    assert registry.espeak_data_path(Path("/opt/Zoë/espeak-ng-data")) == "/opt/Zoë/espeak-ng-data"  # UTF-8 is fine here
+    # espeak-ng 1.52 keeps the folder in a 160-byte buffer (230 on Windows): longer is "missing" + exit(1).
+    deep = "/Users/zoe/" + "Study folder/" * 10 + "site-packages/espeakng_loader/espeak-ng-data"
+    assert len(deep) > 159 and registry.espeak_data_path(deep) is None
+    asked = _windows_short_names(monkeypatch, ZOE_SHORT)
+    assert registry.espeak_data_path(r"C:\Athena\espeak-ng-data") == r"C:\Athena\espeak-ng-data" and asked == []
+    assert registry.espeak_data_path(ZOE_DATA) == ZOE_SHORT and asked == [ZOE_DATA]
+    _windows_short_names(monkeypatch, None)  # 8.3 names turned off on that drive
+    assert registry.espeak_data_path(ZOE_DATA) is None
+    _windows_short_names(monkeypatch, r"C:\Users\Zoë~1\x")
+    assert registry.espeak_data_path(ZOE_DATA) is None
+    long_ascii = "C:\\" + "Study folder\\" * 18 + "espeak-ng-data"
+    assert 229 < len(long_ascii) and registry.espeak_data_path(long_ascii) is None
+    _windows_short_names(monkeypatch, r"C:\STUDYF~1\STUDYF~1\ESPEAK~1")
+    assert registry.espeak_data_path(long_ascii) == r"C:\STUDYF~1\STUDYF~1\ESPEAK~1"
+
+
+def test_piper_hands_espeak_an_ascii_data_path(monkeypatch):
+    phonemize_espeak = pytest.importorskip("piper.phonemize_espeak")
+    import piper
+
+    monkeypatch.setattr(phonemize_espeak, "ESPEAK_DATA_DIR", Path(ZOE_DATA))
+    _windows_short_names(monkeypatch, ZOE_SHORT)
+    seen: list[dict] = []
+    monkeypatch.setattr(piper.PiperVoice, "load", staticmethod(lambda *a, **kw: seen.append(kw) or FakePiperVoice(a[0])))
+    install_fake_voice("en_US-test-medium")
+    engine = PiperEngine()
+    assert engine.is_available() == (True, "")
+    engine.synthesize("Hello")
+    assert seen[0]["espeak_data_dir"] == ZOE_SHORT
+
+    _windows_short_names(monkeypatch, None)
+    engine = PiperEngine()
+    ok, reason = engine.is_available()
+    assert not ok and "plain name" in reason and ZOE_DATA in reason
+    with pytest.raises(EngineUnavailable, match="plain name"):  # a friendly error, not espeak's exit(1)
+        engine.synthesize("Hello")
+    assert len(seen) == 1
+
+
+def test_kokoro_hands_espeak_an_ascii_data_path(monkeypatch):
+    import espeakng_loader
+    import onnxruntime
+    from kokoro_onnx import Kokoro
+    from phonemizer.backend.espeak.wrapper import EspeakWrapper
+
+    write_fake_kokoro(config.voices_dir() / "kokoro")
+    monkeypatch.setattr(espeakng_loader, "get_data_path", lambda: ZOE_DATA)
+    monkeypatch.setattr(onnxruntime, "InferenceSession", lambda *a, **kw: "session")
+
+    def from_session(session, voices, espeak_config=None):
+        EspeakWrapper.set_data_path(ZOE_DATA)  # what kokoro-onnx's tokenizer does
+        return FakeKokoro()
+
+    monkeypatch.setattr(Kokoro, "from_session", staticmethod(from_session))
+    monkeypatch.setattr(EspeakWrapper, "_ESPEAK_DATA_PATH", None)
+    monkeypatch.setenv("ESPEAK_DATA_PATH", "")  # restored (to unset) after the test
+    monkeypatch.setenv("PHONEMIZER_ESPEAK_DATA_PATH", ZOE_DATA)
+    _windows_short_names(monkeypatch, ZOE_SHORT)
+    engine = KokoroEngine()
+    assert engine.is_available() == (True, "")
+    engine.synthesize("Hello")
+    # phonemizer would turn a short folder it is given back into the long one, so espeak-ng gets no
+    # folder from it and reads ESPEAK_DATA_PATH itself.
+    assert os.environ["ESPEAK_DATA_PATH"] == ZOE_SHORT and EspeakWrapper._ESPEAK_DATA_PATH is None
+    assert "PHONEMIZER_ESPEAK_DATA_PATH" not in os.environ
+
+    _windows_short_names(monkeypatch, None)
+    engine = KokoroEngine()
+    ok, reason = engine.is_available()
+    assert not ok and "plain name" in reason
+    with pytest.raises(EngineUnavailable, match="plain name"):
+        engine.synthesize("Hello")
+
+
 def test_kokoro_damaged_model_is_friendly():
     write_fake_kokoro(config.voices_dir() / "kokoro")
     with pytest.raises(EngineUnavailable, match="damaged"):
@@ -631,6 +720,32 @@ def test_physical_cores(monkeypatch):
     assert kokoro_engine.physical_cores() == 4  # unknown OS: assume hyper-threading
     monkeypatch.setattr(os, "cpu_count", lambda: 2)
     assert kokoro_engine.physical_cores() == 2
+
+
+@pytest.mark.skipif(struct.calcsize("P") != 8, reason="the record layout below is 64-bit Windows'")
+def test_physical_cores_windows_layout(monkeypatch):
+    # GetLogicalProcessorInformation fills SYSTEM_LOGICAL_PROCESSOR_INFORMATION records, 32 bytes each
+    # on 64-bit Windows: ProcessorMask (8), Relationship (4), padding (4), a 16-byte union.
+    import ctypes
+
+    from destiny_bot.tts import kokoro_engine
+
+    relationships = [3, 0, 2, 2, 0, 2, 0, 1, 0, 2]  # package, 4 cores, caches, a NUMA node
+    records = b"".join(struct.pack("<QI4xQQ", 0b11 << (2 * i), rel, 0x0040000801010000, 0) for i, rel in enumerate(relationships))
+
+    def get_info(buffer, size_ref):
+        size = size_ref._obj
+        if buffer is None or size.value < len(records):
+            size.value = len(records)
+            return 0  # ERROR_INSUFFICIENT_BUFFER
+        ctypes.memmove(buffer, records, len(records))
+        return 1
+
+    monkeypatch.setattr(ctypes, "windll", SimpleNamespace(kernel32=SimpleNamespace(GetLogicalProcessorInformation=get_info)), raising=False)
+    assert kokoro_engine._windows_physical_cores() == 4
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(os, "cpu_count", lambda: 8)
+    assert kokoro_engine.physical_cores() == 4
 
 
 def test_kokoro_real_synthesis(kokoro_model_dir, monkeypatch):

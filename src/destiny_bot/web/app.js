@@ -614,6 +614,7 @@ const clips = {
   entries: new Map(),
   waiting: [], // not requested yet: urgent clips first, then prefetches in reading order
   running: 0,
+  busyUntil: 0, // performance.now() when the request being made should be done
   maxParallel: 1,
   limit: 60,
   synth: new Map(), // engine -> {busy, heard}: recent seconds spent synthesizing, and of audio made
@@ -691,6 +692,9 @@ const clips = {
     if (queued >= 0) this.waiting.splice(queued, 1);
     this.running += 1;
     const began = performance.now();
+    // The engine stays busy with a request even if it's abandoned here.
+    this.busyUntil = Math.max(began, this.busyUntil)
+      + 1000 * this.rtf(entry.engine) * this.estimate(entry.text, entry.engine, entry.voice, entry.rate);
     api('/api/tts', {
       method: 'POST',
       body: { text: entry.text, engine: entry.engine, voice: entry.voice || undefined, rate: entry.rate },
@@ -701,6 +705,7 @@ const clips = {
       .then(async (blob) => {
         if (debug?.slowTts) await wait(debug.slowTts);
         entry.fetchSeconds = (performance.now() - began) / 1000;
+        this.busyUntil = performance.now();
         entry.blob = blob;
         entry.resolve(blob);
         trace('fetch', { chars: entry.text.length, seconds: entry.fetchSeconds, engine: entry.engine });
@@ -731,6 +736,11 @@ const clips = {
     this.synth.set(entry.engine, s);
     const cps = entry.text.length / (duration * entry.rate);
     if (cps > 4 && cps < 40) this.charsPerSecond = this.charsPerSecond * 0.8 + cps * 0.2;
+  },
+
+  /** Roughly how long until the voice engine finishes the request it is working on. */
+  busySeconds() {
+    return Math.max(0, (this.busyUntil - performance.now()) / 1000);
   },
 
   /** Seconds this engine needs to make one second of audio (real-time factor). */
@@ -1353,15 +1363,17 @@ const sched = {
     const prev = this.items[this.items.length - 1];
     const gap = prev && prev.payload !== next.payload ? SECTION_GAP_SECONDS : 0;
     let startAt = Math.max(this.timeEnd, now + 0.03) + gap;
+    let hold = 0;
     if (!prev || now + 0.03 > this.timeEnd) {
-      startAt += this.preroll(next);
+      hold = this.preroll(next);
+      startAt += hold;
       this.holdUntil = startAt;
     }
     const node = webAudio.playAt(buffer, startAt);
     const item = { ...node, payload: next.payload, index: next.index, u: next.u, next: node.end + pauseSeconds(next.u, this.rate) };
     trace('schedule', {
       section: next.payload.section?.id, index: next.index, now, start: startAt, end: node.end,
-      planned: this.timeEnd + gap, pause: item.next - node.end, first: !prev,
+      planned: this.timeEnd + gap, hold, pause: item.next - node.end, first: !prev,
     });
     this.items.push(item);
     this.timeEnd = item.next;
@@ -1413,7 +1425,11 @@ const sched = {
     if (this.current && ms > 500 && since - this.rateChangedAt > 8000) noteStall(ms);
   },
 
-  /** Speed changed: finish the current sentence, re-fetch everything after it at the new rate. */
+  /**
+   * Speed changed: re-fetch what follows at the new rate. Sentences already scheduled
+   * keep the old speed only while the voice is still making the first new one, so the
+   * change is heard as soon as it can be, without a silent gap.
+   */
   changeRate(rate) {
     if (!this.active || rate === this.rate) return;
     const now = webAudio.ctx.currentTime;
@@ -1422,8 +1438,13 @@ const sched = {
     this.holdUntil = 0;
     this.fillGen += 1;
     this.filling = false;
-    const keep = this.items.filter((item) => item.start <= now);
-    const drop = this.items.filter((item) => item.start > now);
+    const busy = clips.busySeconds();
+    const rtf = clips.rtf(this.engine);
+    let cut = this.items.findIndex((item) => item.start > now
+      && now + busy + rtf * clips.estimate(item.u.speech, this.engine, this.voice, rate) + 0.25 <= item.start);
+    if (cut < 0) cut = this.items.length;
+    const keep = this.items.slice(0, cut);
+    const drop = this.items.slice(cut);
     for (const item of drop) webAudio.silence(item);
     this.items = keep;
     if (drop.length) {

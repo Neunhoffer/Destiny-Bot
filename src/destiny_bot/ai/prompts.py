@@ -301,16 +301,21 @@ _NUMBERED = re.compile(r"^\s*\d{1,2}[.)]\s+(?=\S)")
 _TASK_BOX = re.compile(r"^\[[ xX]\]\s+")
 _WHOLE_LINE_BOLD = re.compile(r"^\s*(\*\*|__)(?=\S)(.+?)(?<=\S)\1\s*:?\s*$")
 
-_IMAGE = re.compile(r"!\[([^\]]*)\]\([^)\s]*(?:\s+\"[^\"]*\")?\)")
-_LINK = re.compile(r"\[([^\]]+)\]\((?:[^()\s]|\([^()\s]*\))+(?:\s+\"[^\"]*\")?\)")
+# Answers are untrusted text and these patterns run while holding the GIL, so none of
+# them may backtrack badly on a long unclosed span ("**a **a ...", a run of backticks):
+# bracket text can't contain another "[", code spans open on a whole backtick run, and
+# lazy spans are capped (anything longer is left to _STRAY_MARKS).
+_SPAN = 400
+_IMAGE = re.compile(r"!\[([^\[\]]*)\]\([^)\s]*(?:\s+\"[^\"]*\")?\)")
+_LINK = re.compile(r"\[([^\[\]]+)\]\((?:[^()\s]|\([^()\s]*\))+(?:\s+\"[^\"]*\")?\)")
 _AUTOLINK = re.compile(r"<((?:https?://|mailto:)[^>\s]+)>")
 _HTML_BREAK = re.compile(r"<br\s*/?>", re.IGNORECASE)
-_CODE = re.compile(r"(`+)(.+?)\1")
-_BOLD_STAR = re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*")
-_BOLD_UNDER = re.compile(r"(?<!\w)__(?=\S)(.+?)(?<=\S)__(?!\w)")
+_CODE = re.compile(rf"(?<!`)(`+)(?!`)(.{{1,{_SPAN}}}?)(?<!`)\1(?!`)")
+_BOLD_STAR = re.compile(rf"\*\*(?=\S)(.{{1,{_SPAN}}}?)(?<=\S)\*\*")
+_BOLD_UNDER = re.compile(rf"(?<!\w)__(?=\S)(.{{1,{_SPAN}}}?)(?<=\S)__(?!\w)")
 _ITALIC_STAR = re.compile(r"(?<![\w*])\*(?=[^\s*])([^*\n]*?[^\s*])?\*(?![\w*])")
 _ITALIC_UNDER = re.compile(r"(?<!\w)_(?=[^\s_])([^_\n]*?[^\s_])?_(?!\w)")
-_STRIKE = re.compile(r"~~(?=\S)(.+?)(?<=\S)~~")
+_STRIKE = re.compile(rf"~~(?=\S)(.{{1,{_SPAN}}}?)(?<=\S)~~")
 _LATEX_DELIMS = re.compile(r"\\[()\[\]]|\$\$")
 _ESCAPED = re.compile(r"\\([\\`*_{}\[\]()#+\-.!|>~$])")
 _STRAY_MARKS = re.compile(r"\*\*|(?<!\w)__|__(?!\w)")

@@ -7,7 +7,9 @@ doesn't load Piper/onnxruntime or touch the network.
 from __future__ import annotations
 
 import math
+import sys
 import threading
+from pathlib import Path
 
 from .base import AudioClip, EngineUnavailable, TTSEngine, TTSError, Voice
 
@@ -42,6 +44,57 @@ def disable_onnx_telemetry() -> None:
         onnxruntime.disable_telemetry_events()
     except Exception:  # not installed, or an onnxruntime without this switch
         pass
+
+
+def espeak_path_reason(path: Path | str) -> str:
+    """Why Piper/Kokoro can't start when :func:`espeak_data_path` gives None."""
+    example = "C:\\Athena" if sys.platform == "win32" else "~/Athena"
+    return (
+        f"The natural voices can't start from the folder Athena is installed in ({path}): its name is too long "
+        f"or has letters they can't read. Reinstall Athena in a folder with a short, plain name, such as {example}."
+    )
+
+
+def espeak_data_path(path: Path | str) -> str | None:
+    """``path`` spelled so espeak-ng can open it, or None when it can't be.
+
+    Piper and Kokoro find phonemes with espeak-ng, which keeps its data folder in a
+    fixed buffer (230 bytes on Windows, 160 elsewhere, in espeak-ng 1.52) and, on
+    Windows, opens files through the C library, which reads paths in the ANSI code page
+    while Piper and phonemizer pass UTF-8. A folder that is too long, or one such as
+    C:\\Users\\Zoë\\..., is then "missing", and espeak-ng ends the whole program (exit 1)
+    instead of raising an error. Windows' short 8.3 names (C:\\Users\\ZO~1\\...) are
+    plain ASCII and shorter, so they are used when needed.
+    """
+    text = str(path)
+    windows = sys.platform == "win32"
+    limit = 229 if windows else 159
+
+    def usable(candidate: str) -> bool:
+        return len(candidate.encode("utf-8")) <= limit and (candidate.isascii() or not windows)
+
+    if usable(text):
+        return text
+    short = _short_path_name(text) if windows else None
+    return short if short and usable(short) else None
+
+
+def _short_path_name(path: str) -> str | None:
+    """The 8.3 short form of an existing ``path`` (Windows), or None."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        get = ctypes.windll.kernel32.GetShortPathNameW  # type: ignore[attr-defined]
+        get.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+        get.restype = wintypes.DWORD
+        size = get(path, None, 0)
+        if not size:
+            return None
+        buf = ctypes.create_unicode_buffer(size)
+        return buf.value if 0 < get(path, buf, size) < size else None
+    except (AttributeError, OSError, ValueError):
+        return None
 
 
 def _create(name: str) -> TTSEngine:
@@ -119,6 +172,8 @@ __all__ = [
     "all_engines",
     "clamp_rate",
     "disable_onnx_telemetry",
+    "espeak_data_path",
+    "espeak_path_reason",
     "get_engine",
     "resolve_engine",
 ]

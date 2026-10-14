@@ -522,6 +522,25 @@ def test_doctor(tmp_path, capsys, fakes):
     assert "sk-ant-never-print-me" not in out
 
 
+def test_read_waits_in_short_steps_so_ctrl_c_works():
+    # On Windows a wait with no time limit can't be interrupted by Ctrl+C until the voice finishes.
+    from concurrent.futures import TimeoutError as FutureTimeout
+
+    class SlowFuture:
+        def __init__(self):
+            self.waits: list[float | None] = []
+
+        def result(self, timeout=None):
+            assert timeout is not None, "an endless wait ignores Ctrl+C on Windows"
+            self.waits.append(timeout)
+            if len(self.waits) < 3:
+                raise FutureTimeout()
+            return "clip"
+
+    future = SlowFuture()
+    assert cli._wait(future) == "clip" and len(future.waits) == 3 and max(future.waits) <= 0.5
+
+
 def test_doctor_warns_about_microsoft_store_python(capsys, fakes, monkeypatch):
     store = r"C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0"
     monkeypatch.setattr(sys, "platform", "win32")
