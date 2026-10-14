@@ -180,7 +180,7 @@ def test_encode_mp3_frames_and_duration(tmp_path):
     stereo = audio.encode_mp3(audio.wav_bytes(sine_pcm(0.5, 44100, channels=2), 44100, 2), bitrate_kbps=128)
     assert audio.mp3_info(stereo).channels == 2 and audio.mp3_info(stereo).sample_rate == 44100
     odd = audio.mp3_info(audio.encode_mp3(audio.wav_bytes(sine_pcm(0.5, 11000), 11000)))
-    assert odd.sample_rate == 11025 and odd.duration == pytest.approx(0.5, abs=0.12)
+    assert odd.sample_rate == 11025 and odd.duration == pytest.approx(0.5, abs=0.15)  # 52 ms frames + encoder delay
     eight_bit = audio.wav_bytes(bytes([128 + int(60 * math.sin(i / 5)) for i in range(8000)]), 8000, 1, 1)
     assert audio.mp3_info(audio.encode_mp3(eight_bit)).sample_rate == 8000
     if FFPROBE:

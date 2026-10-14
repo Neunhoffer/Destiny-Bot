@@ -123,6 +123,81 @@ def _np():
         return None
 
 
+FADE_MS = 5
+SILENT_CLIP_MS = 50
+
+
+def trim_silence(clip: AudioClip, *, threshold_db: float = -45.0, keep_ms: int = 25) -> AudioClip:
+    """Cut the near-silence at both ends of a WAV clip so utterances join smoothly.
+
+    Only audio before the first and after the last sample louder than
+    ``threshold_db`` (dBFS) is removed, keeping ``keep_ms`` of it, so speech is
+    never cut. The clip's edges get a ~5 ms linear fade to avoid clicks. MP3 clips
+    (and anything that isn't readable WAV) come back unchanged; a clip with no
+    sound at all becomes ~50 ms of silence. The result is 16-bit WAV.
+    """
+    if clip.mime == MP3_MIME:
+        return clip
+    try:
+        pcm, rate, channels, width = read_wav(clip.data)
+    except ValueError:
+        return clip
+    pcm16 = to_int16(pcm, width)
+    limit = int(32767 * 10 ** (threshold_db / 20))
+    bounds = _loud_bounds(pcm16, channels, limit)
+    if bounds is None:
+        return AudioClip(wav_bytes(silence_pcm(SILENT_CLIP_MS, rate, channels), rate, channels), WAV_MIME, rate)
+    first, last = bounds
+    frames = len(pcm16) // (2 * channels)
+    keep = max(0, round(rate * keep_ms / 1000))
+    start, end = max(0, first - keep), min(frames, last + 1 + keep)
+    body = _fade_edges(pcm16[start * 2 * channels : end * 2 * channels], channels, round(rate * FADE_MS / 1000))
+    return AudioClip(wav_bytes(body, rate, channels), WAV_MIME, rate)
+
+
+def _loud_bounds(pcm16: bytes, channels: int, limit: int) -> tuple[int, int] | None:
+    """(first, last) frame index holding a sample beyond ±limit, or None if all quiet."""
+    np = _np()
+    if np is not None:
+        samples = np.frombuffer(pcm16, dtype="<i2")
+        loud = (samples > limit) | (samples < -limit)
+        if not loud.any():
+            return None
+        first = int(loud.argmax())
+        last = len(loud) - 1 - int(loud[::-1].argmax())
+        return first // channels, last // channels
+    arr = _samples(pcm16)
+    first_idx = next((i for i, s in enumerate(arr) if s > limit or s < -limit), None)
+    if first_idx is None:
+        return None
+    last_idx = next(i for i in range(len(arr) - 1, -1, -1) if arr[i] > limit or arr[i] < -limit)
+    return first_idx // channels, last_idx // channels
+
+
+def _fade_edges(pcm16: bytes, channels: int, fade_frames: int) -> bytes:
+    """Linear fade-in over the first and fade-out over the last ``fade_frames`` frames."""
+    frames = len(pcm16) // (2 * channels)
+    n = min(fade_frames, frames // 2)
+    if n <= 0:
+        return pcm16
+    np = _np()
+    if np is not None:
+        data = np.frombuffer(pcm16, dtype="<i2").reshape(-1, channels).copy()
+        ramp = (np.arange(n, dtype=np.float32) / n)[:, None]
+        data[:n] = np.round(data[:n] * ramp).astype("<i2")
+        data[-n:] = np.round(data[-n:] * ramp[::-1]).astype("<i2")
+        return data.tobytes()
+    arr = _samples(pcm16)
+    total = len(arr)
+    for i in range(n):
+        gain = i / n
+        for c in range(channels):
+            head, tail = i * channels + c, total - (i + 1) * channels + c
+            arr[head] = int(round(arr[head] * gain))
+            arr[tail] = int(round(arr[tail] * gain))
+    return _pcm(arr)
+
+
 _FLIP_SIGN = bytes(b ^ 0x80 for b in range(256))
 
 

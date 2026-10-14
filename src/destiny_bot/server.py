@@ -45,7 +45,7 @@ from .ingest import SUPPORTED_EXTENSIONS, IngestError, source_type_for
 from .jobs import Job, JobManager, friendly_error
 from .library import Library, temp_dir, wipe_user_data
 from .models import Block, Document, Section
-from .tts.base import EngineUnavailable, TTSEngine, TTSError
+from .tts.base import AudioClip, EngineUnavailable, TTSEngine, TTSError
 
 log = logging.getLogger(__name__)
 
@@ -146,6 +146,12 @@ def _ai() -> Any:
     return ai
 
 
+def _audio() -> Any:
+    from . import audio
+
+    return audio
+
+
 def _export_audiobook() -> Callable[..., list[Path]]:
     from .export import export_audiobook
 
@@ -212,6 +218,7 @@ class TTSBody(BaseModel):
     text: str
     engine: str | None = Field(default=None, max_length=50)
     voice: str | None = Field(default=None, max_length=300)
+    rate: float = Field(default=1.0, ge=0.5, le=3.0)
 
 
 class ChatTurn(BaseModel):
@@ -1067,11 +1074,12 @@ def create_app(
             raise HTTPException(400, f"That's too much text to read at once ({MAX_TTS_CHARS:,} characters at most).")
         settings = config.load_settings()
         engine = choose_engine(body.engine, settings, for_files=False)
+        rate = body.rate
         try:
             voice = body.voice or settings.voices.get(engine.name) or engine.default_voice()
             clip = caches.audio().get_or_create(
-                (engine.name, voice or "", "1.0", text),
-                lambda: engine.synthesize(text, voice, 1.0),
+                (engine.name, voice or "", f"{rate:.2f}", text),
+                lambda: _trimmed(engine.synthesize(text, voice, rate)),
             )
         except EngineUnavailable as exc:
             raise HTTPException(503, str(exc) or "That voice isn't available right now.") from None
@@ -1268,6 +1276,23 @@ def create_app(
         return {"ok": True}
 
     return app
+
+
+def _trimmed(clip: AudioClip) -> AudioClip:
+    """Drop the engine's leading/trailing silence from WAV clips: the UI times the pauses itself."""
+    if clip.mime != "audio/wav":
+        return clip
+    try:
+        trim = getattr(_audio(), "trim_silence", None)
+    except ImportError:
+        return clip
+    if trim is None:
+        return clip
+    try:
+        return trim(clip)
+    except Exception as exc:  # an untrimmed clip is better than no audio
+        log.warning("Couldn't trim silence: %s", exc)
+        return clip
 
 
 def _engine_names() -> tuple[str, ...]:

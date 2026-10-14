@@ -209,6 +209,7 @@ _RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f
 def safe_filename(name: str, max_len: int = 80) -> str:
     """A file name that is valid on Windows, macOS and Linux (no extension added)."""
     name = unicodedata.normalize("NFC", name)
+    name = re.sub(r"[\t\n\r\f\v]", " ", name)
     name = "".join(ch for ch in name if unicodedata.category(ch) not in ("Cc", "Cf"))
     name = _FORBIDDEN.sub(" ", name)
     name = re.sub(r"\s+", " ", name).strip()

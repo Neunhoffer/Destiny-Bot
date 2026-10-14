@@ -1034,6 +1034,11 @@ def _reading_order(elems: list[_Elem], pg: _Page) -> list[tuple[tuple, list[_Ele
     run: list[_Elem] = []
     for k in range(len(spanning) + 1):
         col_groups = [(j, segs[(k, j)]) for j in range(len(columns)) if segs.get((k, j))]
+        if len(col_groups) > 1 and not _side_by_side([items for _, items in col_groups]):
+            # Columns that don't share any height here are stacked blocks (e.g. a header
+            # above a title): read them top to bottom like full-width content.
+            run.extend(e for _, items in col_groups for e in items)
+            col_groups = []
         if col_groups and run:
             groups.append((("span", k), _order_group(run)))
             run = []
@@ -1044,6 +1049,16 @@ def _reading_order(elems: list[_Elem], pg: _Page) -> list[tuple[tuple, list[_Ele
     if run:
         groups.append((("span", len(spanning)), _order_group(run)))
     return groups
+
+
+def _side_by_side(cols: list[list[_Elem]]) -> bool:
+    """Do neighbouring columns overlap vertically (rather than sit one above the other)?"""
+    for a, b in zip(cols, cols[1:]):
+        a0, a1 = min(e.y0 for e in a), max(e.y1 for e in a)
+        b0, b1 = min(e.y0 for e in b), max(e.y1 for e in b)
+        if min(a1, b1) - max(a0, b0) < 0.3 * min(a1 - a0, b1 - b0):
+            return False
+    return True
 
 
 def _detect_gutters(elems: list[_Elem]) -> list[tuple[float, float]]:
@@ -1474,13 +1489,20 @@ def _assign_heading_levels(chunks: list[_Chunk]) -> None:
     frequent = [s for s in styles if counts[s] >= 2]
     level_of: dict[tuple, int] = {}
     if frequent:
+        # One-off styles bigger than every recurring one (a title, a title page) share
+        # level 1; recurring styles rank below them. Other one-offs (a lone "Appendix"
+        # in its own style) take the level of the next recurring style.
+        offset = 1 if any(s < frequent[0] for s in styles) else 0
         for i, s in enumerate(frequent):
-            level_of[s] = min(i + 1, 6)
+            level_of[s] = min(i + 1 + offset, 6)
         for s in styles:
             if s in level_of:
                 continue
+            if s < frequent[0]:
+                level_of[s] = 1
+                continue
             below = [f for f in frequent if f >= s]
-            level_of[s] = level_of[below[0]] if below else min(len(frequent) + 1, 6)
+            level_of[s] = level_of[below[0]] if below else min(len(frequent) + 1 + offset, 6)
     else:
         for i, s in enumerate(styles):
             level_of[s] = min(i + 1, 6)
