@@ -108,7 +108,6 @@ OPTIONAL_MODULES: dict[str, str] = {
     "webview": "the app window",
 }
 WINDOWS_MODULES: dict[str, str] = {
-    "pyttsx3": "Windows voices (SAPI)",
     "comtypes": "Windows voices (SAPI)",
     "clr": "the app window (WebView2)",
 }

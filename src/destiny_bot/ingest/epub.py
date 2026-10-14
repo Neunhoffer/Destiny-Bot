@@ -146,7 +146,9 @@ class _Builder:
 def _flatten_toc(entries, level: int = 1) -> list[tuple[str, str, int]]:
     """``[(title, href, level)]`` from ebooklib's nested ``book.toc``."""
     flat: list[tuple[str, str, int]] = []
-    for entry in entries or []:
+    if not isinstance(entries, (list, tuple)):
+        entries = [entries] if entries else []  # (ebooklib gives a lone Link for an empty NCX navMap)
+    for entry in entries:
         if isinstance(entry, tuple) and len(entry) == 2:
             head, children = entry
             href = getattr(head, "href", None)

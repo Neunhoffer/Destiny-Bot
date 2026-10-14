@@ -51,8 +51,9 @@ src/destiny_bot/
   tts/
     base.py            TTSEngine ABC, Voice, AudioClip, TTSError, EngineUnavailable (shared contract)
     __init__.py        engine registry: get_engine(), all_engines(), resolve_engine()
-    piper_engine.py    offline neural voices (piper-tts)
-    system_engine.py   OS voices: macOS `say`, Linux espeak-ng, Windows SAPI (pyttsx3)
+    kokoro_engine.py   the most natural offline voices (kokoro-onnx, 24 kHz)
+    piper_engine.py    fast natural offline voices (piper-tts)
+    system_engine.py   OS voices: macOS `say`, Linux espeak-ng, Windows SAPI 5 (comtypes, PowerShell fallback)
     edge_engine.py     Microsoft Edge online voices (edge-tts), online=True
     browser_engine.py  placeholder: the browser's Web Speech API speaks in the UI
     catalog.py         curated downloadable Piper voices + downloader

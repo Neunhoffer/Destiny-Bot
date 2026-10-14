@@ -199,3 +199,30 @@ def test_layout_with_a_book_open_at_common_sizes(fresh, open_app):
         app.page.screenshot(path=str(Path(fresh.home) / f"settings-{name}.png"))
         app.page.keyboard.press("Escape")
         app.check_no_errors()
+
+
+def test_direction_controls_in_titles_cannot_flip_the_ui(fresh, open_app):
+    """A right-to-left override (U+202E) in a title stays inside the title."""
+    rlo = "\u202e"
+    fresh.settings(tts_engine="piper")
+    title = f"Week 3 {rlo}notes fdp.exe"
+    book = fresh.paste(title, f"# {title}\n\nThe first sentence is here. The second sentence is here.")
+    app = open_app(fresh.base, book_id=book["id"])
+    app.open_book()
+    page = app.page
+    for selector in (".book-title", ".book-bar-title", "#section-title", ".toc-title", "#now-title"):
+        info = page.eval_on_selector(selector, "n => [n.getAttribute('dir'), getComputedStyle(n).unicodeBidi]")
+        assert info == ["auto", "isolate"], (selector, info)
+    delete = f".book-item[data-book-id='{book['id']}'] .book-delete"
+    mixed = page.evaluate("""(sel) => [document.querySelector('#now-status').textContent,
+      document.querySelector(sel).getAttribute('aria-label'), document.querySelector('#study-context').textContent]""",
+                          delete)
+    assert all(rlo not in text for text in mixed), mixed
+    page.click("#tab-library")
+    page.click(delete)
+    assert rlo not in page.text_content("#confirm-title")
+    page.click("#confirm-ok")
+    app.wait("[...document.querySelectorAll('.toast-msg')].some((t) => t.textContent.startsWith('Deleted'))", timeout=10)
+    toasts = page.evaluate("[...document.querySelectorAll('.toast-msg')].map((t) => t.textContent)")
+    assert toasts and all(rlo not in t for t in toasts), toasts
+    app.check_no_errors()

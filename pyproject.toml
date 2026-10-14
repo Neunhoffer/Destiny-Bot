@@ -26,7 +26,7 @@ dependencies = [
 # Natural-sounding neural voices that run 100% offline (recommended).
 piper = ["piper-tts>=1.3"]
 # Windows/macOS/Linux system voices through the OS speech engine.
-system = ["pyttsx3>=2.90; sys_platform == 'win32'"]
+system = ["comtypes>=1.2; sys_platform == 'win32'"]
 # Microsoft Edge online neural voices (sends text to Microsoft; off by default).
 edge = ["edge-tts>=6.1"]
 # Claude-powered study helpers (sends text to Anthropic; off by default).

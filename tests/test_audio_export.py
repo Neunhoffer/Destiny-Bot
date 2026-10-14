@@ -703,7 +703,9 @@ def test_export_file_in_use_is_friendly(planner, tmp_path, monkeypatch):
 
 def test_export_names_fit_windows_path_limit(planner, tmp_path, monkeypatch):
     monkeypatch.setattr(export, "sys", types.SimpleNamespace(platform="win32"))
-    out = tmp_path / ("Biology 101 notes " * 8).strip()
+    # A 200-character folder (tmp_path itself is ~100 characters on Windows runners).
+    out = tmp_path / ("Biology 101 notes " * 20)[: 199 - len(str(tmp_path))].strip()
+    assert len(str(out)) >= 190
     long_title = "Chapter 7 Photosynthesis: Using Light to Make Food, Carbon Fixation and the Calvin Cycle Explained"
     doc = Document(
         id="x", title="Big", source_name="b.txt", source_type="txt",

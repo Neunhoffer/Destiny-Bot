@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import itertools
 import random
 import re
+import shutil
+import subprocess
 import time
 
 import pytest
@@ -83,12 +86,31 @@ ABBREVIATIONS = [
     ("R&D", "R and D"),
     ("salt & pepper", "salt and pepper"),
     ("see refs. 3 and 4", "see references 3 and 4"),
+    # Titles: voices pause at the period ("Doctor. Smith") or spell them out ("L T Dan").
+    ("Mr. Smith met Dr. Jones.", "Mister Smith met Doctor Jones."),
+    ("Mrs. Lee and Ms. Park", "Missus Lee and Miz Park"),
+    ("St. Louis is a city.", "Saint Louis is a city."),
+    ("Prof. Lee spoke.", "Professor Lee spoke."),
+    ("Gen. Grant and Lt. Dan met Sen. Smith.", "General Grant and Lieutenant Dan met Senator Smith."),
+    ("Pres. Lincoln and Gov. Brown", "President Lincoln and Governor Brown"),
+    ("Mt. Everest and Ft. Sumter", "Mount Everest and Fort Sumter"),
+    ("Martin Luther King Jr. spoke.", "Martin Luther King Junior spoke."),
+    ("It was written by John Smith Jr.", "It was written by John Smith Junior."),
+    ("Ken Griffey Sr., his father", "Ken Griffey Senior, his father"),
+    ("Gen. 1:1 says", "Gen. 1:1 says"),
+    ("on Jan. 15, 2020", "on January 15th, twenty twenty"),
+    ("by Oct. 1929", "by October nineteen twenty-nine"),
+    ("See Thm. 3 and Def. 2.1.", "See Theorem 3 and Definition 2 point 1."),
+    ("by Prop. 4 and Cor. 1", "by Proposition 4 and Corollary 1"),
+    ("Art. I, § 8, cl. 3", "Article 1, Section 8, clause 3"),
+    ("call ext. 22", "call extension 22"),
+    ("the avg. score", "the average score"),
+    ("use === not ==", "use triple equals not double equals"),
+    ("if (a && b)", "if (a and b)"),
 ]
 
 ABBREVIATION_NEGATIVES = [
-    "Mr. Smith met Dr. Jones.",
-    "Dr. Lee and Mrs. Lee and Ms. Park",
-    "St. Louis is a city.",
+    "He lives on Main St. Springfield.",
     "Pick a fig. Then eat.",
     "No. That is wrong.",
     "He was v. good.",
@@ -739,6 +761,207 @@ def test_verbalize_math_survives_garbage():
         assert "\\" not in out
 
 
+# --------------------------------------------------------------------------- how voices read numbers and names
+# Each case below was heard (as phonemes, with espeak-ng, which both Kokoro and Piper use)
+# being read wrongly before it was fixed.
+
+DATES_AND_YEARS = [
+    # espeak reads years as quantities: "nineteen hundred ninety", "one thousand sixty-six".
+    ("In 1990, the wall fell.", "In nineteen ninety, the wall fell."),
+    ("The Norman Conquest began in 1066.", "The Norman Conquest began in ten sixty-six."),
+    ("since 1905", "since nineteen oh five"),
+    ("by 2008", "by two thousand eight"),
+    ("in 2019", "in twenty nineteen"),
+    ("In 1900 and in 2000", "In nineteen hundred and in two thousand"),
+    ("from 1914 to 1918", "from nineteen fourteen to nineteen eighteen"),
+    ("World War II lasted 1939-1945.", "World War 2 lasted nineteen thirty-nine to nineteen forty-five."),
+    ("in 1200 BC and AD 79", "in twelve hundred BC and AD 79"),
+    ("On July 4, 1776, it began.", "On July 4th, seventeen seventy-six, it began."),
+    ("June 6-8", "June 6th to 8th"),
+    ("on 3 March 2021", "on 3rd March twenty twenty-one"),
+    ("Austen's Pride and Prejudice (1813)", "Austen's Pride and Prejudice (eighteen thirteen)"),
+    # Decades: espeak says "nineteen hundred ninety z".
+    ("the 1990s", "the nineteen nineties"),
+    ("the 1990's", "the nineteen nineties"),
+    ("the 1800s", "the eighteen hundreds"),
+    ("the 2000s and 2010s", "the two thousands and twenty tens"),
+    ("the mid-1960s", "the mid-nineteen sixties"),
+    ("the '90s", "the nineties"),
+    ("in her 60s", "in her sixties"),
+    # Not years.
+    ("divide by 1024 bytes", "divide by 1024 bytes"),
+    ("in 1024 steps", "in 1024 steps"),
+    ("Option 2 May be chosen", "Option 2 May be chosen"),
+    ("1990 people came", "1990 people came"),
+    ("in 1500 mL of water", "in 1500 milliliters of water"),
+    ("pages 1200 and 1300", "pages 1200 and 1300"),
+    ("ISSN 1535-6078", "ISSN 1535-6078"),
+]
+
+MONEY = [
+    # espeak: "dollar three point five zero", and Kokoro's phonemizer cuts it to "dollar three. fifty".
+    ("It costs $3.50 now.", "It costs 3 dollars and 50 cents now."),
+    ("It costs $5.", "It costs 5 dollars."),
+    ("only $1", "only 1 dollar"),
+    ("just $0.99", "just 99 cents"),
+    ("GDP was $21.4 trillion.", "GDP was 21 point 4 trillion dollars."),
+    ("a $5 tax", "a 5 dollar tax"),
+    ("$1,000 or $2,500,000", "1000 dollars or 2500000 dollars"),
+    ("$5-10 each", "5 to 10 dollars each"),
+    ("$300K salary", "300 thousand dollars salary"),
+    ("a $2M grant", "a 2 million dollar grant"),
+    ("€20 and £5.50 and ¥100", "20 euros and 5 pounds and 50 pence and 100 yen"),
+    ("lost -$5", "lost minus 5 dollars"),
+    ("25¢", "25 cents"),
+    ("the $PATH variable", "the $PATH variable"),
+]
+
+PHONES_TIMES_RATIOS = [
+    ("Call (555) 123-4567 now.", "Call 5 5 5, 1 2 3, 4 5 6 7 now."),
+    ("or 1-800-555-0199", "or 1, 8 0 0, 5 5 5, 0 1 9 9"),
+    ("phone 555-1234", "phone 5 5 5, 1 2 3 4"),
+    # espeak: "nine zero zero"; Kokoro also pauses at the colon ("three: thirty").
+    ("Open 9:00-5:00 daily.", "Open 9 o'clock to 5 o'clock daily."),
+    ("at 9:00 a.m. sharp", "at 9 A M sharp"),
+    ("at 3:30 p.m.", "at 3 30 P M."),
+    ("at 10:05", "at 10 oh 5"),
+    ("at 14:00", "at 14 hundred"),
+    ("John 3:16", "John 3 16"),
+    ("a 3:1 ratio", "a 3 to 1 ratio"),
+    ("mix them 1:10", "mix them 1 to 10"),
+]
+
+CHEMISTRY = [
+    # espeak: "kah two plus", "nah C L", "fee two O three", "C H three coo".
+    ("CO2 and H2O", "C O 2 and H 2 O"),
+    ("Ca2+ ions", "C A 2 plus ions"),
+    ("NaCl dissolves.", "N A C L dissolves."),
+    ("Fe2O3 and Fe3+", "F E 2 O 3 and F E 3 plus"),
+    ("CH3COOH is weak.", "C H 3 C O O H is weak."),
+    ("2H2 + O2 makes 2H2O", "2 H 2 plus O 2 makes 2 H 2 O"),
+    ("Na+ and K+ and Cl- ions", "N A plus and K plus and C L minus ions"),
+    ("the SO42- ion", "the S O 4 2 minus ion"),
+    ("PO4³⁻ and Ca²⁺", "P O 4 3 minus and C A 2 plus"),
+    ("NaCl(aq) and N2(g)", "N A C L aqueous and N 2 gas"),
+    ("KOH and NaOH", "K O H and N A O H"),
+    ("moves 2 K+ in", "moves 2 K plus in"),  # potassium, not kelvin
+    # Not formulas.
+    ("HeLa cells", "HeLa cells"),
+    ("SARS-CoV-2", "SARS-CoV-2"),
+    ("SVN- or CVS-style", "SVN- or CVS-style"),
+    ("He said No to the USA", "He said No to the USA"),
+    ("CO2-rich air", "CO2-rich air"),
+    ("pH and mRNA", "pH and mRNA"),
+]
+
+PROSE_MATH = [
+    ("e^0.1 is close to 1.1", "e to the power of 0 point 1 is close to 1 point 1"),  # was "0 0 point 1"
+    ("x^(n+1) grows", "x to the power of n plus 1 grows"),  # the power was lost
+    ("(x+1)^2 here", "(x plus 1) squared here"),
+    ("Then ((AB))^(-1) = B^(-1)A^(-1).", "Then ((AB)) to the power of minus 1 equals B to the power of minus 1 A to the power of minus 1."),
+    ("A^(∗)A is normal", "A star A is normal"),  # was "A to the power of A"
+    ("x^2/2! + x^3/3!", "x squared over 2 factorial + x cubed over 3 factorial"),
+    ("Let y = 2x - 1.", "Let y equals 2x minus 1."),  # the minus became a comma
+    ("Qd = 100 - 2P", "Qd equals 100 minus 2P"),
+    ("KE = ½mv²", "KE equals one half mv squared"),  # "squared" was deleted as a footnote mark
+    ("f(x) = x^2 and f'(3) = 6", "f of x equals x squared and f prime of 3 equals 6"),
+    ("P(A ∩ B) = P(A)P(B)", "P(A intersection B) equals P of A times P of B"),
+    ("P(A|B) is high", "P of A given B is high"),
+    ("sin x and cos(x) and tan θ", "sine x and cosine(x) and tangent theta"),
+    ("the sin of pride", "the sin of pride"),
+    ("(f(b) - f(a))/(b - a)", "(f of b minus f of a) over (b minus a)"),
+    ("the function 1/x and x/2", "the function 1 over x and x over 2"),
+    ("1/2 cup and 3/4 of them", "one half cup and three quarters of them"),
+    ("24/7 and 9/11 and 4/5 stars", "24/7 and 9/11 and 4/5 stars"),
+    ("The sample mean x̄ estimates μ.", "The sample mean x bar estimates mu."),
+    ("p̂ and ŷ", "p hat and y hat"),
+    ("Tōkyō", "Tōkyō"),
+    ("In △ABC the angle", "In triangle ABC the angle"),
+    ("A definition ends here. △", "A definition ends here."),
+]
+
+UNITS_MORE = [
+    ("g = 9.8 m/s^2", "g equals 9 point 8 meters per second squared"),
+    ("a BMI of 25 kg/m2", "a BMI of 25 kilograms per meter squared"),
+    ("50 m2 and 3 cm3", "50 square meters and 3 cubic centimeters"),
+    ("[H+] = 10^-3 M", "[H plus] equals 10 to the power of minus 3 molar"),
+    ("1.5 × 10⁻³ M", "1 point 5 times 10 to the power of minus 3 molar"),
+    ("c = 3.00 × 10^8 m/s", "c equals 3 point 0 0 times 10 to the power of 8 meters per second"),
+    ("100-120/min", "100 to 120 per minute"),
+    ("take 2/d", "take 2 per day"),
+    ("3.5-5.0 mEq/L", "3 point 5 to 5 point 0 milliequivalents per liter"),
+    ("a 2.0 kg ball and a 9 V battery", "a 2 point 0 kilogram ball and a 9 volt battery"),
+    ("a 250-mL flask", "a 250-milliliter flask"),
+    ("after 3.0 s and 2 h", "after 3 point 0 seconds and 2 hours"),
+    ("the 1s orbital", "the 1s orbital"),
+    ("BP 120/80 and 140/90 mmHg", "BP 120 over 80 and 140 over 90 millimeters of mercury"),
+]
+
+PERIODS_AND_LISTS = [
+    # A period inside a sentence makes Kokoro and Piper pause as if the sentence ended.
+    ("President Franklin D. Roosevelt spoke.", "President Franklin D Roosevelt spoke."),
+    ("J. K. Rowling and J.R.R. Tolkien", "J K Rowling and J R R Tolkien"),
+    ("The U.S. Army and the U.N. met in Washington, D.C. today.", "The U S Army and the U N met in Washington, D C today."),
+    ("She moved to the U.S.", "She moved to the U S."),
+    ("a Ph.D. from MIT", "a P H D from MIT"),
+    ("Apple Inc. and Microsoft Corp. grew.", "Apple Inc and Microsoft Corp grew."),
+    ("It was Apple Inc.", "It was Apple Inc."),
+    # A list letter "a" is not the article "uh".
+    ("Steps: a) mix; b) heat", "Steps: A) mix; b) heat"),
+    ("(a) the first and (b) the second", "(A) the first and (b) the second"),
+    ("f(a) - f(b)", "f of a minus f of b"),
+    # Rhyme schemes are letters, not words ("Abab").
+    ("The rhyme scheme is ABAB CDCD EFEF GG.", "The rhyme scheme is A B A B C D C D E F E F G G."),
+    ("a BAD DEAD FACE", "a Bad Dead Face"),
+]
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    DATES_AND_YEARS + MONEY + PHONES_TIMES_RATIOS + CHEMISTRY + PROSE_MATH + UNITS_MORE + PERIODS_AND_LISTS,
+)
+def test_voice_friendly_numbers_names_and_math(text, expected):
+    assert norm(text) == expected
+
+
+def test_link_domains_are_spelled_for_kokoro():
+    # Kokoro's phonemizer splits "example.com" at the dot and reads "example. com".
+    assert norm("Visit www.example.com/syllabus today.") == "Visit a link to example dot com today."
+
+
+def test_numbers_survive_kokoro_punctuation_splitting():
+    """Kokoro's phonemizer cuts the text at the first copy of each punctuation mark it finds,
+    so "7.4." became "seven. four" and "2,500 cases," "two, five hundred cases"."""
+    punctuation = pytest.importorskip("phonemizer.punctuation")
+    marks = punctuation.Punctuation()
+    texts = [
+        "The pH of blood is 7.4.", "In 2,500 cases,", "It costs $3.50 now.", "Pi is 3.14159.",
+        "Mix 0.5 g with 1,000 mL.", "From 1.5 to 2.5,", "At 98.6°F.", "Python 3.12 and v1.2.",
+    ]
+    for text in texts:
+        speech = norm(text)
+        chunks, _ = marks.preserve(speech)
+        for left, right in itertools.pairwise(chunks):
+            assert not (left[-1:].isdigit() and right[:1].isdigit()), (text, speech, chunks)
+
+
+@pytest.mark.skipif(shutil.which("espeak-ng") is None, reason="espeak-ng is not installed")
+def test_espeak_reads_years_and_money_as_words():
+    """Listen by proxy: the phonemes both offline voices are built from."""
+
+    def ipa(text: str) -> str:
+        out = subprocess.run(
+            ["espeak-ng", "-q", "--ipa", "-v", "en-us"], input=text, capture_output=True, text=True, timeout=30,
+            check=False,
+        )
+        return out.stdout
+
+    assert "hˈʌndɹɪd" in ipa("In 1990, the wall fell.")  # "nineteen hundred ninety"
+    assert "hˈʌndɹɪd" not in ipa(norm("In 1990, the wall fell."))
+    money = ipa(norm("It costs $3.50."))  # was "dollar three point five zero"
+    assert "ɔɪnt" not in money and 0 <= money.find("θɹˈiː") < money.find("dˈɑːlɚz")
+
+
 # --------------------------------------------------------------------------- sentence splitting
 
 
@@ -799,6 +1022,14 @@ SPLITS = [
     ("Dept. of Biology. Room 5.", ["Dept. of Biology.", "Room 5."]),
     ("John Smith Jr. said hi. He left.", ["John Smith Jr. said hi.", "He left."]),
     ("Apple Inc. The company grew.", ["Apple Inc.", "The company grew."]),
+    # Numbered things in math and law books, and math after "!" (factorial), are not sentence ends.
+    ("See Thm. 3 and Def. 2. Also Prop. 4 and Cor. 1.", ["See Thm. 3 and Def. 2.", "Also Prop. 4 and Cor. 1."]),
+    ("By Lem. 2 and Prob. 3 it holds.", ["By Lem. 2 and Prob. 3 it holds."]),
+    ("Art. I, § 8, cl. 3 grants power. Art. II covers it.", ["Art. I, § 8, cl. 3 grants power.", "Art. II covers it."]),
+    ("Call ext. 22 today. Or not.", ["Call ext. 22 today.", "Or not."]),
+    ("It is 1 + x + x^2/2! + x^3/3! + ... in all.", ["It is 1 + x + x^2/2! + x^3/3! + ... in all."]),
+    ("Compute 5! = 120 now. Then stop.", ["Compute 5! = 120 now.", "Then stop."]),
+    ("I like modern art. I hate it too.", ["I like modern art.", "I hate it too."]),
 ]
 
 
@@ -1226,6 +1457,23 @@ def test_long_sentences_are_chunked_with_short_pauses():
     assert all(u.pause_after_ms == CHUNK for u in plan[:-2])
     assert plan[-2].pause_after_ms == SENTENCE and plan[-1].pause_after_ms == BLOCK
     assert all(text[u.start : u.end].endswith(",") for u in plan[:-3])
+
+
+def test_long_sentence_split_at_semicolons_gets_clause_pauses():
+    # Read straight through, Kokoro pauses about 300 ms at a semicolon; a 60 ms gap ran clauses together.
+    text = "; ".join(f"clause number {i} has a few more words in it" for i in range(12)) + "."
+    sec = make_section(Block(kind=K.PARAGRAPH, text=text))
+    plan = check_plan(sec, ReadingOptions(announce_section_title=False, max_chars=100))
+    assert len(plan) > 2
+    assert all(text[u.start : u.end].endswith(";") and u.pause_after_ms == CLAUSE for u in plan[:-1])
+    assert plan[-1].pause_after_ms == BLOCK
+
+
+def test_pauses_grow_with_the_size_of_the_break():
+    # Measured: Kokoro leaves 300-520 ms between sentences when it reads them in one go, so a
+    # 220 ms gap (plus ~50 ms of kept padding) sounded rushed next to the voice's own pacing.
+    assert 0 < CHUNK < CLAUSE < SENTENCE < ROW < BLOCK < HEADING
+    assert SENTENCE >= 300 and BLOCK >= 2 * SENTENCE
 
 
 def test_expanding_text_still_fits_max_chars():

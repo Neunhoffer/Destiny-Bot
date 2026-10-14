@@ -8,6 +8,7 @@ import stat
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -29,14 +30,31 @@ def _run_python(code: str, env: dict[str, str]) -> subprocess.CompletedProcess:
     )
 
 
+def _real_ort_folders() -> list[Path]:
+    """Where a Windows onnxruntime may keep its telemetry store even when LOCALAPPDATA is
+    overridden (it can ask Windows for the known folder instead of reading the variable)."""
+    bases = [os.environ.get("LOCALAPPDATA"), os.environ.get("APPDATA"), str(Path.home() / "AppData" / "Local")]
+    return [Path(base) / "Microsoft" / "DeveloperTools" for base in dict.fromkeys(b for b in bases if b)]
+
+
+def _written_since(folders: list[Path], since: float) -> list[str]:
+    found: list[str] = []
+    for folder in folders:
+        if folder.is_dir():
+            found += [str(p) for p in folder.rglob("*") if p.is_file() and p.stat().st_mtime >= since]
+    return found
+
+
 def test_onnxruntime_telemetry_is_off_before_any_voice_loads(tmp_path):
     """onnxruntime's built-in 1DS telemetry phones home to mobile.events.data.microsoft.com as
-    soon as it is imported, and keeps a device id under ~/.cache/Microsoft/DeveloperTools.
-    ``disable_telemetry_events()`` is too late for that; only ``ORT_DISABLE_TELEMETRY=1`` set
-    before the import (done in ``destiny_bot/__init__.py``) stops it."""
+    soon as it is imported, and keeps a device id under ~/.cache/Microsoft/DeveloperTools
+    (%LOCALAPPDATA%\\Microsoft\\DeveloperTools on Windows). ``disable_telemetry_events()`` is
+    too late for that; only ``ORT_DISABLE_TELEMETRY=1`` set before the import (done in
+    ``destiny_bot/__init__.py``) stops it."""
     pytest.importorskip("onnxruntime")
     home = tmp_path / "user"
     home.mkdir()
+    started = time.time() - 1.0  # coarse file-time resolution
     env = {k: v for k, v in os.environ.items() if k != "ORT_DISABLE_TELEMETRY"}
     env.update(HOME=str(home), XDG_CACHE_HOME=str(home / ".cache"), LOCALAPPDATA=str(home / "AppData" / "Local"),
                APPDATA=str(home / "AppData" / "Roaming"), USERPROFILE=str(home), DESTINY_HOME=str(tmp_path / "data"))
@@ -59,6 +77,9 @@ def test_onnxruntime_telemetry_is_off_before_any_voice_loads(tmp_path):
     assert result.returncode == 0, result.stderr
     leftovers = [str(p) for p in home.rglob("*") if "DeveloperTools" in str(p) or "onnxruntime" in p.name]
     assert leftovers == []
+    if os.name == "nt":
+        # The env override may not apply to the known-folder lookup: check the real folder too.
+        assert _written_since(_real_ort_folders(), started) == []
     if strace is not None:
         # The process needs no network at all: any IPv4/IPv6 connect (DNS included) is a leak.
         connects = [line for line in trace.read_text().splitlines() if "AF_INET" in line]

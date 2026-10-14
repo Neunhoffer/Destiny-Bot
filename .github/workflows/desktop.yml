@@ -118,6 +118,28 @@ jobs:
           }
           'Uninstalled cleanly.'
 
+      # Users with accented names (C:\Users\Zoë) get an install path that espeak-ng, used by both
+      # natural voices, can't open through its narrow-character file calls. The app must still speak.
+      - name: Install into a folder with an accented name and check every voice speaks
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem dist -Filter 'Athena-Setup-*.exe' | Select-Object -First 1
+          $dir = Join-Path $env:RUNNER_TEMP 'Zoë Tést\Athena'
+          $p = Start-Process $setup.FullName -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=$dir" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Installing into '$dir' failed ($($p.ExitCode))" }
+          $env:DESTINY_HOME = Join-Path $env:RUNNER_TEMP 'Zoë data'
+          $t = Start-Process (Join-Path $dir 'Athena.exe') -ArgumentList '--self-test-quick' -Wait -PassThru
+          Get-Content (Join-Path $env:DESTINY_HOME 'logs\self-test.txt') -Encoding utf8
+          Copy-Item (Join-Path $env:DESTINY_HOME 'logs\self-test.json') dist\self-test-windows-accented-path.json
+          $report = Get-Content dist\self-test-windows-accented-path.json -Raw -Encoding utf8 | ConvertFrom-Json
+          foreach ($engine in 'kokoro', 'piper', 'system') {
+            $result = $report.synthesis | Where-Object { $_.engine -eq $engine } | Select-Object -First 1
+            if (-not $result -or $result.error) { throw "The $engine voice didn't speak from '$dir': $($result.error)" }
+            "$engine speaks: first sentence $($result.latency_cold_s) s cold, $($result.latency_warm_s) s warm"
+          }
+          if ($t.ExitCode -ne 0) { throw "The self-test failed from '$dir' ($($t.ExitCode))" }
+          Start-Process (Join-Path $dir 'unins000.exe') -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
+
       - name: Upload the installer
         uses: actions/upload-artifact@v4
         with:

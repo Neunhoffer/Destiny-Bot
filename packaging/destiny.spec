@@ -89,10 +89,9 @@ for optional in ("kokoro_onnx", "espeakng_loader", "phonemizer"):
 if installed("edge_tts"):
     hiddenimports += collect_submodules("edge_tts")
     datas += collect_data_files("certifi")
-if IS_WIN:
-    hiddenimports += ["pyttsx3", "pyttsx3.drivers", "pyttsx3.drivers.sapi5", "comtypes.client", "pythoncom", "pywintypes"]
-elif IS_MAC:
-    hiddenimports += ["pyttsx3.drivers.nsss"] if installed("pyttsx3") else []
+if IS_WIN and installed("comtypes"):
+    # The Windows system voice drives SAPI 5 through comtypes (see tts/system_engine.py).
+    hiddenimports += collect_submodules("comtypes")
 
 # OCR (needs the Tesseract program on the computer) and the AI helpers.
 hiddenimports += ["pytesseract", "PIL.Image"]

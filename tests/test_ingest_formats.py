@@ -1331,3 +1331,192 @@ def test_image_through_load_document(tmp_path, fresh_ocr_cache):
     assert_sane(doc)
     assert doc.source_type == "image" and doc.title == "Photo of board"
     assert "Photosynthesis makes sugar" in " ".join(texts(doc))
+
+
+# --------------------------------------------------------------------------- shared text cleanup
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # ordinary words broken by hyphenation are joined
+        ("infor-\nmation", "information"),
+        ("the move-\nment of ions", "the movement of ions"),
+        ("multi-\nple", "multiple"),
+        ("anti-\nbodies", "antibodies"),
+        ("pre-\nvious", "previous"),
+        ("ex-\nample", "example"),
+        ("co-\nefficient", "coefficient"),
+        ("self-\nish", "selfish"),
+        ("high-\nlight", "highlight"),
+        ("non-\nsense", "nonsense"),
+        ("INFOR-\nMATION", "INFORMATION"),
+        # compounds keep their hyphen
+        ("self-\nesteem", "self-esteem"),
+        ("Self-\nesteem", "Self-esteem"),
+        ("well-\nknown", "well-known"),
+        ("half-\nlife", "half-life"),
+        ("cross-\nsection", "cross-section"),
+        ("short-\nterm", "short-term"),
+        ("non-\nzero", "non-zero"),
+        ("pre-\nexisting", "pre-existing"),
+        ("ex-\nwife", "ex-wife"),
+        ("co-\nauthor", "co-author"),
+        ("evidence-\nbased", "evidence-based"),
+        ("state-of-the-\nart", "state-of-the-art"),
+        # a capital or a digit after the break: a real hyphen, and no stray space
+        ("pre-\nColumbian", "pre-Columbian"),
+        ("COVID-\n19", "COVID-19"),
+        ("3-\nmethyl", "3-methyl"),
+        # suspended hyphen, soft hyphen, dashes
+        ("first-\nand second-order", "first- and second-order"),
+        ("infor­\nmation", "information"),
+        ("pages 10–\n20", "pages 10–20"),
+        ("word—\nword", "word—word"),
+        ("a dash -\nhere", "a dash - here"),
+    ],
+)
+def test_line_break_hyphens(raw, expected):
+    from destiny_bot.ingest.common import clean_display_text
+
+    assert clean_display_text(raw) == expected
+
+
+def test_line_break_hyphens_follow_the_documents_own_spelling():
+    from destiny_bot.ingest.common import HyphenationEvidence, clean_display_text
+
+    evidence = HyphenationEvidence(["Every co-op member votes.", "A cooperative store and a well-being plan."])
+    assert clean_display_text("the co-\nop", evidence=evidence) == "the co-op"  # default would join
+    assert clean_display_text("our co-\noperative", evidence=evidence) == "our cooperative"
+    assert clean_display_text("well-\nbeing", evidence=evidence) == "well-being"
+    evidence = HyphenationEvidence(["The selfesteem score."])  # (odd, but it is the book's spelling)
+    assert clean_display_text("self-\nesteem", evidence=evidence) == "selfesteem"
+
+
+def test_plain_text_line_break_hyphens_use_the_whole_text():
+    blocks = plain_text_blocks(
+        "Self-esteem grows slowly. Students with low self-\nesteem and the infor-\nmation they need.\n\n"
+        "Every co-op meets on Friday; this co-\nop sells books."
+    )
+    assert [b.text for b in blocks] == [
+        "Self-esteem grows slowly. Students with low self-esteem and the information they need.",
+        "Every co-op meets on Friday; this co-op sells books.",
+    ]
+
+
+def test_control_characters_never_reach_the_text():
+    from destiny_bot.ingest.common import clean_display_text, fix_characters
+
+    # (math fonts in PDFs map big parentheses to control codes; NUL breaks voices)
+    assert clean_display_text("log\x00 φ \x01 1−φ\x02") == "log φ 1−φ"
+    assert clean_display_text("a\fb\x0bc\x1fd\x85e") == "a b c d e"
+    assert fix_characters("def f():\n\tpass\x03") == "def f():\n\tpass"
+
+
+@pytest.mark.parametrize("filler", [" ", "\xa0", "\t", "　", " \n"])
+def test_long_runs_of_whitespace_are_cleaned_in_linear_time(filler):
+    import time
+
+    from destiny_bot.ingest.common import clean_display_text
+
+    text = "start" + filler * 100_000 + "end"
+    started = time.perf_counter()
+    assert clean_display_text(text) == "start end"
+    assert time.perf_counter() - started < 1.0  # was quadratic: 15+ seconds for 100k spaces
+
+
+def test_line_break_hyphen_rules_stay_linear_time():
+    import time
+
+    from destiny_bot.ingest.common import HyphenationEvidence, clean_display_text
+
+    started = time.perf_counter()
+    clean_display_text("a-\n" * 50_000)
+    clean_display_text("x" * 200_000 + "-\nyz")
+    HyphenationEvidence(["a" * 200_000, "self-esteem " * 10_000])
+    assert time.perf_counter() - started < 2.0
+
+
+def test_markdown_patterns_stay_linear_time(tmp_path):
+    import time
+
+    started = time.perf_counter()
+    markdown_blocks("`" * 50_000)
+    looks_like_markdown("word " * 40_000)  # one 200k-character line
+    path = tmp_path / "one line.txt"
+    path.write_text("word " * 60_000, encoding="utf-8")
+    load_document(path)
+    assert time.perf_counter() - started < 3.0
+
+
+def _write_epub2(path: Path, *, nav_points: str = "", guide: str = "") -> Path:
+    """A hand-made EPUB 2 (contents page + one lab chapter), as InDesign-style exporters write them."""
+    opf = (
+        '<?xml version="1.0" encoding="UTF-8"?><package version="2.0" xmlns="http://www.idpf.org/2007/opf" '
+        'unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Lab Manual</dc:title>'
+        '<dc:identifier id="id">x</dc:identifier><dc:language>en</dc:language></metadata>'
+        '<manifest><item id="toc" href="toc.xhtml" media-type="application/xhtml+xml"/>'
+        '<item id="lab" href="lab.xhtml" media-type="application/xhtml+xml"/>'
+        '<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/></manifest>'
+        f'<spine toc="ncx"><itemref idref="toc"/><itemref idref="lab"/></spine><guide>{guide}</guide></package>'
+    )
+    ncx = (
+        '<?xml version="1.0"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head/>'
+        f"<docTitle><text>Lab Manual</text></docTitle><navMap>{nav_points}</navMap></ncx>"
+    )
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("mimetype", "application/epub+zip")
+        zf.writestr(
+            "META-INF/container.xml",
+            '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+            '<rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>'
+            "</rootfiles></container>",
+        )
+        zf.writestr("OEBPS/content.opf", opf)
+        zf.writestr("OEBPS/toc.ncx", ncx)
+        zf.writestr("OEBPS/toc.xhtml", _xhtml("Contents", '<h1>Contents</h1><p><a href="lab.xhtml">Lab 1</a></p>'))
+        zf.writestr("OEBPS/lab.xhtml", _xhtml("Lab", "<h1>Lab 1: Microscopes</h1><p>Clean the lens before use.</p>"))
+    return path
+
+
+_LAB_NAV_POINT = (
+    '<navPoint id="n1" playOrder="1"><navLabel><text>Lab 1: Microscopes</text></navLabel>'
+    '<content src="lab.xhtml"/></navPoint>'
+)
+
+
+def test_epub_guide_toc_label_on_the_only_chapter_is_not_trusted(tmp_path):
+    # The guide calls both files the table of contents; only the page of links really is one.
+    guide = '<reference type="toc" href="toc.xhtml" title="Contents"/><reference type="toc" href="lab.xhtml"/>'
+    doc = load_document(_write_epub2(tmp_path / "guide.epub", nav_points=_LAB_NAV_POINT, guide=guide))
+    assert_sane(doc)
+    assert texts(doc) == ["Lab 1: Microscopes", "Clean the lens before use."]
+    assert doc.warnings == []
+
+
+def test_epub_with_an_empty_ncx_table_of_contents_opens(tmp_path):
+    doc = load_document(_write_epub2(tmp_path / "empty-ncx.epub"))  # used to fail: "'Link' object is not iterable"
+    assert_sane(doc)
+    assert "Clean the lens before use." in texts(doc)
+
+
+def test_docx_ruby_text_is_read_without_its_pronunciation_guide(tmp_path):
+    import docx
+    from docx.oxml import parse_xml
+    from docx.oxml.ns import nsdecls
+
+    d = docx.Document()
+    p = d.add_paragraph("Capital: ")
+    p._p.append(
+        parse_xml(
+            f'<w:r {nsdecls("w")}><w:ruby><w:rubyPr><w:rubyAlign w:val="distributeSpace"/></w:rubyPr>'
+            "<w:rt><w:r><w:t>とうきょう</w:t></w:r></w:rt><w:rubyBase><w:r><w:t>東京</w:t></w:r></w:rubyBase>"
+            "</w:ruby></w:r>"
+        )
+    )
+    p.add_run(".")
+    path = tmp_path / "ruby.docx"
+    d.save(str(path))
+    doc = load_document(path)
+    assert texts(doc) == ["Capital: 東京."]
+    assert doc.warnings == []

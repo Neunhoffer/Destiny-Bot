@@ -126,6 +126,15 @@ const local = {
   },
 };
 
+/**
+ * Book titles, file names and labels come from files. Their invisible direction
+ * controls (such as U+202E, right-to-left override) could flip the app's own words
+ * next to them, so they are removed wherever such text is mixed into a sentence.
+ * Elements that show only a title get dir="auto" instead, which isolates them.
+ */
+const BIDI_CONTROLS = /[\u202A-\u202E\u2066-\u2069]/g;
+const unbidi = (text) => String(text ?? '').replace(BIDI_CONTROLS, '');
+
 function truncate(text, max) {
   const clean = String(text || '').replace(/\s+/g, ' ').trim();
   return clean.length > max ? `${clean.slice(0, max - 1).trimEnd()}…` : clean;
@@ -298,7 +307,7 @@ function errorText(err) {
 function toast(message, { kind = 'info', action = null, actions = null, timeout = null } = {}) {
   const box = $('#toasts');
   const iconName = kind === 'error' ? 'alert' : kind === 'success' ? 'check' : 'info';
-  const text = el('div', { class: 'toast-msg', text: message });
+  const text = el('div', { class: 'toast-msg', text: unbidi(message) });
   const node = el('div', { class: `toast toast-${kind}`, role: kind === 'error' ? 'alert' : 'status' }, icon(iconName), text);
   let timer = 0;
   const close = () => {
@@ -333,7 +342,7 @@ function announce(text) {
   const live = $('#live');
   clearTimeout(announceTimer);
   live.textContent = '';
-  announceTimer = setTimeout(() => { live.textContent = text; }, 80);
+  announceTimer = setTimeout(() => { live.textContent = unbidi(text); }, 80);
 }
 
 let sessionExpiredShown = false;
@@ -1839,13 +1848,14 @@ function updatePlayUI() {
 
 function updateStatus() {
   const sec = state.section;
-  $('#now-title').textContent = state.book ? state.book.title : 'Nothing open';
+  $('#now-title').textContent = state.book ? unbidi(state.book.title) : 'Nothing open';
   let status;
+  const title = unbidi(sec?.section.title);
   if (!state.book) status = 'Add or open something to start listening';
   else if (!sec) status = 'Loading…';
-  else if (!sec.utterances.length) status = `Nothing to read aloud here · ${sec.section.title}`;
-  else if (player.loading) status = `Loading the voice… · ${sec.section.title}`;
-  else status = `Sentence ${state.index + 1} of ${sec.utterances.length} · ${sec.section.title}`;
+  else if (!sec.utterances.length) status = `Nothing to read aloud here · ${title}`;
+  else if (player.loading) status = `Loading the voice… · ${title}`;
+  else status = `Sentence ${state.index + 1} of ${sec.utterances.length} · ${title}`;
   $('#now-status').textContent = status;
 }
 
@@ -1998,9 +2008,9 @@ function updateMediaSession() {
     return;
   }
   navigator.mediaSession.metadata = new window.MediaMetadata({
-    title: state.section.section.title,
-    album: state.book.title,
-    artist: state.book.author || 'Athena',
+    title: unbidi(state.section.section.title),
+    album: unbidi(state.book.title),
+    artist: unbidi(state.book.author) || 'Athena',
     artwork: [{ src: '/static/icon.svg', sizes: '512x512', type: 'image/svg+xml' }],
   });
 }
@@ -2149,7 +2159,7 @@ function renderSection() {
   const article = el('article', { class: 'article', 'aria-labelledby': 'section-title' });
   const first = blocks[0];
   const titleFromBlock = first && first.kind === 'heading' && norm(first.text) === norm(section.title);
-  const title = el('h1', { class: 'section-title', id: 'section-title', tabindex: '-1' });
+  const title = el('h1', { class: 'section-title', id: 'section-title', tabindex: '-1', dir: 'auto' });
   if (titleFromBlock) {
     fillSentences(title, first.text, byBlock.get(0), title);
     title.dataset.block = '0';
@@ -2214,11 +2224,11 @@ function renderSectionNav() {
   const { prev_id: prevId, next_id: nextId } = state.section;
   if (prevId) {
     nav.append(el('button', { type: 'button', class: 'section-nav-btn prev', onclick: () => goToSection(prevId, { focusContent: true }) },
-      el('span', { class: 'section-nav-dir', text: '← Previous' }), el('span', { class: 'section-nav-title', text: titleOf(prevId) })));
+      el('span', { class: 'section-nav-dir', text: '← Previous' }), el('span', { class: 'section-nav-title', dir: 'auto', text: titleOf(prevId) })));
   }
   if (nextId) {
     nav.append(el('button', { type: 'button', class: 'section-nav-btn next', onclick: () => goToSection(nextId, { focusContent: true }) },
-      el('span', { class: 'section-nav-dir', text: 'Next →' }), el('span', { class: 'section-nav-title', text: titleOf(nextId) })));
+      el('span', { class: 'section-nav-dir', text: 'Next →' }), el('span', { class: 'section-nav-title', dir: 'auto', text: titleOf(nextId) })));
   }
   nav.hidden = !prevId && !nextId;
 }
@@ -2365,8 +2375,8 @@ function renderReader() {
     body.replaceChildren(
       el('div', { class: 'book-bar' },
         el('div', { class: 'book-bar-text' },
-          el('span', { class: 'book-bar-title', text: state.book.title }),
-          [TYPE_LABELS[state.book.source_type] || state.book.source_type, state.book.author].filter(Boolean).join(' · ')),
+          el('span', { class: 'book-bar-title', dir: 'auto', text: state.book.title }),
+          [TYPE_LABELS[state.book.source_type] || state.book.source_type, unbidi(state.book.author)].filter(Boolean).join(' · ')),
         el('button', { type: 'button', class: 'btn btn-secondary btn-small', id: 'btn-export', onclick: openExport },
           el('span', { class: 'i' }, icon('download')), 'Save as audio')),
       el('div', { id: 'book-notices' }),
@@ -2488,12 +2498,12 @@ function bookItem(book, { deletable = true } = {}) {
     },
     el('span', { class: 'book-cover', 'aria-hidden': 'true', text: COVER_LABELS[book.source_type] || 'DOC' }),
     el('span', { class: 'book-text' },
-      el('span', { class: 'book-title', text: book.title }),
+      el('span', { class: 'book-title', dir: 'auto', text: book.title }),
       el('span', { class: 'book-sub', text: `${parts.join(' · ')} · ${info.text}` }),
       el('span', { class: 'book-progress', 'aria-hidden': 'true' }, bar))));
   if (deletable) {
     item.append(el('button', {
-      type: 'button', class: 'icon-btn icon-btn-small book-delete', 'aria-label': `Delete “${book.title}”`, title: 'Delete',
+      type: 'button', class: 'icon-btn icon-btn-small book-delete', 'aria-label': `Delete “${unbidi(book.title)}”`, title: 'Delete',
       onclick: () => deleteBook(book),
     }, icon('trash')));
   }
@@ -2696,7 +2706,7 @@ function renderToc() {
         goToSection(entry.id, { focusContent: true });
         closeOverlays();
       },
-    }, el('span', { class: 'toc-title', text: entry.title }),
+    }, el('span', { class: 'toc-title', dir: 'auto', text: entry.title }),
     page ? el('span', { class: 'toc-page', 'aria-hidden': 'true', text: page }) : null,
     spokenPage ? el('span', { class: 'visually-hidden', text: spokenPage }) : null);
     const li = el('li', null, button);
@@ -2750,10 +2760,10 @@ function renderBookmarks() {
           closeOverlays();
         },
       }, icon('bookmarkFilled'), el('span', null,
-        el('span', { class: 'bookmark-label', text: bm.label || 'Bookmark' }),
-        el('span', { class: 'bookmark-where', text: `${where} · sentence ${bm.utterance + 1}` }))),
+        el('span', { class: 'bookmark-label', dir: 'auto', text: bm.label || 'Bookmark' }),
+        el('span', { class: 'bookmark-where', text: `${unbidi(where)} · sentence ${bm.utterance + 1}` }))),
       el('button', {
-        type: 'button', class: 'icon-btn icon-btn-small', 'aria-label': `Delete bookmark “${truncate(bm.label, 40)}”`,
+        type: 'button', class: 'icon-btn icon-btn-small', 'aria-label': `Delete bookmark “${unbidi(truncate(bm.label, 40))}”`,
         onclick: () => removeBookmark(bm),
       }, icon('trash')));
   }));
@@ -2853,9 +2863,9 @@ async function importFiles(files) {
 function addTask(name) {
   const bar = el('div', { class: 'progress-bar' });
   const message = el('p', { class: 'task-msg', text: 'Uploading…' });
-  const node = el('div', { class: 'task', role: 'group', 'aria-label': `Adding ${name}` },
-    el('div', { class: 'task-head' }, el('span', { class: 'i' }, icon('file')), el('span', { class: 'task-name', text: name })),
-    el('div', { class: 'progress', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-label': `Progress for ${name}` }, bar),
+  const node = el('div', { class: 'task', role: 'group', 'aria-label': `Adding ${unbidi(name)}` },
+    el('div', { class: 'task-head' }, el('span', { class: 'i' }, icon('file')), el('span', { class: 'task-name', dir: 'auto', text: name })),
+    el('div', { class: 'progress', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-label': `Progress for ${unbidi(name)}` }, bar),
     message);
   $('#tasks').append(node);
   const progress = node.querySelector('[role="progressbar"]');
@@ -2864,7 +2874,7 @@ function addTask(name) {
       const pct = Math.round(clamp(fraction, 0, 1) * 100);
       bar.style.width = `${pct}%`;
       progress.setAttribute('aria-valuenow', String(pct));
-      if (text) message.textContent = text;
+      if (text) message.textContent = unbidi(text);
     },
     done(text) {
       this.update(1, text);
@@ -2872,7 +2882,7 @@ function addTask(name) {
     },
     fail(text) {
       node.classList.add('is-error');
-      message.textContent = text;
+      message.textContent = unbidi(text);
       node.querySelector('.task-head').append(el('button', {
         type: 'button', class: 'icon-btn icon-btn-small', 'aria-label': 'Dismiss', onclick: () => node.remove(),
       }, icon('close')));
@@ -3038,7 +3048,7 @@ function currentThread() {
 
 function renderStudy() {
   const context = $('#study-context');
-  context.textContent = state.section ? `About: ${state.section.section.title}` : 'Open something to read first';
+  context.textContent = state.section ? `About: ${unbidi(state.section.section.title)}` : 'Open something to read first';
   updateStudyActions();
   const box = $('#study-thread');
   box.replaceChildren();
@@ -3110,7 +3120,7 @@ function renderStudyItem(item, thread) {
     default:
       return el('div', { class: 'card answer-card' },
         el('p', { class: 'card-title' }, icon(item.icon || 'bulb'), item.title || 'Answer'),
-        item.quote ? el('p', { class: 'card-quote', text: item.quote }) : null,
+        item.quote ? el('p', { class: 'card-quote', dir: 'auto', text: item.quote }) : null,
         el('div', { class: 'card-body' }, textParagraphs(item.text)),
         el('div', { class: 'card-foot' }, readAloudButton(item.text)));
   }
@@ -3431,7 +3441,7 @@ function setupDialogs() {
 
 function confirmDialog({ title, message, okLabel = 'OK' }) {
   const dialog = $('#confirm-dialog');
-  $('#confirm-title').textContent = title;
+  $('#confirm-title').textContent = unbidi(title);
   $('#confirm-message').textContent = message;
   $('#confirm-ok').textContent = okLabel;
   return new Promise((resolve) => {
@@ -4062,7 +4072,7 @@ function resetExportForm() {
     const input = el('input', { type: 'checkbox', value: entry.id });
     input.checked = true;
     input.addEventListener('change', syncExportAll);
-    return el('label', { class: `check level-${Math.min(3, entry.level || 1)}` }, input, el('span', { text: entry.title }));
+    return el('label', { class: `check level-${Math.min(3, entry.level || 1)}` }, input, el('span', { dir: 'auto', text: entry.title }));
   }));
   const select = $('#export-voice');
   select.replaceChildren();
@@ -4104,7 +4114,7 @@ function renderExportFiles(files) {
     el('ul', { class: 'file-list' }, files.map((file) => el('li', null,
       el('a', { class: 'file-link', href: exportDownloadUrl(file.url || ''), download: file.name },
         icon(/\.m3u8?$/i.test(file.name) ? 'file' : 'music'),
-        el('span', { class: 'file-name', text: file.name }),
+        el('span', { class: 'file-name', dir: 'auto', text: file.name }),
         el('span', { class: 'file-size', text: formatSize(file.size) }))))));
 }
 

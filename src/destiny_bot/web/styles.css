@@ -1122,6 +1122,11 @@ input[type="radio"] {
   font-size: 12.5px;
 }
 
+/* Titles and names from files keep their own text direction without reordering ours. */
+[dir="auto"] {
+  unicode-bidi: isolate;
+}
+
 /* ---------------------------------------------------------------- reader */
 
 .banners {

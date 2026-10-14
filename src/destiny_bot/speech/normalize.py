@@ -54,6 +54,7 @@ def normalize_for_speech(text: str, options: ReadingOptions | None = None) -> st
     t = _symbols(t)
     t = _fix_caps(t)
     t = vault.restore(t)
+    t = _abbreviation_periods(t)
     t = _spoken_numbers(t)
     t = _tidy(t)
     return t if _SPEAKABLE.search(t) else ""
@@ -436,8 +437,11 @@ _TITLES = {
     "Lt": "Lieutenant", "Capt": "Captain", "Col": "Colonel", "Sgt": "Sergeant", "Cpl": "Corporal",
     "Pvt": "Private", "Adm": "Admiral", "Maj": "Major", "Cmdr": "Commander", "Rev": "Reverend",
     "Hon": "Honorable", "Prof": "Professor", "Supt": "Superintendent", "Msgr": "Monsignor", "Mt": "Mount",
-    "Ft": "Fort",
+    "Ft": "Fort", "Mr": "Mister", "Mrs": "Missus", "Ms": "Miz", "Mx": "Mix", "Dr": "Doctor", "St": "Saint",
+    "Messrs": "Messieurs", "Mme": "Madame", "Mlle": "Mademoiselle", "Fr": "Father",
 }
+# After a capitalized word these are street names: "Main St.", "Elm Dr.".
+_STREET_TITLES = frozenset({"St", "Dr"})
 _MONTH_ABBREVIATIONS = {
     "Jan": "January", "Feb": "February", "Mar": "March", "Apr": "April", "Jun": "June", "Jul": "July",
     "Aug": "August", "Sep": "September", "Sept": "September", "Oct": "October", "Nov": "November",
@@ -459,6 +463,8 @@ def _titled_abbreviation(m: re.Match[str]) -> str:
     word, space = m.groups()
     rest = m.string[m.end() :]
     if word in _TITLES and space and re.match(f"[{_UP}]", rest):
+        if word in _STREET_TITLES and re.search(rf"\b[{_UP}][\w'’\-]*\s+$", m.string[: m.start()]):
+            return m.group()
         return _TITLES[word] + " "
     if word in _MONTH_ABBREVIATIONS and space and rest[:1].isdigit():
         return _MONTH_ABBREVIATIONS[word] + space
@@ -735,7 +741,13 @@ _YEAR_LEAD = re.compile(
     r"summer|autumn|winter)|\b(?:" + _MONTHS + r")(?:\s+\d{1,2}(?:st|nd|rd|th)?,?)?|\bAD|\bA\.D\.|[(\[]"
     rf"|\b[{_UP}][\w'’\-]*(?:\s+et\s+al\.?|\s+and\s+colleagues)?,)\s*$"
 )
+# "pages 1200 and 1300", "Section 1983", "No. 1066": numbers that name things are not years.
+_NOT_YEAR_LEAD = re.compile(
+    r"(?i:\b(?:pages?|pp?\.?|sections?|§|nos?\.?|numbers?|rooms?|figures?|tables?|chapters?|lines?|items?|"
+    r"exercises?|problems?|questions?|units?|steps?|codes?|models?|versions?|ext\.?|extension))\s*$"
+)
 _YEAR = re.compile(r"(?<![\w.,$£€¥/:#'’\-])(1\d{3}|20\d\d)(?![\w%]|[.,:/]\d)")
+_ERA_NEXT = re.compile(rf"\s*{_ERA}")
 _YEAR_RANGE_NEXT = re.compile(r"\s*(?:to|and|or|through|until|till|[-–—,])\s*$")
 _DECADE = re.compile(r"(?<![\w.,$£€¥/:#'’])(1[1-9]\d0|20\d0)['’]?s\b")
 _SHORT_DECADE = re.compile(
@@ -746,7 +758,16 @@ _MONTH_DAY = re.compile(
     rf"\b({_MONTHS})\s+([1-9]|[12]\d|3[01])(?:(\s+(?:to|and|or|through)\s+|[-–])([1-9]|[12]\d|3[01]))?"
     r"(?![\d:]|\.\d|st\b|nd\b|rd\b|th\b|\s*(?:%|percent))"
 )
+# "4 July 1776", "on 3 March": a day before the month (but not "Option 2 May be chosen").
 _DAY_MONTH = re.compile(rf"(?<![\w.,$£€¥:/])([1-9]|[12]\d|3[01])\s+({_MONTHS})\b")
+_DAY_MONTH_LEAD = re.compile(r"(?i:\b(?:on|the|by|until|till|since|from|before|after))\s+$")
+
+
+def _day_month_repl(m: re.Match[str]) -> str:
+    s = m.string
+    if re.match(r",?\s+\d{4}\b", s[m.end() :]) or _DAY_MONTH_LEAD.search(s[max(0, m.start() - 8) : m.start()]):
+        return f"{_ordinal_digits(m.group(1))} {m.group(2)}"
+    return m.group()
 
 
 def _ordinal_suffix(n: int) -> str:
@@ -805,7 +826,7 @@ def _dates(text: str) -> str:
         return text
     if re.search(_MONTHS, text):
         text = _MONTH_DAY.sub(_month_day_repl, text)
-        text = _DAY_MONTH.sub(lambda m: f"{_ordinal_digits(m.group(1))} {m.group(2)}", text)
+        text = _DAY_MONTH.sub(_day_month_repl, text)
     if "0s" in text or "0's" in text or "0’s" in text:
         text = _DECADE.sub(lambda m: _decade_words(int(m.group(1))), text)
         text = _SHORT_DECADE.sub(lambda m: _plural_number_word(int(m.group(1)) * 10), text)
@@ -816,8 +837,9 @@ def _dates(text: str) -> str:
         n = int(m.group(1))
         s = m.string
         after = s[m.end() :]
-        is_year = bool(re.match(rf"\s*{_ERA}", after)) and n >= 1000
-        if not is_year and 1000 <= n <= 2099 and not _unit_follows(s, m.end()):
+        is_year = bool(_ERA_NEXT.match(after)) and n >= 1000
+        maybe = 1000 <= n <= 2099 and n not in (1024, 2048) and not _unit_follows(s, m.end())
+        if not is_year and maybe and not _NOT_YEAR_LEAD.search(s[max(0, m.start() - 12) : m.start()]):
             lead = _YEAR_LEAD.search(s[max(0, m.start() - 40) : m.start()])
             if last_year_end >= 0 and _YEAR_RANGE_NEXT.fullmatch(s[last_year_end : m.start()]):
                 is_year = True  # "from 1914 to 1918"
@@ -909,10 +931,11 @@ def _phone_numbers(text: str, vault: _Vault) -> str:
         return vault.put(", ".join(" ".join(g.lstrip("+")) for g in groups if g))
 
     text = _PHONE.sub(lambda m: spoken(m.groups()), text)
-    return _LOCAL_PHONE.sub(
-        lambda m: spoken(m.groups()) if _PHONE_WORDS.search(m.string[max(0, m.start() - 30) : m.start()]) else m.group(),
-        text,
-    )
+
+    def local(m: re.Match[str]) -> str:  # "555-1234" only next to a word like "call" or "phone"
+        return spoken(m.groups()) if _PHONE_WORDS.search(m.string[max(0, m.start() - 30) : m.start()]) else m.group()
+
+    return _LOCAL_PHONE.sub(local, text)
 
 
 # Clock times, ratios, thousands separators and decimals, as the very last step. Decimals become
@@ -935,6 +958,23 @@ def _clock_repl(m: re.Match[str]) -> str:
     if minutes[0] == "0":
         return f"{hour} oh {minutes[1]}"  # "10:05" -> "ten oh five"
     return f"{hour} {minutes}"  # "3:30" -> "three thirty" (Kokoro pauses at a colon)
+
+
+# A period inside a sentence makes both voices pause as if the sentence ended: "Franklin D.
+# Roosevelt", "the U.S. Army", "Apple Inc. and". Those periods are dropped (the letters stay).
+_DOTTED_ACRONYM = re.compile(r"(?<![\w.])(?:[A-Z]\.){2,}|\bPh\.\s?D\.")
+_INITIAL = re.compile(rf"(?<![\w.'’])([{_UP}])\.\s+(?=[{_UP}])")
+_COMPANY = re.compile(r"\b(Inc|Corp|Ltd|Co|Bros)\.(?=\s+\S)")
+
+
+def _abbreviation_periods(text: str) -> str:
+    if "." not in text:
+        return text
+    text = _DOTTED_ACRONYM.sub(
+        lambda m: " ".join(c for c in m.group() if c.isalpha()).upper() + ("." if _at_end(m) else ""), text
+    )
+    text = _INITIAL.sub(r"\1 ", text)
+    return _COMPANY.sub(r"\1", text)
 
 
 def _spoken_numbers(text: str) -> str:
@@ -990,7 +1030,8 @@ _FORMULA = re.compile(
 _SUP_RUN = re.compile("[" + _SUPERSCRIPTS + "]+")
 _SUB_RUN = re.compile("[" + _SUBSCRIPTS + "]+")
 _PROSE_POWER = re.compile(
-    r"((?<![\w^\\])[A-Za-z]|(?<![\w^\\])\d+(?:\.\d+)?|\))\^(\{[^{}]{1,40}\}|\([^()]{1,40}\)|[-−+]?\d+\.\d+|[-−+]?[A-Za-z0-9]+)"
+    r"((?<![\w^\\])[A-Za-z]|(?<![\w^\\])\d+(?:\.\d+)?|\))"  # the base: a letter, a number or a bracket
+    r"\^(\{[^{}]{1,40}\}|\([^()]{1,40}\)|[-−+]?\d+\.\d+|[-−+]?[A-Za-z0-9]+)"
     r"(?:/(?:\d+!?|[A-Za-z](?![\w])|\([^()]{1,40}\)))?"  # "x^2/2!" is "x squared over 2 factorial"
 )
 _PROSE_LATEX = re.compile(
@@ -1240,16 +1281,18 @@ def _ascii_formula_repl(m: re.Match[str]) -> str:
     s, end = m.string, m.end()
     if charge:
         charge = charge.translate(_SUP_MAP).replace("−", "-")
-    if end < len(s) and (s[end].isalnum() or s[end] == "_" or (s[end] in "-–" and s[end + 1 : end + 2].isalnum())):
+    nxt = s[end : end + 2]
+    if nxt[:1].isalnum() or nxt[:1] == "_" or (nxt[:1] in ("-", "–") and nxt[1:].isalnum()):
         return m.group()  # part of a longer word or name: "CO2e", "C10-C19", "SARS-CoV-2"
     parts = re.findall(r"([A-Z][a-z]?)(\d*)", body)
     if "".join(sym + n for sym, n in parts) != body or any(sym not in _ELEMENTS for sym, _ in parts):
         return m.group()
     counted = any(n for _, n in parts)
-    if not counted and not charge:
-        # Without digits or a charge only clear compounds count: "NaCl", "KOH" stays an acronym.
-        if len(parts) < 2 or (body.isupper() and body not in _CAPS_FORMULAS) or body in _NOT_FORMULAS or coefficient:
-            return m.group()
+    # Without digits or a charge only clear compounds count: "NaCl" and "KOH", but not "USA" or "HeLa".
+    if not counted and not charge and (
+        len(parts) < 2 or (body.isupper() and body not in _CAPS_FORMULAS) or body in _NOT_FORMULAS or coefficient
+    ):
+        return m.group()
     if charge and not counted and body.isupper() and len(parts) > 2:
         return m.group()  # "SVN- or CVS-style": a hyphen after an acronym, not an ion
     if charge and parts[-1][1] and len(parts[-1][1]) >= 2 and len(charge) == 1:
@@ -1415,6 +1458,8 @@ _COEFFICIENT_TERM = re.compile(r"\d+(?:\.\d+)?[a-rt-z]")  # "2x" in "y = 2x - 1"
 def _is_operand(token: str) -> bool:
     """A number, a single-letter variable, a Greek-letter name, or a bracketed expression."""
     token = token.strip("$£€")
+    if _VAULT_CHARS.fullmatch(token):
+        return True  # finished speech: a formula ("C O 2"), an amount of money
     if not _SPEAKABLE.search(token):
         return False  # a lone "(" is not an operand
     if _NUMBER_TOKEN.match(token):
