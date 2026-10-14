@@ -288,8 +288,8 @@ _NOT_AUTHOR = frozenset(
     Famine Election Elections Constitution Amendment Era Period Age Dynasty Empire Republic
     Movement Plan Program Programme Project Mission Battle Siege Invasion Season Series Episode
     Draft Reprint Session Term Semester Quarter Total Population Estimated Approx Firmware Apollo
-    The A An This That These Those His Her Its Their Our My Your Fiscal Budget Bowl Wave Round Tier
-    Group Batch Week Weeks Month Months Decade Century Spring Term Fall Term
+    The A An This That These Those His Her Its Their Our My Your Budget Bowl Wave Round Tier
+    Group Batch Weeks Month Months Decade Century
     London Paris Berlin Rome Vienna Madrid Moscow Tokyo Beijing Peking Boston Chicago Philadelphia
     Geneva Amsterdam Stockholm Copenhagen Oslo Athens Cairo Delhi Mumbai Bombay Shanghai Sydney
     Toronto York Kyoto Prague Budapest Warsaw Lisbon Dublin Edinburgh Brussels Florence Venice Milan
@@ -327,7 +327,7 @@ def _narrative_citation(text: str, pos: int) -> bool:
     before = text[: pos - len(pre) + m.start()].rstrip()
     if not before or before[-1] in ".!?:;([“\"'‘,—–":
         return True
-    lw = re.search(r"([^\W\d_][\w'’\-]*)\W*$", before)
+    lw = re.search(r"([^\W\d_][\w'’\-]*)\W*$", before[-100:])
     if not lw:
         return True
     word = lw.group(1)
@@ -336,7 +336,7 @@ def _narrative_citation(text: str, pos: int) -> bool:
     if word[0].isupper():
         # Only OK when that capital is the start of the sentence ("As Smith (2019) noted");
         # otherwise the name is part of a longer proper noun ("Clean Air Act (1970)").
-        head = before[: lw.start()].rstrip()
+        head = before[: len(before) - len(before[-100:]) + lw.start()].rstrip()
         return (not head or head[-1] in ".!?:;([“\"'‘") and word not in _NOT_AUTHOR
     return True
 
@@ -555,10 +555,10 @@ _REGNAL_NAMES = (
     "Haakon|Olaf|Harald|Magnus|Eric|Erik|Valdemar|Canute|Malcolm|David|Robert|Duncan|Kenneth|"
     "Stephen|Matilda|Harold|Alfred|Edmund|Ethelred|Athelstan|Edgar|Llywelyn|Hugh|Lothair|Pepin|Childeric|"
     "Clovis|Conrad|Lothar|Sixtus|Julius|Adrian|Hadrian|Celestine|Martin|Nicolas|Eugene|Eugenius|"
-    "Sergius|Theodore|Basil|Michael|Andronikos|Manuel|Alexios|Isaac|Romanos|Leopold|Albert|Baudouin|"
+    "Sergius|Theodore|Basil|Michael|Andronikos|Alexios|Isaac|Romanos|Albert|Baudouin|"
     "Willem|Juliana|Beatrix|Margrethe|Carl|Akihito|Rama|Kamehameha|Mohammed|Muhammad|Hussein|Abdullah|"
     "Faisal|Farouk|Fuad|Reza|Ludwig|Augustus|Tutankhamun|Sobekhotep|Senusret|Amenemhat|Sesostris|"
-    "Nebuchadnezzar|Ashurbanipal|Sargon|Shalmaneser|Tiglath-Pileser|Sennacherib|Esarhaddon|Antiochus"
+    "Nebuchadnezzar|Ashurbanipal|Sargon|Shalmaneser|Tiglath-Pileser|Sennacherib|Esarhaddon"
 )
 _REGNAL = re.compile(
     rf"\b((?i:{_REGNAL_NAMES}))\s+([IVXL]+)(['’]s)?\b(?!['’]\w)"
@@ -850,7 +850,7 @@ def _unit_repl(m: re.Match[str]) -> str:
     money, number, unit, per, power = m.groups()
     if money and unit in _MONEY_AMBIGUOUS:
         return m.group()
-    if unit in ("K", "M") and m.group(3) and not re.search(r"\d\s", m.group()):
+    if unit in ("K", "M") and not re.search(r"\d\s", m.group()):
         return m.group()  # "10K run", "5M users"
     singular, plural = _UNITS[unit]
     one = number in ("1", "1.0")
@@ -1228,13 +1228,13 @@ def _fix_caps(text: str) -> str:
     pos = 0
     i = 0
     while i < len(words):
-        if not _is_caps(words[i].group()):
+        if not words[i].group().isupper():
             i += 1
             continue
         j = i
         while (
             j + 1 < len(words)
-            and _is_caps(words[j + 1].group())
+            and words[j + 1].group().isupper()
             and not re.search(r"[a-z]", text[words[j].end() : words[j + 1].start()])
         ):
             j += 1
@@ -1248,10 +1248,6 @@ def _fix_caps(text: str) -> str:
         i = j + 1
     out.append(text[pos:])
     return "".join(out)
-
-
-def _is_caps(word: str) -> bool:
-    return word.isupper()
 
 
 def _is_plain_word(m: re.Match[str]) -> bool:
