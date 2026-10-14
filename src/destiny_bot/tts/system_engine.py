@@ -507,28 +507,28 @@ class _WindowsBackend(_Backend):
     def synthesize(self, text: str, voice: str | None, wpm: int, rate: float) -> AudioClip:
         with tempfile.TemporaryDirectory(prefix="destiny-sapi-", ignore_cleanup_errors=True) as tmp_dir:
             tmp = Path(tmp_dir)
+            data: bytes | None = None
             worker = self._sapi()
-            if worker is None:
-                return _wav_clip(self._powershell_speak(text, voice, wpm, tmp))
-            # Its own file: a SAPI call that timed out may still hold it open.
-            sapi_out = tmp / "sapi.wav"
-            try:
-                worker.call(_sapi_save, text, voice, _sapi_rate(wpm), str(sapi_out), timeout=_synth_timeout(text))
-                data = sapi_out.read_bytes()
-            except EngineUnavailable:
-                raise
-            except Exception:
-                self._give_up_on_sapi()
-                return _wav_clip(self._powershell_speak(text, voice, wpm, tmp))
-            if _has_audio(data):
+            if worker is not None:
+                sapi_out = tmp / "sapi.wav"  # its own file: a SAPI call that timed out may still hold it open
+                try:
+                    worker.call(_sapi_save, text, voice, _sapi_rate(wpm), str(sapi_out), timeout=_synth_timeout(text))
+                    data = sapi_out.read_bytes()
+                except EngineUnavailable:
+                    raise
+                except Exception:
+                    self._give_up_on_sapi()
+            if data is not None and _has_audio(data):
                 return _wav_clip(data)
-            # No sound: either nothing speakable, or SAPI is broken here. Ask PowerShell.
-            if not self._powershell():
-                return _wav_clip(data)
-            fallback = self._powershell_speak(text, voice, wpm, tmp)
-            if _has_audio(fallback):
-                self._give_up_on_sapi()
-            return _wav_clip(fallback)
+            # SAPI isn't usable, failed, or made no sound (broken here, or nothing speakable): ask PowerShell.
+            if data is None or self._powershell():
+                fallback = self._powershell_speak(text, voice, wpm, tmp)
+                if data is not None and _has_audio(fallback):
+                    self._give_up_on_sapi()
+                data = fallback
+            if not _has_audio(data) and any(ch.isalnum() for ch in text):
+                raise TTSError(_FAILED_MSG)  # never play silence in place of words
+            return _wav_clip(data)  # e.g. only punctuation: a short pause
 
     def _powershell_speak(self, text: str, voice: str | None, wpm: int, tmp: Path) -> bytes:
         """The WAV bytes System.Speech makes for ``text`` (through Windows PowerShell)."""

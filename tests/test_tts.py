@@ -1029,6 +1029,12 @@ def test_system_windows_unspeakable_text_keeps_sapi(monkeypatch):
     assert wav_seconds(clip.data) == pytest.approx(0.2, abs=0.01)  # a short pause
     engine.synthesize("...", "Microsoft Zira Desktop")
     assert len(sapi.spoken) == 2 and len(fake.calls) == 2
+    with pytest.raises(TTSError, match="couldn't read this text"):  # words never become silence
+        engine.synthesize("Hello there", "Microsoft Zira Desktop")
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    monkeypatch.setenv("SystemRoot", "/nonexistent")
+    with pytest.raises(TTSError, match="couldn't read this text"):  # no PowerShell to ask
+        engine.synthesize("Hello there", "Microsoft Zira Desktop")
 
 
 def test_system_windows_sapi_hang_falls_back(monkeypatch):

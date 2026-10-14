@@ -1,7 +1,9 @@
 name: desktop
 
-# Builds the Athena desktop app: a Windows installer on every change to the app,
-# and a macOS .dmg on demand. Tags v* attach the installers to a GitHub Release.
+# Builds the Athena desktop app: a Windows installer on pushes to main, on tags, and
+# on demand (Actions -> desktop -> Run workflow), plus a macOS .dmg on demand. Tags v*
+# attach the installers to a GitHub Release. Feature-branch pushes don't build, to save
+# Actions minutes: run it by hand when a branch needs an installer.
 on:
   workflow_dispatch:
     inputs:
@@ -14,7 +16,7 @@ on:
         type: boolean
         default: true
   push:
-    branches: ["**"]
+    branches: ["main"]
     tags: ["v*"]
     paths:
       - "packaging/**"
