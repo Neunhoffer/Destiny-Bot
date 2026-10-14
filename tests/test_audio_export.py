@@ -235,6 +235,44 @@ def test_trim_silence_special_cases():
     assert audio.clip_duration(trimmed) == pytest.approx(0.1 + 0.05, abs=0.001)
 
 
+def dominant_hz(pcm16: bytes, rate: int, channels: int = 1) -> float:
+    np = pytest.importorskip("numpy")
+    x = np.frombuffer(pcm16, dtype="<i2").reshape(-1, channels)[:, 0].astype(float)
+    spectrum = np.abs(np.fft.rfft(x * np.hanning(len(x))))
+    return float(np.fft.rfftfreq(len(x), 1 / rate)[spectrum.argmax()])
+
+
+@pytest.mark.parametrize("speed", [0.5, 1.25, 2.0, 3.0])
+def test_time_stretch_keeps_pitch_and_smoothness(speed):
+    np = pytest.importorskip("numpy")
+    rate = 16000
+    pcm = sine_pcm(2.0, rate, 220)
+    out = audio.time_stretch(pcm, 1, rate, speed)
+    samples = np.frombuffer(out, dtype="<i2").astype(float)
+    assert len(samples) == round(2.0 * rate / speed)  # exact length
+    assert dominant_hz(out, rate) == pytest.approx(220, abs=2)  # pitch unchanged
+    # Waveform-aligned overlap-add: the envelope stays flat (no phasing, no clicks).
+    blocks = np.abs(samples[: len(samples) // 160 * 160].reshape(-1, 160)).max(axis=1)[:-1]  # last 10 ms may run out of input
+    assert blocks.min() > 7900 and blocks.max() <= 8001
+    assert np.abs(np.diff(samples)).max() < 1.1 * np.abs(np.diff(np.frombuffer(pcm, dtype="<i2").astype(float))).max()
+
+
+def test_time_stretch_stereo_and_edge_cases(monkeypatch):
+    pytest.importorskip("numpy")
+    stereo = sine_pcm(0.5, 22050, 330, channels=2)
+    out = audio.time_stretch(stereo, 2, 22050, 1.5)
+    assert len(out) == 4 * round(0.5 * 22050 / 1.5)
+    assert dominant_hz(out, 22050, 2) == pytest.approx(330, abs=5)
+    assert audio.time_stretch(stereo, 2, 22050, 1.0) is stereo
+    assert audio.time_stretch(b"", 1, 22050, 2.0) == b""
+    silence = b"\x00\x00" * 8000
+    assert audio.time_stretch(silence, 1, 16000, 2.0) == b"\x00\x00" * 4000
+    tiny = sine_pcm(0.01, 16000)
+    assert len(audio.time_stretch(tiny, 1, 16000, 2.0)) == 2 * 80
+    monkeypatch.setattr(audio, "_np", lambda: None)
+    assert audio.time_stretch(stereo, 2, 22050, 2.0) is stereo  # no numpy: unchanged
+
+
 def test_trim_silence_is_fast():
     import time
 

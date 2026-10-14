@@ -223,15 +223,18 @@ def test_piper_default_prefers_english_when_no_lessac():
     assert PiperEngine().default_voice() == "en_GB-alba-medium"
 
 
-def test_piper_rate_maps_to_length_scale(fake_piper):
+def test_piper_rate_maps_to_length_scale_and_stretch(fake_piper):
     install_fake_voice("en_US-amy-medium", {"inference": {"length_scale": 1.2}})
     assert fake_piper.is_available() == (True, "")
-    slow = fake_piper.synthesize("Hello", rate=1.0)
+    normal = fake_piper.synthesize("Hello", rate=1.0)
+    slow = fake_piper.synthesize("Hello", "en_US-amy-medium", rate=0.5)
     fast = fake_piper.synthesize("Hello", "en_US-amy-medium", rate=2.0)
     voice = fake_piper._loaded["en_US-amy-medium"].voice
-    assert voice.calls == [pytest.approx(1.2), pytest.approx(0.6)]
-    assert slow.mime == "audio/wav" and slow.sample_rate == 22050
-    assert wav_seconds(fast.data) < wav_seconds(slow.data)
+    # Slower: Piper's own length_scale. Faster: natural render, then time-stretched.
+    assert voice.calls == [pytest.approx(1.2), pytest.approx(2.4), pytest.approx(1.2)]
+    assert normal.mime == fast.mime == "audio/wav" and fast.sample_rate == 22050
+    assert wav_seconds(fast.data) == pytest.approx(wav_seconds(normal.data) / 2, abs=0.001)
+    assert wav_seconds(slow.data) == pytest.approx(wav_seconds(normal.data) * 2, abs=0.001)
 
 
 def test_clamp_rate():
@@ -242,17 +245,20 @@ def test_clamp_rate():
     assert registry.clamp_rate(3.0, 0.5, 2.0) == 2.0
 
 
-def test_piper_length_scale_clamped():
-    from destiny_bot.tts.piper_engine import MAX_LENGTH_SCALE, MIN_LENGTH_SCALE, length_scale_for
+def test_piper_speed_plan():
+    from destiny_bot.tts.piper_engine import MAX_LENGTH_SCALE, speed_plan
 
     def voice(scale):
         return SimpleNamespace(config=SimpleNamespace(length_scale=scale))
 
-    assert [length_scale_for(voice(1.0), r) for r in (0.5, 1.0, 1.5, 2.0, 3.0)] == [2.0, 1.0, 0.6667, 0.5, 0.3333]
-    assert length_scale_for(voice(1.2), 0.25) == MAX_LENGTH_SCALE
-    assert length_scale_for(voice(1.0), 4.0) == MIN_LENGTH_SCALE
-    assert length_scale_for(voice(None), float("nan")) == 1.0
-    assert length_scale_for(voice(-3), 2.0) == 0.5
+    plans = [speed_plan(voice(1.0), r) for r in (0.5, 0.8, 1.0, 1.5, 2.0, 3.0)]
+    assert plans == [(2.0, 1.0), (1.25, 1.0), (1.0, 1.0), (1.0, 1.5), (1.0, 2.0), (1.0, 3.0)]
+    # Slower than length_scale allows: the rest is a (slowing) stretch.
+    assert speed_plan(voice(1.2), 0.25) == (MAX_LENGTH_SCALE, pytest.approx(0.5208, abs=1e-4))
+    assert speed_plan(voice(1.0), 9.0) == (1.0, 4.0)
+    assert speed_plan(voice(None), float("nan")) == (1.0, 1.0)
+    assert speed_plan(voice(-3), 2.0) == (1.0, 2.0)
+    assert speed_plan(voice(40), 1.0) == (MAX_LENGTH_SCALE, 1.0)
 
 
 def test_piper_lru_keeps_two_voices(fake_piper):
@@ -313,8 +319,8 @@ def test_piper_old_api_and_unknown_voice(monkeypatch):
     monkeypatch.setattr(PiperEngine, "_load", lambda self, path: old)
     install_fake_voice("en_US-amy-medium")
     engine = PiperEngine()
-    clip = engine.synthesize("Hi", rate=1.25)
-    assert old.length_scale == pytest.approx(0.8)
+    clip = engine.synthesize("Hi", rate=0.8)
+    assert old.length_scale == pytest.approx(1.25)
     assert clip.sample_rate == 16000 and wav_seconds(clip.data) == pytest.approx(0.1)
     with pytest.raises(EngineUnavailable, match="isn't downloaded"):
         engine.synthesize("Hi", "en_US-missing-medium")
@@ -361,8 +367,8 @@ def test_piper_real_reader_rates(piper_voice_path):
         assert max(abs(s) for s in samples) > 1000
         durations.append(len(samples) / sr)
     assert durations == sorted(durations, reverse=True)
-    assert durations[0] / durations[1] == pytest.approx(2.0, rel=0.25)
-    assert durations[1] / durations[4] == pytest.approx(3.0, rel=0.3)
+    assert durations[0] / durations[1] == pytest.approx(2.0, rel=0.25)  # native slow-down (stochastic)
+    assert durations[1] / durations[4] == pytest.approx(3.0, rel=0.1)
 
 
 def test_piper_real_concurrent(piper_voice_path):

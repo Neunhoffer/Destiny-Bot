@@ -91,8 +91,8 @@ def export_audiobook(
                 out_dir=out_dir,
                 written=written,
                 cancel=cancel,
-                on_utterance=lambda i, n, t=title: report(
-                    (done + i) / total_utts * 0.99, f"Recording {t} ({i}/{n})"
+                on_utterance=lambda i, n, t=title, before=done: report(
+                    (before + i) / total_utts * 0.99, f"Recording {t} ({i}/{n})"
                 ),
             )
             done += len(plan)

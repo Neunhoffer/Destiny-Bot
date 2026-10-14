@@ -38,7 +38,7 @@ from .ingest import IngestError
 from .jobs import is_friendly_error
 from .library import Library, is_valid_doc_id, wipe_user_data
 from .models import Block, BlockKind, Document, Section, Utterance
-from .tts.base import AudioClip, TTSEngine, TTSError
+from .tts.base import AudioClip, TTSEngine
 
 ONLINE_TTS_OFF = "Online voices are turned off in Settings (they send text to Microsoft)."
 DEFAULT_VOICE_ID = "en_US-lessac-medium"
@@ -422,12 +422,12 @@ def _cmd_read(args: argparse.Namespace) -> int:
     doc = resolve_book(lib, args.book)
     settings = config.load_settings()
     engine = _choose_engine(args.engine, settings)
-    voice = args.voice or settings.voices.get(engine.name) or None
+    # Same voice choice and cache key as the web reader, so sentences heard there play instantly here.
+    voice = args.voice or settings.voices.get(engine.name) or engine.default_voice()
     rate = args.rate if args.rate is not None else settings.speed
     speech, audio = _speech(), _audio()
     cache = _audio_cache_class()(config.cache_dir())
     rate_key = _rate_key(rate)
-
     trim = getattr(audio, "trim_silence", None)
 
     def make(text: str) -> AudioClip:
@@ -440,7 +440,6 @@ def _cmd_read(args: argparse.Namespace) -> int:
         return clip
 
     def synthesize(text: str) -> AudioClip:
-        # Same cache key as the web reader, so sentences heard there play instantly here.
         return cache.get_or_create((engine.name, voice or "", rate_key, text), lambda: make(text))
 
     start_section, start_utterance, resumed = _start_position(lib, doc, args.section)

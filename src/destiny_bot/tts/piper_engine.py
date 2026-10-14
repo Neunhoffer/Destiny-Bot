@@ -18,7 +18,7 @@ from .catalog import CATALOG, RECOMMENDED_VOICE, catalog_voice, installed_piper_
 
 NO_VOICE_REASON = "No natural voice downloaded yet. Open Settings → Voices and download one (about 60 MB)."
 MAX_LOADED_VOICES = 2  # each loaded voice holds ~60-120 MB of RAM
-# Piper's length_scale: < 1 is faster. Beyond this range speech turns garbled or droning.
+# Piper's length_scale (> 1 is slower). Past this range speech turns garbled or droning.
 MIN_LENGTH_SCALE = 0.3
 MAX_LENGTH_SCALE = 2.5
 _CATALOG_ORDER = {v.id: i for i, v in enumerate(CATALOG)}
@@ -78,14 +78,22 @@ class PiperEngine(TTSEngine):
         if voice_id is None:
             raise EngineUnavailable(NO_VOICE_REASON)
         entry = self._get_voice(voice_id)
-        length_scale = length_scale_for(entry.voice, rate)
+        length_scale, stretch = speed_plan(entry.voice, rate)
         try:
             with entry.lock:
-                return self._run(entry.voice, text, length_scale)
+                clip = self._run(entry.voice, text, length_scale)
         except TTSError:
             raise
         except Exception as exc:  # onnxruntime / phonemizer failures
             raise TTSError(f"The natural voice couldn't read this text ({type(exc).__name__}: {exc}).") from exc
+        if stretch == 1.0:
+            return clip
+        from ..audio import read_wav, time_stretch, wav_bytes
+
+        # Stretching runs outside the voice lock so other requests can use the voice meanwhile.
+        pcm, sample_rate, channels, _ = read_wav(clip.data)
+        stretched = time_stretch(pcm, channels, sample_rate, stretch)
+        return AudioClip(wav_bytes(stretched, sample_rate, channels), clip.mime, sample_rate)
 
     # -- voices on disk
 
@@ -211,16 +219,28 @@ class PiperEngine(TTSEngine):
         return AudioClip(buf.getvalue(), "audio/wav", sample_rate)
 
 
-def length_scale_for(voice: Any, rate: float) -> float:
-    """Piper length_scale for a speed multiplier: the voice's own scale / rate, clamped."""
+def speed_plan(voice: Any, rate: float) -> tuple[float, float]:
+    """How to reach speed ``rate``: (Piper length_scale, extra time-stretch factor).
+
+    Slowing down uses Piper's own length_scale (the voice's configured scale / rate),
+    which sounds natural. Speeding up can't: every phoneme lasts at least one
+    vocoder frame, so length_scale stops working well beyond ~1.3x and its effect
+    varies from sentence to sentence. Faster speeds therefore render at the natural
+    pace and are time-stretched (pitch preserved) by exactly ``rate``.
+    """
     try:
         base = float(getattr(voice.config, "length_scale", None) or 1.0)
     except (TypeError, ValueError):
         base = 1.0
     if not math.isfinite(base) or base <= 0:
         base = 1.0
-    scale = base / clamp_rate(rate)
-    return round(min(max(scale, MIN_LENGTH_SCALE), MAX_LENGTH_SCALE), 4)
+    base = min(max(base, MIN_LENGTH_SCALE), MAX_LENGTH_SCALE)
+    rate = clamp_rate(rate)
+    if rate >= 1.0:
+        return round(base, 4), round(rate, 4)
+    scale = min(base / rate, MAX_LENGTH_SCALE)
+    leftover = rate * scale / base  # < 1 only when slower than length_scale allows
+    return round(scale, 4), round(leftover, 4)
 
 
 def _stamp(path: Path) -> tuple[int, int]:

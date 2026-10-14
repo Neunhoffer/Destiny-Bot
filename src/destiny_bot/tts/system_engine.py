@@ -283,7 +283,9 @@ $s = New-Object System.Speech.Synthesis.SpeechSynthesizer
 try {
   if ($env:DESTINY_TTS_VOICE) { $s.SelectVoice($env:DESTINY_TTS_VOICE) }
   $s.Rate = [int]$env:DESTINY_TTS_RATE
-  $fmt = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(22050, [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen, [System.Speech.AudioFormat.AudioChannel]::Mono)
+  $bits = [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen
+  $mono = [System.Speech.AudioFormat.AudioChannel]::Mono
+  $fmt = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(22050, $bits, $mono)
   $s.SetOutputToWaveFile($env:DESTINY_TTS_OUT, $fmt)
   $text = [System.IO.File]::ReadAllText($env:DESTINY_TTS_TEXT, [System.Text.Encoding]::UTF8)
   $s.Speak($text)

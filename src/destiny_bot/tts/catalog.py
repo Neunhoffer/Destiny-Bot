@@ -59,78 +59,40 @@ class DownloadCancelled(RuntimeError):
     """The user cancelled the download."""
 
 
-def _v(
-    voice_id: str, name: str, quality: str, size_mb: float, description: str, gender: str, *, recommended: bool = False
-) -> CatalogVoice:
-    lang = voice_id.split("-", 1)[0].replace("_", "-")
-    return CatalogVoice(
+# (voice id, display name, approx. download size in MB, gender, description)
+_ENTRIES: list[tuple[str, str, float, str, str]] = [
+    ("en_US-lessac-medium", "Lessac (US English)", 63.2, "female",
+     "Clear, warm female voice. The best all-round choice for textbooks."),
+    ("en_US-amy-medium", "Amy (US English)", 63.2, "female", "Friendly, bright female voice."),
+    ("en_US-ryan-high", "Ryan (US English, high quality)", 120.8, "male",
+     "Rich male voice with extra detail; larger download, a little slower."),
+    ("en_US-hfc_female-medium", "HFC Female (US English)", 63.2, "female",
+     "Calm, even-paced female voice, good for long listening."),
+    ("en_US-hfc_male-medium", "HFC Male (US English)", 63.2, "male",
+     "Calm, even-paced male voice, good for long listening."),
+    ("en_US-joe-medium", "Joe (US English)", 63.2, "male", "Relaxed, conversational male voice."),
+    ("en_US-kristin-medium", "Kristin (US English)", 63.2, "female", "Expressive female audiobook-style voice."),
+    ("en_GB-alba-medium", "Alba (British English)", 63.2, "female", "Gentle Scottish-accented female voice."),
+    ("en_GB-northern_english_male-medium", "Northern English Male (British English)", 63.2, "male",
+     "Steady male voice with a Northern English accent."),
+    ("en_GB-cori-high", "Cori (British English, high quality)", 114.2, "female",
+     "Polished female British voice; larger download."),
+    ("es_ES-davefx-medium", "Davefx (Spanish, Spain)", 63.2, "male", "Clear male voice for Spanish from Spain."),
+    ("es_MX-ald-medium", "Ald (Spanish, Mexico)", 63.2, "male", "Natural male voice for Latin American Spanish."),
+]  # fmt: skip
+
+CATALOG: list[CatalogVoice] = [
+    CatalogVoice(
         id=voice_id,
         name=name,
-        language=lang,
-        quality=quality,
+        language=voice_id.split("-", 1)[0].replace("_", "-"),
+        quality=voice_id.rsplit("-", 1)[1],
         size_mb=size_mb,
         description=description,
         gender=gender,
-        recommended=recommended,
+        recommended=voice_id == RECOMMENDED_VOICE,
     )
-
-
-CATALOG: list[CatalogVoice] = [
-    _v(
-        "en_US-lessac-medium",
-        "Lessac (US English)",
-        "medium",
-        63.2,
-        "Clear, warm female voice. The best all-round choice for textbooks.",
-        "female",
-        recommended=True,
-    ),
-    _v("en_US-amy-medium", "Amy (US English)", "medium", 63.2, "Friendly, bright female voice.", "female"),
-    _v(
-        "en_US-ryan-high",
-        "Ryan (US English, high quality)",
-        "high",
-        120.8,
-        "Rich male voice with extra detail; larger download, a little slower.",
-        "male",
-    ),
-    _v(
-        "en_US-hfc_female-medium",
-        "HFC Female (US English)",
-        "medium",
-        63.2,
-        "Calm, even-paced female voice, good for long listening.",
-        "female",
-    ),
-    _v(
-        "en_US-hfc_male-medium",
-        "HFC Male (US English)",
-        "medium",
-        63.2,
-        "Calm, even-paced male voice, good for long listening.",
-        "male",
-    ),
-    _v("en_US-joe-medium", "Joe (US English)", "medium", 63.2, "Relaxed, conversational male voice.", "male"),
-    _v("en_US-kristin-medium", "Kristin (US English)", "medium", 63.2, "Expressive female audiobook-style voice.", "female"),
-    _v("en_GB-alba-medium", "Alba (British English)", "medium", 63.2, "Gentle Scottish-accented female voice.", "female"),
-    _v(
-        "en_GB-northern_english_male-medium",
-        "Northern English Male (British English)",
-        "medium",
-        63.2,
-        "Steady male voice with a Northern English accent.",
-        "male",
-    ),
-    _v(
-        "en_GB-cori-high",
-        "Cori (British English, high quality)",
-        "high",
-        114.2,
-        "Polished female British voice; larger download.",
-        "female",
-    ),
-    _v("es_ES-davefx-medium", "Davefx (Spanish, Spain)", "medium", 63.2, "Clear male voice for Spanish from Spain.", "male"),
-    _v("es_MX-ald-medium", "Ald (Spanish, Mexico)", "medium", 63.2, "Natural male voice for Latin American Spanish.", "male"),
+    for voice_id, name, size_mb, gender, description in _ENTRIES
 ]
 
 _BY_ID = {v.id: v for v in CATALOG}
@@ -273,7 +235,9 @@ def _fetch(
                 raise VoiceDownloadError(
                     "Couldn't download the voice: the download server doesn't have it (error 404)."
                 ) from exc
-            raise VoiceDownloadError(f"Couldn't download the voice: the server answered with error {exc.code}.") from exc
+            raise VoiceDownloadError(
+                f"Couldn't download the voice: the server answered with error {exc.code}."
+            ) from exc
         except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError) as exc:
             raise VoiceDownloadError(_NETWORK_ERROR) from exc
         with response:

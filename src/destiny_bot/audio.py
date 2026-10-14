@@ -155,6 +155,55 @@ def trim_silence(clip: AudioClip, *, threshold_db: float = -45.0, keep_ms: int =
     return AudioClip(wav_bytes(body, rate, channels), WAV_MIME, rate)
 
 
+def time_stretch(pcm16: bytes, channels: int, sample_rate: int, speed: float) -> bytes:
+    """Change the speed of 16-bit PCM without changing its pitch (WSOLA).
+
+    ``speed`` > 1 makes it faster/shorter. Each 25 ms output frame is taken from
+    near its ideal source position, shifted by up to ±8 ms to the spot that best
+    continues the previous frame's waveform, then overlap-added with a Hann
+    window, so voices stay smooth without echoes or clicks. Needs numpy (installed
+    with piper-tts); without it the audio is returned unchanged.
+    """
+    np = _np()
+    if np is None or not pcm16 or abs(speed - 1.0) < 1e-3 or speed <= 0:
+        return pcm16
+    x = np.frombuffer(pcm16, dtype="<i2").reshape(-1, channels).astype(np.float32)
+    n_in = len(x)
+    n_out = max(1, int(round(n_in / speed)))
+    frame = max(32, int(sample_rate * 0.025) // 2 * 2)
+    hop_out = frame // 2
+    hop_in = hop_out * speed
+    tol = max(1, int(sample_rate * 0.008))
+    window = (0.5 - 0.5 * np.cos(2 * np.pi * np.arange(frame) / frame)).astype(np.float32)[:, None]
+
+    frames = n_out // hop_out + 2
+    lead = tol + hop_out  # room to search left of 0, and half a frame so the start isn't faded
+    tail = frame + 2 * tol + int(hop_in * 2) + hop_out
+    xp = np.concatenate([np.zeros((lead, channels), np.float32), x, np.zeros((tail, channels), np.float32)])
+    mono = xp.mean(axis=1) if channels > 1 else xp[:, 0]
+    y = np.zeros(((frames - 1) * hop_out + frame, channels), dtype=np.float32)
+
+    prev = tol
+    for k in range(frames):
+        ideal = tol + int(round(k * hop_in))
+        pos = ideal
+        if k:
+            template = mono[prev + hop_out : prev + hop_out + frame]
+            lo = ideal - tol
+            region = mono[lo : ideal + tol + frame]
+            t_energy = float(np.dot(template, template))
+            if t_energy > 1.0:
+                corr = np.correlate(region, template, mode="valid")
+                sq = np.concatenate(([0.0], np.cumsum(region.astype(np.float64) ** 2)))
+                energy = sq[frame:] - sq[:-frame]
+                if energy.max() > 1.0:
+                    pos = lo + int(np.argmax(corr / np.sqrt(energy + 1e-9)))
+        y[k * hop_out : k * hop_out + frame] += xp[pos : pos + frame] * window
+        prev = pos
+    out = y[hop_out : hop_out + n_out]
+    return np.clip(np.round(out), -32768, 32767).astype("<i2").tobytes()
+
+
 def _loud_bounds(pcm16: bytes, channels: int, limit: int) -> tuple[int, int] | None:
     """(first, last) frame index holding a sample beyond ±limit, or None if all quiet."""
     np = _np()
@@ -556,7 +605,12 @@ class ClipJoiner:
             self._start_pcm(self._want_rate or rate, self._want_channels or channels)
         assert self.sample_rate is not None
         pcm16 = convert_pcm(
-            pcm, sample_rate=rate, channels=channels, sampwidth=width, to_rate=self.sample_rate, to_channels=self.channels
+            pcm,
+            sample_rate=rate,
+            channels=channels,
+            sampwidth=width,
+            to_rate=self.sample_rate,
+            to_channels=self.channels,
         )
         if self._mode == "copy":
             enc = Mp3Encoder(self.sample_rate, self.channels, self._bitrate)
@@ -652,7 +706,10 @@ def play_clip(clip: AudioClip) -> None:
         return
     cmd = _linux_player(is_mp3)
     if cmd is None:
-        need = "ffmpeg (ffplay) or mpg123" if is_mp3 else "pulseaudio-utils (paplay), pipewire (pw-play) or alsa-utils (aplay)"
+        if is_mp3:
+            need = "ffmpeg (ffplay) or mpg123"
+        else:
+            need = "pulseaudio-utils (paplay), pipewire (pw-play) or alsa-utils (aplay)"
         raise AudioPlaybackError(f"No audio player was found. Install {need} to listen from the command line.")
     with _temp_audio(clip) as path:
         _run_player([*cmd, str(path)])

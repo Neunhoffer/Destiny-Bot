@@ -628,10 +628,10 @@ def _static_file(web_dir: Path, relative: str) -> Path | None:
 
 def content_disposition(name: str) -> str:
     """``attachment`` with an ASCII fallback name and the exact UTF-8 name (RFC 5987/6266)."""
-    stem_ext = Path(name).suffix
+    ext = Path(name).suffix
     fallback = "".join(ch if " " <= ch < "\x7f" and ch not in '"\\' else "_" for ch in name).strip()
-    if not fallback.strip("_ ."):
-        fallback = f"download{stem_ext if stem_ext.isascii() else ''}"
+    if not any(ch.isalnum() for ch in fallback[: len(fallback) - len(ext)]):
+        fallback = "download" + (ext if ext.isascii() and ext[1:].isalnum() else "")
     return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(name, safe='')}"
 
 
@@ -1422,7 +1422,10 @@ def run(
             proxy_headers=False,
             timeout_graceful_shutdown=5,
         )
-        uvicorn.Server(server_config).run(sockets=[sock])
+        try:
+            uvicorn.Server(server_config).run(sockets=[sock])
+        except KeyboardInterrupt:  # uvicorn re-raises the Ctrl+C it already handled gracefully
+            pass
     finally:
         jobs.shutdown(wait=False)
         sock.close()

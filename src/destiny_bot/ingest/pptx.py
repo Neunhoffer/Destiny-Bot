@@ -110,6 +110,7 @@ class _SlideReader:
 
     def shapes(self, shapes, title_shape=None) -> None:
         from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER
+        from pptx.shapes.picture import Picture
 
         skip_types = {PP_PLACEHOLDER.SLIDE_NUMBER, PP_PLACEHOLDER.DATE, PP_PLACEHOLDER.FOOTER, PP_PLACEHOLDER.HEADER}
         for shape in self.ordered(list(shapes)):
@@ -131,7 +132,7 @@ class _SlideReader:
             if getattr(shape, "has_chart", False):
                 self.chart(shape)
                 continue
-            if shape_type == MSO_SHAPE_TYPE.PICTURE or ph_type == PP_PLACEHOLDER.PICTURE and not shape.has_text_frame:
+            if isinstance(shape, Picture) or shape_type == MSO_SHAPE_TYPE.PICTURE:
                 self.add(text_block(BlockKind.FIGURE, _alt_text(shape)))
                 continue
             if self.smartart(shape):
