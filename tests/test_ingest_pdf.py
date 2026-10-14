@@ -31,6 +31,14 @@ def para(rng: random.Random, k: int = 4, tag: str = "") -> str:
     return f"{tag} {text}" if tag else text
 
 
+def roman(n: int) -> str:
+    out = ""
+    for value, digits in ((10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i")):
+        while n >= value:
+            out, n = out + digits, n - value
+    return out
+
+
 def load(path: Path, **kwargs) -> Document:
     return load_pdf(path, source_name=path.name, **kwargs)
 
@@ -55,7 +63,7 @@ def full_text(doc: Document) -> str:
     [
         lambda n: str(n + 10),
         lambda n: f"Page {n + 10}",
-        lambda n: ["i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", "xi", "xii"][n - 1],
+        lambda n: roman(n),
         lambda n: f"{n + 10} | Chapter 3 Cells",
         lambda n: f"Chapter 3 | {n + 10}",
     ],
@@ -78,7 +86,7 @@ def test_running_headers_footers_and_page_numbers_removed(tmp_path, footer):
     for t in texts(doc):
         assert not t.strip().isdigit(), t
         assert not t.lower().startswith("page "), t
-        assert t not in {"i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x"}
+        assert t not in {roman(n) for n in range(1, 40)}
     # every body paragraph survived, in order
     tags = [t.split()[0] for t in texts(doc) if t.startswith("P")]
     assert tags == [f"P{i}" for i in range(70)]

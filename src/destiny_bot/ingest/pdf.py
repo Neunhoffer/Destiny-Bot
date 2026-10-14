@@ -3,7 +3,8 @@
 The pipeline:
 
 1. Extract every text line with its spans (font size, weight, position), find
-   ruled tables and framed boxes, and OCR pages that are only scanned images.
+   ruled tables, framed boxes and vector diagrams, and OCR pages that are only
+   scanned images (or whose text layer can't be decoded).
 2. Drop running headers, footers and page numbers: lines in the top/bottom
    margin bands whose normalized text repeats on nearby pages.
 3. Per page: detect columns, put content in reading order, merge fragments that
