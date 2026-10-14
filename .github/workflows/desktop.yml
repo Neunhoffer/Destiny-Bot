@@ -64,7 +64,7 @@ jobs:
       - name: Build, smoke-test (--self-test-quick) and make the installer
         run: python packaging/build.py
 
-      - name: Install like a user would, check the shortcuts, run the installed app's full self-test, uninstall
+      - name: Install like a user would and check the shortcuts
         shell: pwsh
         run: |
           $setup = Get-ChildItem dist\Athena-Setup-*.exe | Select-Object -First 1
@@ -72,8 +72,7 @@ jobs:
           $log = Join-Path $env:RUNNER_TEMP 'athena-install.log'
           $p = Start-Process $setup.FullName -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/LOG=$log" -Wait -PassThru
           if ($p.ExitCode -ne 0) { Get-Content $log; throw "Setup failed with exit code $($p.ExitCode)" }
-          $app = Join-Path $env:LOCALAPPDATA 'Programs\Athena'
-          $exe = Join-Path $app 'Athena.exe'
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\Athena\Athena.exe'
           if (-not (Test-Path $exe)) { Get-Content $log; throw 'Athena.exe was not installed' }
           $links = @(
             (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Athena.lnk'),
@@ -85,21 +84,36 @@ jobs:
             "Shortcut $link -> $target"
             if ($target -ne $exe) { throw "The shortcut points to $target" }
           }
-          $uninstallKey = Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' |
+          $entry = Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' |
             Where-Object { $_.GetValue('DisplayName') -eq 'Athena' }
-          if (-not $uninstallKey) { throw 'Athena is missing from Apps & features' }
+          if (-not $entry) { throw 'Athena is missing from Apps & features' }
+          "Apps & features: $($entry.GetValue('DisplayName')) $($entry.GetValue('DisplayVersion'))"
 
+      - name: Run the installed app's full self-test
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\Athena\Athena.exe'
           $env:DESTINY_HOME = Join-Path $env:RUNNER_TEMP 'installed-self-test'
           $t = Start-Process $exe -ArgumentList '--self-test' -Wait -PassThru
           Get-Content (Join-Path $env:DESTINY_HOME 'logs\self-test.txt')
           Copy-Item (Join-Path $env:DESTINY_HOME 'logs\self-test.json') dist\self-test-windows-installed.json
           if ($t.ExitCode -ne 0) { throw "The installed app's self-test failed ($($t.ExitCode))" }
 
+      - name: Open the app window, open it again, close both
+        run: python packaging/check_window.py "$env:LOCALAPPDATA\Programs\Athena\Athena.exe" --screenshot dist/athena-window-windows.png
+
+      - name: Uninstall
+        shell: pwsh
+        run: |
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\Athena'
+          $exe = Join-Path $app 'Athena.exe'
           Start-Process (Join-Path $app 'unins000.exe') -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
           for ($i = 0; $i -lt 60 -and (Test-Path $exe); $i++) { Start-Sleep -Seconds 1 }
           if (Test-Path $exe) { throw 'Uninstalling left Athena.exe behind' }
-          foreach ($link in $links) { if (Test-Path $link) { throw "Uninstalling left $link behind" } }
-          'Install, self-test and uninstall all worked.'
+          foreach ($link in @((Join-Path ([Environment]::GetFolderPath('Desktop')) 'Athena.lnk'), (Join-Path ([Environment]::GetFolderPath('Programs')) 'Athena.lnk'))) {
+            if (Test-Path $link) { throw "Uninstalling left $link behind" }
+          }
+          'Uninstalled cleanly.'
 
       - name: Upload the installer
         uses: actions/upload-artifact@v4
@@ -109,12 +123,14 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
-      - name: Upload the self-test reports
+      - name: Upload the self-test reports and the window screenshot
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: athena-windows-self-test
-          path: dist/self-test-*.json
+          path: |
+            dist/self-test-*.json
+            dist/athena-window-*.png
           if-no-files-found: warn
 
       - name: Attach the installer to the release

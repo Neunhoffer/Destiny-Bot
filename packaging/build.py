@@ -53,8 +53,17 @@ def step(title: str) -> None:
     print(f"\n=== {title}", flush=True)
 
 
+_last_progress = [-1]
+
+
 def _progress(fraction: float, message: str) -> None:
-    print(f"  {fraction * 100:5.1f}%  {message}", end="\r", flush=True)
+    if sys.stdout.isatty():
+        print(f"  {fraction * 100:5.1f}%  {message}", end="\r", flush=True)
+        return
+    step = int(fraction * 10)  # CI logs: one line per 10%
+    if step != _last_progress[0]:
+        _last_progress[0] = step
+        print(f"  {fraction * 100:5.1f}%  {message}", flush=True)
 
 
 def fetch_voices(*, kokoro: bool, source: Path | None) -> None:

@@ -114,6 +114,10 @@ WINDOWS_MODULES: dict[str, str] = {
 }
 
 
+# The pywebview backend module that draws the app window on each platform.
+_WINDOW_BACKENDS = {"win32": "webview.platforms.winforms", "darwin": "AppKit"}
+
+
 @dataclass
 class Check:
     section: str
@@ -325,6 +329,17 @@ def _check_window(report: Report) -> None:
             PASS if version else WARN,
             f"version {version}" if version else "not installed; Athena will open in an Edge app window instead",
         )
+    backend = _WINDOW_BACKENDS.get(sys.platform)
+    if backend is not None and importlib.util.find_spec("webview") is not None:
+        # Loads the native window toolkit (pythonnet + WinForms on Windows) without opening a window.
+        try:
+            module, seconds = _run_with_timeout(lambda: importlib.import_module(backend), 120)
+            renderer = getattr(module, "renderer", None)
+            data["window_backend"] = {"module": backend, "renderer": renderer}
+            report.add("window", "native window toolkit", PASS, f"{backend} ({renderer or 'ready'})", seconds=seconds)
+        except Exception as exc:
+            data["window_backend"] = {"module": backend, "error": _short_error(exc)}
+            report.add("window", "native window toolkit", WARN, f"{_short_error(exc)}; a browser window will be used")
     browser = desktop.find_app_browser()
     data["app_browser"] = str(browser) if browser else None
     report.add(
