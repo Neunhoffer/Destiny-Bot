@@ -583,8 +583,8 @@ def _app_browser_candidates() -> list[Path]:
     found: list[Path] = []
     if platform == "win32":
         bases = [os.environ.get(v) for v in ("ProgramFiles(x86)", "ProgramFiles", "ProgramW6432", "LOCALAPPDATA")]
-        for rel in (r"Microsoft\Edge\Application\msedge.exe", r"Google\Chrome\Application\chrome.exe"):
-            found.extend(Path(base) / rel for base in bases if base)
+        for rel in (("Microsoft", "Edge", "Application", "msedge.exe"), ("Google", "Chrome", "Application", "chrome.exe")):
+            found.extend(Path(base, *rel) for base in bases if base)
         found.extend(_app_paths_from_registry())
     elif platform == "darwin":
         for app in (

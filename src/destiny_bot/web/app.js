@@ -796,6 +796,12 @@ const webAudio = {
   },
 };
 
+/** Release the audio device when nothing has played for a while (saves battery, allows sleep). */
+const idleSuspendSoon = debounce(() => {
+  const ctx = webAudio.ctx;
+  if (ctx && ctx.state === 'running' && !player.playing && !speaker.speaking) ctx.suspend().catch(() => {});
+}, 15000);
+
 /** The browser's own speech engine (Web Speech API). */
 const browserSpeech = {
   current: null,
@@ -918,6 +924,7 @@ function speechChunks(text, max = 320) {
 /** Reads AI answers and voice samples aloud with the current voice (pauses the book first). */
 const speaker = {
   gen: 0,
+  speaking: false,
   button: null,
   label: '',
   nodes: [],
@@ -933,6 +940,7 @@ const speaker = {
     stopBookForSpeaker();
     const gen = ++this.gen;
     const live = () => gen === this.gen;
+    this.speaking = true;
     this.setButton(button);
     const engine = activeEngine();
     const voice = activeVoice(engine);
@@ -1009,8 +1017,10 @@ const speaker = {
   reset() {
     const button = this.button;
     this.button = null;
+    this.speaking = false;
     for (const node of this.nodes) webAudio.silence(node);
     this.nodes = [];
+    idleSuspendSoon();
     if (!button) return;
     button.classList.remove('is-speaking');
     button.setAttribute('aria-pressed', 'false');
@@ -1544,6 +1554,7 @@ function updatePlayUI() {
     $('#btn-next-section').disabled = !state.section.next_id;
   }
   document.body.classList.toggle('is-playing', player.playing);
+  if (!player.playing) idleSuspendSoon();
   if ('mediaSession' in navigator) {
     try {
       navigator.mediaSession.playbackState = player.playing ? 'playing' : (has ? 'paused' : 'none');
@@ -4080,7 +4091,10 @@ function bindUI() {
   document.addEventListener('keydown', onKeyDown);
 
   // One AudioContext, created on the first user gesture.
-  const unlock = () => webAudio.ensure();
+  const unlock = () => {
+    webAudio.ensure();
+    idleSuspendSoon();
+  };
   window.addEventListener('pointerdown', unlock, { once: true, capture: true });
   window.addEventListener('keydown', unlock, { once: true, capture: true });
 

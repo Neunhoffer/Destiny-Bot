@@ -46,7 +46,7 @@ if hasattr(pymupdf, "no_recommend_layout"):  # silence an advert printed to stdo
 
 _TEXT_FLAGS = pymupdf.TEXT_PRESERVE_WHITESPACE | pymupdf.TEXT_PRESERVE_LIGATURES | pymupdf.TEXT_MEDIABOX_CLIP
 
-_BAND = 0.12  # top/bottom share of the page where running headers and footers live
+_BAND = 0.14  # top/bottom share of the page where running headers and footers live
 _OCR_DPI = 300
 _OCR_MAX_PIXELS = 40_000_000  # cap for huge pages (posters) so rendering stays within memory
 _PAGES_PER_PART = 10  # page-range sections for long documents without headings
@@ -60,6 +60,8 @@ _NUMBERED_RE = re.compile(
     r"|(?:i|ii|iii|iv|v|vi|vii|viii|ix|x|xi|xii)[.)]|\((?:i|ii|iii|iv|v|vi|vii|viii|ix|x|xi|xii)\))\s+\S"
 )
 _DASH_BULLET_RE = re.compile(r"^[-–—*]\s+\S")
+# Bullets as Tesseract tends to read them ("•" often comes out as "©", "¢", "e" or "«").
+_OCR_BULLET_RE = re.compile(r"^(?:[•●○◦▪■□◆►‣⁃∙·*¢©«»°]|[eo])\s+(?=[A-Z0-9“\"(])|^[-–—]\s+(?=\S)")
 _CAPTION_RE = re.compile(
     r"^(?:fig(?:ure)?s?\.?|tables?|tab\.|exhibit|chart|graph|diagram|illustration|plate|map|photo|scheme|listing)"
     r"\s*(?:[A-Z]?\d+(?:[.\-–]\d+)*[a-z]?|[IVXLC]+\b)\s*(?P<rest>.*)$",
@@ -702,6 +704,7 @@ def _find_tables_and_boxes(page: pymupdf.Page, pg: _Page) -> None:
     area = pg.width * pg.height
     h_edges: set[int] = set()  # distinct y positions of horizontal rules / rectangle edges
     v_edges: set[int] = set()  # distinct x positions of vertical ones
+    h_rules: list[tuple[float, float, float]] = []  # (y, x0, x1) of horizontal lines
     box_candidates: list[tuple[float, float, float, float]] = []
     for p in paths[:_MAX_TABLE_DRAWINGS]:
         for item in p.get("items", ()):
@@ -710,6 +713,7 @@ def _find_tables_and_boxes(page: pymupdf.Page, pg: _Page) -> None:
                 (ax, ay), (bx, by) = item[1], item[2]
                 if abs(ay - by) < 1 and abs(ax - bx) > 10:
                     h_edges.add(round(ay))
+                    h_rules.append((ay, min(ax, bx), max(ax, bx)))
                 elif abs(ax - bx) < 1 and abs(ay - by) > 10:
                     v_edges.add(round(ax))
             elif op == "re":
@@ -717,6 +721,8 @@ def _find_tables_and_boxes(page: pymupdf.Page, pg: _Page) -> None:
                 rw, rh = abs(rx1 - rx0), abs(ry1 - ry0)
                 if rw > 10:
                     h_edges.update((round(ry0), round(ry1)))
+                    if rh < 2:
+                        h_rules.append(((ry0 + ry1) / 2, min(rx0, rx1), max(rx0, rx1)))
                 if rh > 10:
                     v_edges.update((round(rx0), round(rx1)))
                 if rw >= 2 and rh >= 2:
@@ -751,6 +757,10 @@ def _find_tables_and_boxes(page: pymupdf.Page, pg: _Page) -> None:
             cleaned = _clean_table(rows)
             if cleaned is not None and not _cuts_through_text(bbox, pg.lines):
                 pg.tables.append(_Table(bbox=bbox, rows=cleaned))
+
+    for t in _rule_tables(pg, h_rules):
+        if not any(_overlap_frac(t.bbox, other.bbox) > 0.3 for other in pg.tables):
+            pg.tables.append(t)
 
     for b in box_candidates:
         if any(_overlap_frac(b, t.bbox) > 0.5 for t in pg.tables):
@@ -811,6 +821,55 @@ def _vector_figures(paths: list[dict], pg: _Page, exclude: list[tuple]) -> list[
         if (rect[2] - rect[0]) * (rect[3] - rect[1]) <= 0.6 * area:
             regions.append(rect)
     return regions
+
+
+def _rule_tables(pg: _Page, h_rules: list[tuple[float, float, float]]) -> list[_Table]:
+    """Tables ruled only by horizontal lines (booktabs style): cells come from text alignment."""
+    groups: dict[tuple[int, int], list[tuple[float, float, float]]] = defaultdict(list)
+    for rule in h_rules:
+        if rule[2] - rule[1] >= 100:
+            groups[(round(rule[1] / 3), round(rule[2] / 3))].append(rule)
+    tables: list[_Table] = []
+    for rules in groups.values():
+        ys = sorted({round(r[0], 1) for r in rules})
+        # rules of one table are close together; a big gap starts another table
+        clusters: list[list[float]] = [[ys[0]]]
+        for y in ys[1:]:
+            if y - clusters[-1][-1] > 0.4 * pg.height:
+                clusters.append([y])
+            else:
+                clusters[-1].append(y)
+        x0 = min(r[1] for r in rules)
+        x1 = max(r[2] for r in rules)
+        for cl in clusters:
+            if len(cl) < 2:
+                continue
+            region = (x0 - 2, cl[0] - 1, x1 + 2, cl[-1] + 1)
+            inside = [ln for ln in pg.lines if _inside(ln, region, tol=0)]
+            if len(inside) < 4 or any(ln.x1 - ln.x0 > 0.6 * (x1 - x0) for ln in inside):
+                continue  # empty, or prose between two rules
+            rows = _rows_of([_Elem("line", ln.x0, ln.y0, ln.x1, ln.y1, line=ln) for ln in inside])
+            if len(rows) < 2 or sum(1 for r in rows if len(r) >= 2) < 0.5 * len(rows):
+                continue
+            bands: list[list[float]] = []
+            for a, b in sorted((ln.x0, ln.x1) for ln in inside):
+                if bands and a <= bands[-1][1] + 2:
+                    bands[-1][1] = max(bands[-1][1], b)
+                else:
+                    bands.append([a, b])
+            if len(bands) < 2:
+                continue
+            grid = []
+            for row in rows:
+                cells = [""] * len(bands)
+                for e in sorted(row, key=lambda e: e.x0):
+                    j = next(k for k, (a, b) in enumerate(bands) if e.x0 >= a - 0.5 and e.x1 <= b + 0.5)
+                    cells[j] = f"{cells[j]} {e.line.text}".strip()
+                grid.append(cells)
+            cleaned = _clean_table(grid)
+            if cleaned is not None:
+                tables.append(_Table(bbox=region, rows=cleaned))
+    return tables
 
 
 def _cuts_through_text(bbox: tuple, lines: list[_Line]) -> bool:
@@ -932,7 +991,7 @@ def _ocr_paragraphs(text: str) -> list[str]:
         lines = [ln.strip() for ln in part.split("\n") if ln.strip()]
         current: list[str] = []
         for ln in lines:
-            if current and (ln[0] in _BULLETS or _DASH_BULLET_RE.match(ln)):
+            if current and _OCR_BULLET_RE.match(ln):
                 paras.append("\n".join(current))
                 current = []
             current.append(ln)
@@ -970,9 +1029,10 @@ def _ocr_chunks(pg: _Page, stats: _Stats) -> list[_Chunk]:
             raw=[para],
         )
         ch.text = clean_display_text(para)
-        if ch.text and (ch.text[0] in _BULLETS or _DASH_BULLET_RE.match(ch.text)):
+        bullet = _OCR_BULLET_RE.match(ch.text)
+        if bullet:
             ch.kind = BlockKind.LIST_ITEM
-            ch.text = ch.text[1:].strip()
+            ch.text = ch.text[bullet.end() :].strip()
         elif _is_caption_text(ch.text):
             ch.kind = BlockKind.CAPTION
             ch.is_float = True
@@ -996,8 +1056,8 @@ def _mark_ocr_headings(chunks: list[_Chunk]) -> None:
         words = text.split()
         if not 1 <= len(words) <= 8 or _ends_terminal(text.rstrip("?")) or not text[0].isupper() and not text[0].isdigit():
             continue
-        if not re.search(r"[^\W\d_]{4,}", text):
-            continue
+        if not re.search(r"[^\W\d_]{4,}", text) or re.search(r"[b-df-hj-np-tv-z]{6,}", text, re.I):
+            continue  # no real word, or an unpronounceable OCR misread
         long_words = [w for w in words if len(re.sub(r"\W", "", w)) >= 4]
         title_case = sum(1 for w in long_words if w[0].isupper()) >= 0.6 * max(len(long_words), 1)
         numbered = bool(_CHAPTERISH_RE.match(text) or _SECTION_NUM_RE.match(text))
