@@ -87,6 +87,60 @@ jobs:
               keys = ("synthesis", "windows_voices", "window")
               print(json.dumps({k: report.get(k) for k in keys if k in report}, indent=1))
 
+      # Temporary: why does SAPI (through pyttsx3) give an empty WAV here?
+      - name: Windows speech diagnostics
+        if: always() && runner.os == 'Windows'
+        continue-on-error: true
+        shell: python
+        run: |
+          import os, subprocess, tempfile, threading, time, wave, base64
+          from pathlib import Path
+          tmp = Path(tempfile.mkdtemp())
+          def describe(path):
+              if not path.exists():
+                  return "missing"
+              data = path.read_bytes()
+              try:
+                  with wave.open(str(path)) as w:
+                      return f"{len(data)} bytes, {w.getframerate()} Hz, {w.getsampwidth() * 8}-bit, {w.getnframes() / w.getframerate():.2f} s"
+              except Exception as exc:
+                  return f"{len(data)} bytes, unreadable ({exc}); head={data[:64]!r}"
+          text = "Hello from Athena. This is a test of the Windows voice."
+          import pyttsx3
+          engine = pyttsx3.init("sapi5")
+          out = tmp / "main-thread.wav"
+          engine.save_to_file(text, str(out)); engine.runAndWait()
+          print("pyttsx3 save_to_file, main thread:", describe(out))
+          def worker():
+              import pythoncom
+              pythoncom.CoInitialize()
+              e = pyttsx3.init("sapi5")
+              o = tmp / "thread.wav"
+              e.save_to_file(text, str(o)); e.runAndWait()
+              print("pyttsx3 save_to_file, worker thread:", describe(o))
+          t = threading.Thread(target=worker); t.start(); t.join(60)
+          import comtypes.client
+          from comtypes.gen import SpeechLib
+          voice = comtypes.client.CreateObject("SAPI.SpVoice")
+          stream = comtypes.client.CreateObject("SAPI.SpFileStream")
+          stream.Format.Type = SpeechLib.SAFT22kHz16BitMono
+          o = tmp / "comtypes-format.wav"
+          stream.Open(str(o), SpeechLib.SSFMCreateForWrite)
+          voice.AudioOutputStream = stream
+          voice.Speak(text)
+          stream.Close()
+          print("SpVoice + SpFileStream with 22 kHz format:", describe(o))
+          ps = tmp / "ps.wav"
+          script = ("Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+                    f"$s.SetOutputToWaveFile('{ps}'); $s.Speak('{text}'); $s.Dispose()")
+          subprocess.run(["powershell", "-NoProfile", "-Command", script], timeout=120)
+          print("PowerShell System.Speech:", describe(ps))
+          from destiny_bot.tts.system_engine import SystemEngine
+          start = time.perf_counter()
+          clip = SystemEngine().synthesize(text)
+          (tmp / "engine.wav").write_bytes(clip.data)
+          print(f"SystemEngine().synthesize ({time.perf_counter() - start:.2f} s):", describe(tmp / "engine.wav"))
+
       - name: Upload the self-test report
         if: always()
         uses: actions/upload-artifact@v4
