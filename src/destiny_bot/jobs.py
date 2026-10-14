@@ -220,7 +220,7 @@ class JobManager:
             job.files_dir.mkdir(parents=True, exist_ok=True)
         with self._lock:
             if self._closed:
-                job._finish("cancelled", message="Destiny Bot is shutting down")
+                job._finish("cancelled", message="Athena is shutting down")
                 return job
             self._jobs[job.id] = job
             job._future = self._executor.submit(self._run, job, fn)

@@ -926,8 +926,13 @@ def test_voice_catalog_and_download(client, fakes):
     assert job["result"] == {"voice_id": "en_US-lessac-medium"}
     catalog = client.get("/api/voices/catalog").json()["voices"]
     assert [v["installed"] for v in catalog] == [True, False]
-    assert client.post("/api/voices/download", json={"voice_id": "../../evil"}).status_code == 404
+    bad = client.post("/api/voices/download", json={"voice_id": "../../evil"})
+    assert bad.status_code == 400 and "isn't a valid voice name" in bad.json()["detail"]
     assert client.post("/api/voices/download", json={}).status_code == 422
+    # Any well-formed Piper voice can be downloaded, not only the curated ones.
+    fakes.catalog.is_valid_voice_id = lambda voice_id: voice_id == "de_DE-thorsten-medium"
+    other = wait_job(client, client.post("/api/voices/download", json={"voice_id": "de_DE-thorsten-medium"}).json()["job_id"])
+    assert other["status"] == "done" and other["result"] == {"voice_id": "de_DE-thorsten-medium"}
 
 
 def test_voice_download_cancel(client, fakes):
@@ -982,6 +987,17 @@ def test_tts_voice_choice(client, fakes):
     client.post("/api/tts", json={"text": "c", "engine": "system"})
     assert [c[1] for c in piper.calls] == ["v2", "v2"]
     assert fakes.tts.engines["system"].calls == [("c", "sys1", 1.0)]
+    # A voice that isn't installed (any more) falls back to the saved one, then the default.
+    client.post("/api/tts", json={"text": "d", "voice": "not-installed"})
+    set_settings(voices={"piper": "deleted-voice"})
+    client.post("/api/tts", json={"text": "e", "voice": "gone"})
+    assert [c[1] for c in piper.calls[2:]] == ["v2", "v1"]
+
+
+def test_tts_without_any_voice(client, fakes):
+    fakes.tts.engines["piper"].voices = []
+    response = client.post("/api/tts", json={"text": "hello"})
+    assert response.status_code == 503 and "no voices installed" in response.json()["detail"]
 
 
 def test_tts_validation_and_gates(client, fakes):
@@ -1450,6 +1466,25 @@ def test_shutdown_cancels_running_jobs():
     assert job.status == "cancelled"
     late = jobs.submit("export", lambda j: 1)
     assert late.status == "cancelled"
+
+
+def test_export_cancelled_exception_means_cancelled():
+    export = pytest.importorskip("destiny_bot.export")
+    jobs = JobManager()
+    try:
+        def work(job):
+            raise export.ExportCancelled("Export cancelled.")
+
+        def fail(job):
+            raise export.ExportError("There's nothing to read in these sections.")
+
+        cancelled = jobs.submit("export", work)
+        failed = jobs.submit("export", fail)
+        assert cancelled.wait(5) and failed.wait(5)
+        assert cancelled.status == "cancelled"
+        assert failed.status == "error" and failed.error == "There's nothing to read in these sections."
+    finally:
+        jobs.shutdown(wait=True)
 
 
 def test_friendly_error_for_ai_errors_when_loaded():

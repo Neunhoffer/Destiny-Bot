@@ -253,8 +253,8 @@ def load_epub(path: Path, *, source_name: str, progress: ProgressFn | None = Non
             continue
         if not _has_text(content):
             label = f"{name} {item.get_id() or ''}".lower()
-            if not content.blocks or index == 0 or "cover" in label:
-                continue  # cover / image-only page
+            if not content.blocks or not builder.sections or "cover" in label:
+                continue  # cover, title-page art and other picture-only front matter
         blocks = content.blocks
         entries = toc_by_doc.get(name, [])
         fallback = content.title or title

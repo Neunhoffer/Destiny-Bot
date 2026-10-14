@@ -393,10 +393,27 @@ def test_read_resumes_and_stops_cleanly(tmp_path, capsys, fakes):
 def test_read_section_option_overrides_progress(tmp_path, capsys, fakes):
     doc = add_book(tmp_path, "biology.md")
     Library().set_progress(doc.id, "s0", 1)
-    assert cli.main(["read", doc.id, "--section", "s1", "--engine", "system", "--voice", "x9"]) == 0
+    assert cli.main(["read", doc.id, "--section", "s1", "--engine", "system", "--voice", "sys1"]) == 0
     out = capsys.readouterr().out
     assert "== Cells ==" not in out and "== Membranes ==" in out
-    assert fakes.tts.engines["system"].calls[0] == ("Membranes", "x9", 1.0)
+    assert fakes.tts.engines["system"].calls[0] == ("Membranes", "sys1", 1.0)
+
+
+def test_read_voice_choice(tmp_path, capsys, fakes):
+    doc = add_book(tmp_path, "biology.md")
+    piper = fakes.tts.engines["piper"]
+    assert cli.main(["read", doc.id, "--voice", "x9"]) == 1
+    err = capsys.readouterr().err
+    assert "The voice 'x9' isn't installed" in err and "Installed voices: v1" in err
+    assert piper.calls == []
+
+    config.update_settings({"voices": {"piper": "uninstalled-voice"}})
+    assert cli.main(["read", doc.id, "--section", "s1"]) == 0
+    assert {call[1] for call in piper.calls} == {"v1"}  # a saved voice that's gone falls back to the default
+
+    piper.voices = []
+    assert cli.main(["read", doc.id]) == 1
+    assert "has no voices installed" in capsys.readouterr().err
 
 
 def test_read_engine_errors(tmp_path, capsys, fakes):
@@ -462,7 +479,10 @@ def test_voices_catalog_and_download(capsys, fakes):
     assert cli.main(["voices", "catalog"]) == 0
     assert "installed" in capsys.readouterr().out
     assert cli.main(["voices", "download", "../evil"]) == 1
-    assert "no downloadable voice" in capsys.readouterr().err
+    assert "isn't a voice you can download" in capsys.readouterr().err
+    fakes.catalog.is_valid_voice_id = lambda voice_id: voice_id == "de_DE-thorsten-medium"
+    assert cli.main(["voices", "download", "de_DE-thorsten-medium"]) == 0  # not curated, but a real Piper voice
+    assert fakes.catalog.downloads[-1] == "de_DE-thorsten-medium"
 
 
 # -- settings, doctor, wipe
@@ -490,7 +510,7 @@ def test_doctor(tmp_path, capsys, fakes):
     fakes.tts.engines["system"].available = False
     assert cli.main(["doctor"]) == 0
     out = capsys.readouterr().out
-    assert f"Destiny Bot {__version__}" in out
+    assert f"Athena {__version__}" in out
     assert f"Python {sys.version_info.major}.{sys.version_info.minor}" in out
     assert f"Data folder: {config.data_dir()}" in out
     assert "Library: 1 book" in out
@@ -625,7 +645,7 @@ def test_python_dash_m():
     result = subprocess.run([sys.executable, "-m", "destiny_bot", "--version"], capture_output=True, text=True,
                             timeout=60)
     assert result.returncode == 0
-    assert result.stdout.strip() == f"Destiny Bot {__version__}"
+    assert result.stdout.strip() == f"Athena {__version__}"
 
 
 # -- integration with the real modules (skipped while they aren't available)
