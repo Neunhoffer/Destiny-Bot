@@ -9,6 +9,7 @@ import asyncio
 import threading
 from typing import Any
 
+from . import clamp_rate
 from .base import AudioClip, EngineUnavailable, TTSEngine, TTSError, Voice
 
 DEFAULT_VOICE = "en-US-AvaNeural"
@@ -33,7 +34,8 @@ _VOICES: list[tuple[str, str, str, str]] = [
 
 
 def _rate_string(rate: float) -> str:
-    percent = round((min(max(rate, 0.25), 4.0) - 1.0) * 100)
+    # Microsoft's voices only honour 0.5x-2x; ask for no more than that.
+    percent = round((clamp_rate(rate, 0.5, 2.0) - 1.0) * 100)
     return f"{percent:+d}%"
 
 
@@ -67,7 +69,7 @@ class EdgeEngine(TTSEngine):
         ok, reason = self.is_available()
         if not ok:
             raise EngineUnavailable(reason)
-        data = _run_coroutine_blocking(lambda: _collect(text, voice or DEFAULT_VOICE, _rate_string(float(rate or 1.0))))
+        data = _run_coroutine_blocking(lambda: _collect(text, voice or DEFAULT_VOICE, _rate_string(rate)))
         if not data:
             raise TTSError("Microsoft's online voice sent back no audio for this text.")
         return AudioClip(data, "audio/mpeg", SAMPLE_RATE)

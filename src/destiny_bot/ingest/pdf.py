@@ -1121,21 +1121,32 @@ def _valid_columns(lines: list[_Elem], gutters: list[tuple[float, float]], xmin:
                 members[j].append(e)
                 break
     for m in members:
-        if len(m) < 3:
+        rows = _text_rows(m)
+        if len(rows) < 3:
             return False
-        chars = [len(e.line.text) for e in m]
+        chars = [r[2] for r in rows]
         if sum(chars) / len(chars) < 12 or sum(chars) < 80:
             return False
-        lefts = Counter(round(e.x0 / 3) for e in m)
-        if lefts.most_common(1)[0][1] < 0.35 * len(m):
-            return False  # not a text column: lines don't share a left edge
-    for a, b in zip(members, members[1:]):
-        a0, a1 = min(e.y0 for e in a), max(e.y1 for e in a)
-        b0, b1 = min(e.y0 for e in b), max(e.y1 for e in b)
-        overlap = min(a1, b1) - max(a0, b0)
-        if overlap < 0.3 * min(a1 - a0, b1 - b0):
-            return False  # stacked, not side by side
-    return True
+        lefts = Counter(round(r[0] / 3) for r in rows)
+        if lefts.most_common(1)[0][1] < 0.35 * len(rows):
+            return False  # not a text column: rows don't share a left edge
+    return _side_by_side(members)
+
+
+def _text_rows(elems: list[_Elem]) -> list[tuple[float, float, int]]:
+    """Group line elements into visual rows: (left x, right x, characters) per row."""
+    rows: list[list[float]] = []  # [y0, y1, x0, x1, chars]
+    for e in sorted(elems, key=lambda e: (e.y0 + e.y1) / 2):
+        if rows:
+            r = rows[-1]
+            overlap = min(r[1], e.y1) - max(r[0], e.y0)
+            if overlap >= 0.5 * min(r[1] - r[0], e.y1 - e.y0):
+                r[0], r[1] = min(r[0], e.y0), max(r[1], e.y1)
+                r[2], r[3] = min(r[2], e.x0), max(r[3], e.x1)
+                r[4] += len(e.line.text) + 1
+                continue
+        rows.append([e.y0, e.y1, e.x0, e.x1, len(e.line.text)])
+    return [(r[2], r[3], int(r[4])) for r in rows]
 
 
 def _order_group(elems: list[_Elem]) -> list[_Elem]:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import threading
 import wave
 from collections import OrderedDict
@@ -11,11 +12,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import clamp_rate
 from .base import AudioClip, EngineUnavailable, TTSEngine, TTSError, Voice
 from .catalog import CATALOG, RECOMMENDED_VOICE, catalog_voice, installed_piper_voices, piper_voices_dir
 
 NO_VOICE_REASON = "No natural voice downloaded yet. Open Settings → Voices and download one (about 60 MB)."
 MAX_LOADED_VOICES = 2  # each loaded voice holds ~60-120 MB of RAM
+# Piper's length_scale: < 1 is faster. Beyond this range speech turns garbled or droning.
+MIN_LENGTH_SCALE = 0.3
+MAX_LENGTH_SCALE = 2.5
 _CATALOG_ORDER = {v.id: i for i, v in enumerate(CATALOG)}
 
 
@@ -73,10 +78,10 @@ class PiperEngine(TTSEngine):
         if voice_id is None:
             raise EngineUnavailable(NO_VOICE_REASON)
         entry = self._get_voice(voice_id)
-        rate = min(max(float(rate or 1.0), 0.25), 4.0)
+        length_scale = length_scale_for(entry.voice, rate)
         try:
             with entry.lock:
-                return self._run(entry.voice, text, rate)
+                return self._run(entry.voice, text, length_scale)
         except TTSError:
             raise
         except Exception as exc:  # onnxruntime / phonemizer failures
@@ -186,9 +191,7 @@ class PiperEngine(TTSEngine):
                 "Delete it and download it again in Settings → Voices."
             ) from exc
 
-    def _run(self, voice: Any, text: str, rate: float) -> AudioClip:
-        base_scale = getattr(voice.config, "length_scale", None) or 1.0
-        length_scale = base_scale / rate
+    def _run(self, voice: Any, text: str, length_scale: float) -> AudioClip:
         sample_rate = int(voice.config.sample_rate)
         buf = io.BytesIO()
         with wave.open(buf, "wb") as wav:
@@ -206,6 +209,18 @@ class PiperEngine(TTSEngine):
             if frames == 0:  # nothing speakable (e.g. only punctuation): a short pause
                 wav.writeframes(b"\x00\x00" * (sample_rate // 5))
         return AudioClip(buf.getvalue(), "audio/wav", sample_rate)
+
+
+def length_scale_for(voice: Any, rate: float) -> float:
+    """Piper length_scale for a speed multiplier: the voice's own scale / rate, clamped."""
+    try:
+        base = float(getattr(voice.config, "length_scale", None) or 1.0)
+    except (TypeError, ValueError):
+        base = 1.0
+    if not math.isfinite(base) or base <= 0:
+        base = 1.0
+    scale = base / clamp_rate(rate)
+    return round(min(max(scale, MIN_LENGTH_SCALE), MAX_LENGTH_SCALE), 4)
 
 
 def _stamp(path: Path) -> tuple[int, int]:

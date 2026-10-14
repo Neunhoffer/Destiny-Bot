@@ -167,6 +167,84 @@ def test_concat_rejects_empty():
         audio.concat_clips([])
 
 
+# --------------------------------------------------------------------------- trim_silence
+
+
+def padded_tone(lead: float, tone: float, trail: float, rate: int = 22050, channels: int = 1, noise: int = 20) -> AudioClip:
+    """Quiet hiss, a tone, quiet hiss: like a voice engine's output."""
+    hiss = lambda secs: b"".join(struct.pack("<h", (-noise, noise)[i % 2]) * channels for i in range(int(secs * rate)))  # noqa: E731
+    pcm = hiss(lead) + sine_pcm(tone, rate, 440, channels) + hiss(trail)
+    return AudioClip(audio.wav_bytes(pcm, rate, channels), "audio/wav", rate)
+
+
+@pytest.mark.parametrize("use_numpy", [True, False])
+def test_trim_silence_cuts_edges_only(monkeypatch, use_numpy):
+    if not use_numpy:
+        monkeypatch.setattr(audio, "_np", lambda: None)
+    clip = padded_tone(0.3, 0.5, 0.4)
+    trimmed = audio.trim_silence(clip)
+    pcm, rate, channels, width = audio.read_wav(trimmed.data)
+    assert (trimmed.mime, trimmed.sample_rate, rate, channels, width) == ("audio/wav", 22050, 22050, 1, 2)
+    # The whole tone survives, plus ~25 ms of padding each side.
+    assert len(pcm) // 2 / rate == pytest.approx(0.5 + 0.05, abs=0.002)
+    samples = struct.unpack(f"<{len(pcm) // 2}h", pcm)
+    assert samples[0] == 0 and samples[-1] == 0  # faded to silence at the edges
+    fade = round(rate * 0.005)
+    assert all(abs(s) <= 20 for s in samples[:fade])  # fade only touched the quiet padding
+    tone = audio.read_wav(clip.data)[0][2 * int(0.3 * rate) : 2 * int(0.8 * rate)]
+    # Speech itself is untouched (the tone's first sample is 0, so padding starts after it).
+    assert pcm.find(tone) == 2 * (round(rate * 0.025) - 1)
+    # keep_ms is honoured.
+    tight = audio.trim_silence(clip, keep_ms=0)
+    assert len(audio.read_wav(tight.data)[0]) // 2 / rate == pytest.approx(0.5, abs=0.002)
+
+
+def test_trim_silence_numpy_matches_pure_python(monkeypatch):
+    clip = padded_tone(0.1, 0.2, 0.1, rate=16000, channels=2)
+    fast = audio.trim_silence(clip, keep_ms=10)
+    monkeypatch.setattr(audio, "_np", lambda: None)
+    assert audio.trim_silence(clip, keep_ms=10).data == fast.data
+    assert audio.read_wav(fast.data)[2] == 2
+
+
+def test_trim_silence_fades_abrupt_edges():
+    # Speech that starts and stops at full volume (nothing to trim) still gets fades, no clicks.
+    clip = AudioClip(audio.wav_bytes(struct.pack("<h", 12000) * 2205, 22050), "audio/wav", 22050)
+    pcm = audio.read_wav(audio.trim_silence(clip).data)[0]
+    samples = struct.unpack(f"<{len(pcm) // 2}h", pcm)
+    assert len(samples) == 2205
+    assert samples[0] == 0 and samples[-1] == 0 and samples[55] == 6000 and samples[1000] == 12000
+    assert list(samples[:110]) == sorted(samples[:110])
+
+
+def test_trim_silence_special_cases():
+    silent = AudioClip(audio.wav_bytes(b"\x00\x00" * 22050, 22050), "audio/wav", 22050)
+    out = audio.trim_silence(silent)
+    assert audio.clip_duration(out) == pytest.approx(0.05, abs=0.001)
+    mp3 = mp3_clip()
+    assert audio.trim_silence(mp3) is mp3
+    junk = AudioClip(b"not a wav", "audio/wav")
+    assert audio.trim_silence(junk) is junk
+    # A stricter threshold treats the hiss as sound, so nothing is cut.
+    loud_hiss = padded_tone(0.2, 0.2, 0.2, noise=400)
+    assert audio.clip_duration(audio.trim_silence(loud_hiss)) == pytest.approx(0.6, abs=0.002)
+    assert audio.clip_duration(audio.trim_silence(loud_hiss, threshold_db=-30)) == pytest.approx(0.25, abs=0.002)
+    eight_bit = AudioClip(audio.wav_bytes(b"\x80" * 800 + bytes([200, 56] * 400) + b"\x80" * 800, 8000, 1, 1), "audio/wav")
+    trimmed = audio.trim_silence(eight_bit)
+    assert audio.wav_format(trimmed.data) == (8000, 1, 2)
+    assert audio.clip_duration(trimmed) == pytest.approx(0.1 + 0.05, abs=0.001)
+
+
+def test_trim_silence_is_fast():
+    import time
+
+    clip = padded_tone(1.0, 30.0, 1.0)
+    start = time.perf_counter()
+    trimmed = audio.trim_silence(clip)
+    assert time.perf_counter() - start < 0.5
+    assert audio.clip_duration(trimmed) == pytest.approx(30.05, abs=0.01)
+
+
 # --------------------------------------------------------------------------- MP3
 
 

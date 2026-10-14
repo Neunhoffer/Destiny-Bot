@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from . import clamp_rate
 from .base import AudioClip, EngineUnavailable, TTSEngine, TTSError, Voice
 
 BASE_WPM = 175
@@ -54,12 +55,6 @@ def _run(
 
 def _synth_timeout(text: str) -> float:
     return 60 + len(text) * 0.05
-
-
-def _stderr(proc: subprocess.CompletedProcess) -> str:
-    raw = proc.stderr or b""
-    text = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
-    return text.strip().splitlines()[0] if text.strip() else ""
 
 
 def _wav_clip(data: bytes) -> AudioClip:
@@ -248,7 +243,7 @@ class _EspeakBackend(_Backend):
         exe = self._exe()
         if not exe:
             raise EngineUnavailable(self.is_available()[1])
-        speed = min(max(wpm, 80), 450)
+        speed = min(max(wpm, 80), 700)  # espeak-ng's range (it speeds up past 450 with sonic)
         cmd = [exe, "--stdout", "-b", "1", "-v", voice or "en", "-s", str(speed), "--stdin"]
         proc = _run(cmd, input=text.encode("utf-8"), timeout=_synth_timeout(text))
         if proc.returncode != 0 or not proc.stdout:
@@ -537,5 +532,5 @@ class SystemEngine(TTSEngine):
                 )
         else:
             voice = backend.default_voice()
-        rate = min(max(float(rate or 1.0), 0.25), 4.0)
+        rate = clamp_rate(rate)
         return backend.synthesize(text, voice, int(round(BASE_WPM * rate)), rate)

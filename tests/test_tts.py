@@ -234,6 +234,27 @@ def test_piper_rate_maps_to_length_scale(fake_piper):
     assert wav_seconds(fast.data) < wav_seconds(slow.data)
 
 
+def test_clamp_rate():
+    assert registry.clamp_rate(1.5) == 1.5
+    assert registry.clamp_rate(10) == 4.0 and registry.clamp_rate(0.1) == 0.25
+    for bad in (None, float("nan"), float("inf"), 0, -2, "fast"):
+        assert registry.clamp_rate(bad) == 1.0  # type: ignore[arg-type]
+    assert registry.clamp_rate(3.0, 0.5, 2.0) == 2.0
+
+
+def test_piper_length_scale_clamped():
+    from destiny_bot.tts.piper_engine import MAX_LENGTH_SCALE, MIN_LENGTH_SCALE, length_scale_for
+
+    def voice(scale):
+        return SimpleNamespace(config=SimpleNamespace(length_scale=scale))
+
+    assert [length_scale_for(voice(1.0), r) for r in (0.5, 1.0, 1.5, 2.0, 3.0)] == [2.0, 1.0, 0.6667, 0.5, 0.3333]
+    assert length_scale_for(voice(1.2), 0.25) == MAX_LENGTH_SCALE
+    assert length_scale_for(voice(1.0), 4.0) == MIN_LENGTH_SCALE
+    assert length_scale_for(voice(None), float("nan")) == 1.0
+    assert length_scale_for(voice(-3), 2.0) == 0.5
+
+
 def test_piper_lru_keeps_two_voices(fake_piper):
     for vid in ("en_US-amy-medium", "en_US-joe-medium", "en_US-ryan-high"):
         install_fake_voice(vid)
@@ -326,6 +347,24 @@ def test_piper_real_synthesis(piper_voice_path):
     assert 0 < wav_seconds(engine.synthesize("...").data) <= 0.5
 
 
+def test_piper_real_reader_rates(piper_voice_path):
+    """The web reader asks the engine for 0.5x-3x; each step must be faster and still clean audio."""
+    install_real_voice(piper_voice_path)
+    engine = PiperEngine()
+    text = "Mitochondria release energy from food during cellular respiration."
+    durations = []
+    for rate in (0.5, 1.0, 1.5, 2.0, 3.0):
+        clip = audio.trim_silence(engine.synthesize(text, rate=rate))
+        pcm, sr, _, _ = audio.read_wav(clip.data)
+        samples = struct.unpack(f"<{len(pcm) // 2}h", pcm)
+        assert samples[0] == 0 and samples[-1] == 0  # trimmed and faded
+        assert max(abs(s) for s in samples) > 1000
+        durations.append(len(samples) / sr)
+    assert durations == sorted(durations, reverse=True)
+    assert durations[0] / durations[1] == pytest.approx(2.0, rel=0.25)
+    assert durations[1] / durations[4] == pytest.approx(3.0, rel=0.3)
+
+
 def test_piper_real_concurrent(piper_voice_path):
     install_real_voice(piper_voice_path)
     engine = PiperEngine()
@@ -373,6 +412,8 @@ def test_system_espeak_real():
     assert normal > 1.0
     fast = wav_seconds(engine.synthesize("--help -v me. Cells are the basic unit of life.", rate=2.0).data)
     assert fast < normal * 0.8
+    fastest = wav_seconds(engine.synthesize("--help -v me. Cells are the basic unit of life.", rate=3.0).data)
+    assert fastest < fast * 0.85
     assert wav_seconds(engine.synthesize("Hola, ¿qué tal?", "es").data) > 0.3
     assert wav_seconds(engine.synthesize("Hello", "en-us+f3").data) > 0.2  # voice + variant
 
@@ -689,6 +730,11 @@ def test_edge_synthesize(fake_edge):
     assert (fake_edge.instances[-1].voice, fake_edge.instances[-1].rate) == ("en-GB-RyanNeural", "-50%")
     engine.synthesize("Hi")
     assert fake_edge.instances[-1].rate == "+0%"
+    # Microsoft honours 0.5x-2x only.
+    engine.synthesize("Hi", rate=3.0)
+    assert fake_edge.instances[-1].rate == "+100%"
+    engine.synthesize("Hi", rate=0.25)
+    assert fake_edge.instances[-1].rate == "-50%"
     with pytest.raises(EngineUnavailable):
         engine.synthesize("Hi", "not-a-voice")
 

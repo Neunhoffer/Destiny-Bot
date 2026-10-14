@@ -6,6 +6,7 @@ doesn't load Piper/onnxruntime or touch the network.
 
 from __future__ import annotations
 
+import math
 import threading
 
 from .base import AudioClip, EngineUnavailable, TTSEngine, TTSError, Voice
@@ -16,6 +17,17 @@ AUTO_ORDER = ("piper", "system", "browser")
 
 _engines: dict[str, TTSEngine] = {}
 _lock = threading.Lock()
+
+
+def clamp_rate(rate: float | None, low: float = 0.25, high: float = 4.0) -> float:
+    """A usable speed multiplier: 1.0 for missing/invalid values, else clamped to [low, high]."""
+    try:
+        value = float(rate) if rate is not None else 1.0
+    except (TypeError, ValueError):
+        return 1.0
+    if not math.isfinite(value) or value <= 0:
+        return 1.0
+    return min(max(value, low), high)
 
 
 def _create(name: str) -> TTSEngine:
@@ -87,6 +99,7 @@ __all__ = [
     "TTSError",
     "Voice",
     "all_engines",
+    "clamp_rate",
     "get_engine",
     "resolve_engine",
 ]
