@@ -36,6 +36,12 @@ _FRIENDLY_ELSEWHERE = (
     ("destiny_bot.ai", "AIError"),
     ("destiny_bot.tts.catalog", "VoiceDownloadError"),
     ("destiny_bot.tts.catalog", "DownloadCancelled"),
+    ("destiny_bot.export", "ExportError"),
+    ("destiny_bot.export", "ExportCancelled"),
+)
+# Exceptions that mean "the user cancelled" (the job ends as "cancelled", not "error").
+_CANCELLED_ELSEWHERE = (
+    ("destiny_bot.tts.catalog", "DownloadCancelled"),
     ("destiny_bot.export", "ExportCancelled"),
 )
 
@@ -48,13 +54,22 @@ class JobError(RuntimeError):
     """A job failure whose message is safe to show to the user as is."""
 
 
-def _friendly_types() -> tuple[type[BaseException], ...]:
-    types: list[type[BaseException]] = [JobError, IngestError, TTSError]
-    for module_name, attr in _FRIENDLY_ELSEWHERE:
+def _loaded_types(names: tuple[tuple[str, str], ...]) -> list[type[BaseException]]:
+    types: list[type[BaseException]] = []
+    for module_name, attr in names:
         cls = getattr(sys.modules.get(module_name), attr, None)
         if isinstance(cls, type) and issubclass(cls, BaseException):
             types.append(cls)
-    return tuple(types)
+    return types
+
+
+def _friendly_types() -> tuple[type[BaseException], ...]:
+    return (JobError, IngestError, TTSError, *_loaded_types(_FRIENDLY_ELSEWHERE))
+
+
+def is_cancellation(exc: BaseException) -> bool:
+    """True for the exceptions job functions raise when the user cancelled."""
+    return isinstance(exc, (JobCancelled, *_loaded_types(_CANCELLED_ELSEWHERE)))
 
 
 def is_friendly_error(exc: BaseException) -> bool:
@@ -289,7 +304,7 @@ class JobManager:
         try:
             result = fn(job)
         except Exception as exc:
-            if job.cancelled or isinstance(exc, JobCancelled):
+            if job.cancelled or is_cancellation(exc):
                 job._finish("cancelled", message="Cancelled")
                 return
             message = friendly_error(exc)

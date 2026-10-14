@@ -54,7 +54,7 @@ def load_document(
     kind = source_type_for(name) or source_type_for(path.name)
     if kind is None:
         raise IngestError(
-            f"Destiny Bot can't open '{Path(name).suffix or name}' files yet. "
+            f"Athena can't open '{Path(name).suffix or name}' files yet. "
             "Supported: " + ", ".join(sorted(SUPPORTED_EXTENSIONS))
         )
     if not path.is_file():

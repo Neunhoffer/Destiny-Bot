@@ -16,9 +16,13 @@ from .segment import chunk_span, split_sentences
 
 __all__ = ["plan_section", "section_plain_text"]
 
-PAUSE_HEADING_MS = 700
-PAUSE_BLOCK_MS = 350
-PAUSE_LIST_ITEM_MS = 250
+# The pause after an utterance is the only gap between them (the server trims the
+# silence a voice adds at the start and end of each clip), so every one is non-zero.
+PAUSE_CHUNK_MS = 60  # after a piece of one long sentence split at , ; : or a space
+PAUSE_SENTENCE_MS = 220  # between sentences (and code lines) inside a block
+PAUSE_BLOCK_MS = 450  # after a paragraph, quote, caption, footnote, figure, equation, code or table
+PAUSE_ROW_MS = 300  # after a list item, a table announcement and each table row but the last
+PAUSE_HEADING_MS = 750  # after a heading or the section-title announcement
 
 SPEAKER_NOTES_PREFIX = "Speaker notes: "
 FOOTNOTE_PREFIX = "Footnote: "
@@ -35,24 +39,21 @@ _YEAR_CELL = re.compile(r"(?:1[5-9]|20)\d\d")
 _LEADING_BULLET = re.compile(r"^[•▪◦■□►▸▶➢➤✓✔●○◆◇★☆♦❖⁃‣\-*]\s+")
 
 Normalizer = Callable[[str], str]
-# (start, end, speech) for one utterance inside a block
-_Piece = tuple[int, int, str]
+# (start, end, speech, pause_after_ms) for one utterance inside a block
+_Piece = tuple[int, int, str, int]
 
 
 def plan_section(section: Section, options: ReadingOptions | None = None) -> list[Utterance]:
     """The reading plan for ``section``: utterances in reading order, indexed 0..n-1."""
     opts = options or ReadingOptions()
-    planned: list[tuple[int, int, int, BlockKind, str, int]] = []
-
-    def emit(block_index: int, kind: BlockKind, pieces: list[_Piece], pause: int) -> None:
-        for n, (start, end, speech) in enumerate(pieces):
-            planned.append((block_index, start, end, kind, speech, pause if n == len(pieces) - 1 else 0))
+    planned: list[tuple[int, BlockKind, _Piece]] = []
 
     blocks = section.blocks
     if opts.announce_section_title and (not blocks or blocks[0].kind != BlockKind.HEADING):
         title = normalize_for_speech(section.title, opts)
-        emit(-1, BlockKind.HEADING, [(0, 0, part) for part in _split_speech(title, opts.max_chars)],
-             PAUSE_HEADING_MS)
+        parts = _split_speech(title, opts.max_chars)
+        pieces = _end_pause([(0, 0, part, PAUSE_CHUNK_MS) for part in parts], PAUSE_HEADING_MS)
+        planned.extend((-1, BlockKind.HEADING, piece) for piece in pieces)
 
     notes_prefix_pending = False
     previous_was_notes = False
@@ -65,64 +66,66 @@ def plan_section(section: Section, options: ReadingOptions | None = None) -> lis
         previous_was_notes = is_notes
 
         lead = SPEAKER_NOTES_PREFIX if notes_prefix_pending else ""
-        pieces, pause = _plan_block(block, opts, lead)
+        pieces = _plan_block(block, opts, lead)
         if pieces:
             notes_prefix_pending = False
-            emit(index, block.kind, pieces, pause)
+            planned.extend((index, block.kind, piece) for piece in pieces)
 
     return [
-        Utterance(index=i, block=b, start=s, end=e, kind=kind, speech=speech, pause_after_ms=pause)
-        for i, (b, s, e, kind, speech, pause) in enumerate(planned)
+        Utterance(index=i, block=b, start=start, end=end, kind=kind, speech=speech, pause_after_ms=pause)
+        for i, (b, kind, (start, end, speech, pause)) in enumerate(planned)
     ]
 
 
 # --------------------------------------------------------------------------- blocks
 
 
-def _plan_block(block: Block, opts: ReadingOptions, lead: str) -> tuple[list[_Piece], int]:
-    """Utterance pieces for one block (empty when skipped) and the pause after its last one."""
+def _plan_block(block: Block, opts: ReadingOptions, lead: str) -> list[_Piece]:
+    """Utterance pieces for one block (empty when options skip it), with their pauses."""
     kind = block.kind
     text = block.text or ""
     normalize = _normalizer(opts)
 
     if kind == BlockKind.HEADING:
         if not opts.read_headings:
-            return [], 0
+            return []
         start, end = _trimmed(text)
         pieces = _speak_span(text, start, end, opts.max_chars - len(lead), normalize) if start < end else []
-        return _with_prefix(pieces, lead), PAUSE_HEADING_MS
+        return _end_pause(_with_prefix(pieces, lead), PAUSE_HEADING_MS)
 
     if kind in _TEXT_KINDS:
         if kind == BlockKind.CAPTION and not opts.read_captions:
-            return [], 0
+            return []
         if kind == BlockKind.FOOTNOTE and not opts.read_footnotes:
-            return [], 0
+            return []
         prefix = lead + (FOOTNOTE_PREFIX if kind == BlockKind.FOOTNOTE else "")
-        pause = PAUSE_LIST_ITEM_MS if kind == BlockKind.LIST_ITEM else PAUSE_BLOCK_MS
-        return _sentences(text, opts.max_chars, normalize, prefix), pause
+        pause = PAUSE_ROW_MS if kind == BlockKind.LIST_ITEM else PAUSE_BLOCK_MS
+        return _end_pause(_sentences(text, opts.max_chars, normalize, prefix), pause)
 
     if kind == BlockKind.FIGURE:
         if not opts.read_figures or not text.strip():
-            return [], 0
-        return _sentences(text, opts.max_chars, normalize, lead + IMAGE_PREFIX), PAUSE_BLOCK_MS
+            return []
+        return _end_pause(_sentences(text, opts.max_chars, normalize, lead + IMAGE_PREFIX), PAUSE_BLOCK_MS)
 
     if kind == BlockKind.EQUATION:
         if opts.equations != "read":
-            return [], 0
+            return []
         spoken = verbalize_math(text)
-        return _whole_block(text, spoken, opts.max_chars, lead + EQUATION_PREFIX), PAUSE_BLOCK_MS
+        return _end_pause(_whole_block(text, spoken, opts.max_chars, lead + EQUATION_PREFIX), PAUSE_BLOCK_MS)
 
     if kind == BlockKind.CODE:
         if opts.code == "skip" or not text.strip():
-            return [], 0
+            return []
         if opts.code == "announce":
-            return _whole_block(text, CODE_ANNOUNCEMENT, opts.max_chars, lead), PAUSE_BLOCK_MS
-        return _code_lines(text, opts, lead), PAUSE_BLOCK_MS
+            pieces = _whole_block(text, CODE_ANNOUNCEMENT, opts.max_chars, lead)
+        else:
+            pieces = _code_lines(text, opts, lead)
+        return _end_pause(pieces, PAUSE_BLOCK_MS)
 
     if kind == BlockKind.TABLE:
-        return _table(block, opts, normalize, lead), PAUSE_BLOCK_MS
+        return _end_pause(_table(block, opts, normalize, lead), PAUSE_BLOCK_MS)
 
-    return [], 0
+    return []
 
 
 def _normalizer(opts: ReadingOptions) -> Normalizer:
@@ -139,8 +142,16 @@ def _trimmed(text: str) -> tuple[int, int]:
 
 def _with_prefix(pieces: list[_Piece], prefix: str) -> list[_Piece]:
     if pieces and prefix:
-        start, end, speech = pieces[0]
-        pieces[0] = (start, end, prefix + speech)
+        start, end, speech, pause = pieces[0]
+        pieces[0] = (start, end, prefix + speech, pause)
+    return pieces
+
+
+def _end_pause(pieces: list[_Piece], pause: int) -> list[_Piece]:
+    """Give the last piece ``pause`` (the gap after the whole sentence / block)."""
+    if pieces:
+        start, end, speech, _ = pieces[-1]
+        pieces[-1] = (start, end, speech, pause)
     return pieces
 
 
@@ -152,7 +163,7 @@ def _sentences(text: str, max_chars: int, normalize: Normalizer, prefix: str) ->
         if found and prefix:
             found = _with_prefix(found, prefix)
             prefix = ""
-        pieces.extend(found)
+        pieces.extend(_end_pause(found, PAUSE_SENTENCE_MS))
     return pieces
 
 
@@ -162,17 +173,18 @@ def _speak_span(text: str, start: int, end: int, budget: int, normalize: Normali
     Long spans are cut at display level (so each piece still highlights exactly what
     it says) using a target length scaled by how much normalization expands the
     text. A single word whose speech is still too long is split in the speech only.
+    All pieces get the short chunk pause; callers set the pause after the last one.
     """
     speech = normalize(text[start:end])
     if not speech:
         return []
     if len(speech) <= budget:
-        return [(start, end, speech)]
+        return [(start, end, speech, PAUSE_CHUNK_MS)]
     length = end - start
     target = max(1, min(length - 1, int(budget * length / len(speech) * 0.95)))
     spans = chunk_span(text, start, end, target, split_words=False) if length > 1 else [(start, end)]
     if len(spans) <= 1:
-        return [(start, end, part) for part in _split_speech(speech, budget)]
+        return [(start, end, part, PAUSE_CHUNK_MS) for part in _split_speech(speech, budget)]
     pieces: list[_Piece] = []
     for s, e in spans:
         pieces.extend(_speak_span(text, s, e, budget, normalize))
@@ -194,7 +206,7 @@ def _whole_block(text: str, speech: str, max_chars: int, prefix: str) -> list[_P
     if not speech or not _SPEAKABLE.search(speech):
         return []
     parts = _split_speech(speech, max_chars - len(prefix))
-    return _with_prefix([(0, len(text), part) for part in parts], prefix)
+    return _with_prefix([(0, len(text), part, PAUSE_CHUNK_MS) for part in parts], prefix)
 
 
 # --------------------------------------------------------------------------- code
@@ -233,7 +245,7 @@ def _code_lines(text: str, opts: ReadingOptions, lead: str) -> list[_Piece]:
             if found and prefix:
                 found = _with_prefix(found, prefix)
                 prefix = ""
-            pieces.extend(found)
+            pieces.extend(_end_pause(found, PAUSE_SENTENCE_MS))
         pos += len(line)
     return pieces
 
@@ -242,6 +254,7 @@ def _code_lines(text: str, opts: ReadingOptions, lead: str) -> list[_Piece]:
 
 
 def _table(block: Block, opts: ReadingOptions, normalize: Normalizer, lead: str) -> list[_Piece]:
+    """Table utterances; the caller sets the pause after the last one."""
     if opts.tables == "skip":
         return []
     text = block.text or ""
@@ -259,7 +272,7 @@ def _table(block: Block, opts: ReadingOptions, normalize: Normalizer, lead: str)
         return _whole_block(text, f"There is a table here with {size}.", opts.max_chars, lead)
 
     whole = (0, len(text))
-    pieces = _whole_block(text, f"Table with {size}.", opts.max_chars, lead)
+    pieces = _end_pause(_whole_block(text, f"Table with {size}.", opts.max_chars, lead), PAUSE_ROW_MS)
     labels = [normalize(cell) if cell else "" for cell in header] if header else []
     for number, row in enumerate(data, start=1):
         cells: list[str] = []
@@ -269,8 +282,8 @@ def _table(block: Block, opts: ReadingOptions, normalize: Normalizer, lead: str)
                 continue
             label = labels[col] if col < len(labels) else ""
             cells.append(f"{label}, {value}" if label else value)
-        for part in _pack(f"Row {number}: ", cells, opts.max_chars):
-            pieces.append((*whole, part))
+        parts = [(*whole, part, PAUSE_CHUNK_MS) for part in _pack(f"Row {number}: ", cells, opts.max_chars)]
+        pieces.extend(_end_pause(parts, PAUSE_ROW_MS))
     return pieces
 
 

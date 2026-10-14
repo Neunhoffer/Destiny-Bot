@@ -143,6 +143,14 @@ def reset_ocr_cache() -> None:
         _status = None
 
 
+def _tesseract_environment() -> dict[str, str]:
+    env = dict(os.environ)
+    # Tesseract's OpenMP worker threads spin while waiting; when the computer is busy
+    # (e.g. a voice is synthesizing) one thread is many times faster than several.
+    env.setdefault("OMP_THREAD_LIMIT", "1")
+    return env
+
+
 def _require() -> None:
     ok, reason = ocr_available()
     if not ok:
@@ -190,6 +198,8 @@ def ocr_image(image: Image, *, lang: str = "eng") -> str:
     if image.width < 3 or image.height < 3:
         return ""
     prepared = _prepare(image)
+    if hasattr(pytesseract.pytesseract, "environ"):  # the environment pytesseract starts tesseract with
+        pytesseract.pytesseract.environ = _tesseract_environment()
     try:
         text = pytesseract.image_to_string(prepared, lang=lang, config="--psm 3", timeout=_OCR_TIMEOUT_SECONDS)
     except pytesseract.TesseractNotFoundError as exc:

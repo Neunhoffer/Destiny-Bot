@@ -1,6 +1,6 @@
-"""Where Destiny Bot keeps its files, and the user's settings.
+"""Where Athena keeps its files, and the user's settings.
 
-Everything Destiny Bot stores lives under one folder (:func:`data_dir`) so that
+Everything Athena stores lives under one folder (:func:`data_dir`) so that
 deleting that folder removes every trace of it. Set ``DESTINY_HOME`` to put the
 folder somewhere specific (the launcher scripts point it inside the app folder,
 so deleting the app folder removes the data too).
@@ -20,12 +20,12 @@ from pydantic import BaseModel, Field, ValidationError
 
 from .models import ReadingOptions
 
-APP_DIR_NAME = "DestinyBot"
+APP_DIR_NAME = "Athena"
 DEFAULT_AI_MODEL = "claude-opus-5-5"
 
 
 def data_dir() -> Path:
-    """Root folder for all Destiny Bot data (created on first use)."""
+    """Root folder for all Athena data (created on first use)."""
     override = os.environ.get("DESTINY_HOME")
     if override:
         root = Path(override).expanduser()
@@ -36,7 +36,7 @@ def data_dir() -> Path:
         root = Path.home() / "Library" / "Application Support" / APP_DIR_NAME
     else:
         base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
-        root = Path(base) / "destiny-bot"
+        root = Path(base) / "athena"
     root.mkdir(parents=True, exist_ok=True)
     return root
 

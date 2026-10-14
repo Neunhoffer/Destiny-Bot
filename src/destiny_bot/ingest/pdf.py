@@ -136,6 +136,7 @@ class _Line:
     operators: int = 0
     symbol_lead: bool = False
     lead_marker: bool = False
+    lead_spaces: int = 0  # leading blanks in the raw text (code indentation)
     role: str = "body"  # "body" | "footnote"
     drop: bool = False
 
@@ -572,6 +573,8 @@ def _finish_line(line: _Line) -> None:
             mathc += sum(1 for ch in stripped if ch in _MATH_CHARS)
         ops += sum(1 for ch in stripped if ch in _OPERATOR_CHARS)
 
+    raw = "".join(s[0] for s in spans).replace("\t", "    ")
+    line.lead_spaces = len(raw) - len(raw.lstrip(" "))
     text = re.sub(r"[ \t]+", " ", "".join(pieces)).strip()
     line.text = text
     line.size = main
@@ -1428,7 +1431,7 @@ def _chunk_text(ch: _Chunk) -> str:
         left = min(ln.x0 for ln in ch.lines)
         out = []
         for ln in ch.lines:
-            indent = max(0, round((ln.x0 - left) / max(ln.size * 0.6, 1)))
+            indent = max(0, round((ln.x0 - left) / max(ln.size * 0.6, 1))) + ln.lead_spaces
             out.append(" " * indent + fix_characters(ln.text))
         return "\n".join(out)
     return clean_display_text("\n".join(ln.text for ln in ch.lines))

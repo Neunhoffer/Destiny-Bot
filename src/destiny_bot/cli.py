@@ -197,7 +197,7 @@ def _utterance_text(section: Section, utterance: Utterance) -> str:
 def _safe_folder_name(title: str) -> str:
     name = _UNSAFE_NAME_CHARS.sub("_", title)
     name = " ".join(name.split()).strip(" .")[:80].strip(" .")
-    return name or "Destiny Bot export"
+    return name or "Athena export"
 
 
 # -- books
@@ -314,11 +314,45 @@ def _choose_engine(name: str | None, settings: config.Settings) -> TTSEngine:
     return engine
 
 
+def _pick_voice(engine: TTSEngine, requested: str | None, settings: config.Settings) -> str:
+    """The requested voice (which must be installed), else the saved one if installed, else the default."""
+    try:
+        installed = [v.id for v in engine.list_voices() if v.installed]
+    except Exception:
+        installed = []
+    if requested:
+        if requested in installed:
+            return requested
+        listing = f" Installed voices: {', '.join(installed[:12])}." if installed else ""
+        raise CLIError(f"The voice '{requested}' isn't installed for {engine.label}.{listing} See: destiny voices")
+    saved = settings.voices.get(engine.name)
+    if saved and saved in installed:
+        return saved
+    try:
+        default = engine.default_voice()
+    except Exception:
+        default = None
+    if not default:
+        recommended = getattr(_safe_catalog(), "RECOMMENDED_VOICE", DEFAULT_VOICE_ID)
+        raise CLIError(
+            f"{engine.label} has no voices installed. Download one with:\n  destiny voices download {recommended}"
+        )
+    return default
+
+
 def _safe_catalog() -> Any:
     try:
         return _catalog()
     except ImportError:
         return None
+
+
+def _clamp_rate(rate: float) -> float:
+    try:
+        clamp = _tts().clamp_rate
+    except (ImportError, AttributeError):
+        return rate
+    return float(clamp(rate))
 
 
 def _rate_key(rate: float) -> str:
@@ -332,7 +366,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     try:
         from .server import DEFAULT_HOST, run
     except ImportError as exc:
-        raise CLIError(f"The web reader can't start because a part is missing ({exc}). Reinstall Destiny Bot.")
+        raise CLIError(f"The web reader can't start because a part is missing ({exc}). Reinstall Athena.")
     host = args.host or DEFAULT_HOST
     try:
         run(host=host, port=args.port, open_browser=not args.no_browser, allow_remote=args.host is not None)
@@ -346,7 +380,7 @@ def _desktop() -> Any:
         from . import desktop
     except ImportError as exc:
         raise CLIError(
-            f"The desktop app isn't available in this copy of Destiny Bot ({exc}). "
+            f"The desktop app isn't available in this copy of Athena ({exc}). "
             "Run 'destiny' to open the reader in your browser instead."
         ) from None
     return desktop
@@ -357,7 +391,7 @@ def _cmd_app(args: argparse.Namespace) -> int:
     try:
         run_app = desktop.run_app
     except AttributeError:
-        raise CLIError("The desktop app isn't ready in this copy of Destiny Bot. Run 'destiny' instead.") from None
+        raise CLIError("The desktop app isn't ready in this copy of Athena. Run 'destiny' instead.") from None
     return int(run_app(port=args.port) or 0)
 
 
@@ -366,7 +400,7 @@ def _cmd_shortcut(args: argparse.Namespace) -> int:
     try:
         create_shortcuts = desktop.create_shortcuts
     except AttributeError:
-        raise CLIError("Creating shortcuts isn't available in this copy of Destiny Bot.") from None
+        raise CLIError("Creating shortcuts isn't available in this copy of Athena.") from None
     paths = list(create_shortcuts(desktop=True, start_menu=not args.no_start_menu) or [])
     if not paths:
         print("No shortcuts were created.")
@@ -379,7 +413,7 @@ def _cmd_self_test(args: argparse.Namespace) -> int:
     try:
         from .selftest import run_self_test
     except ImportError as exc:
-        raise CLIError(f"The self-test isn't available in this copy of Destiny Bot ({exc}).") from None
+        raise CLIError(f"The self-test isn't available in this copy of Athena ({exc}).") from None
     return int(run_self_test(quick=args.quick) or 0)
 
 
@@ -469,8 +503,8 @@ def _cmd_read(args: argparse.Namespace) -> int:
     settings = config.load_settings()
     engine = _choose_engine(args.engine, settings)
     # Same voice choice and cache key as the web reader, so sentences heard there play instantly here.
-    voice = args.voice or settings.voices.get(engine.name) or engine.default_voice()
-    rate = args.rate if args.rate is not None else settings.speed
+    voice = _pick_voice(engine, args.voice, settings)
+    rate = _clamp_rate(args.rate if args.rate is not None else settings.speed)
     speech, audio = _speech(), _audio()
     cache = _audio_cache_class()(config.cache_dir())
     rate_key = _rate_key(rate)
@@ -533,7 +567,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
             _section_index(doc, section_id)
     settings = config.load_settings()
     engine = _choose_engine(args.engine, settings)
-    voice = args.voice or settings.voices.get(engine.name) or None
+    voice = _pick_voice(engine, args.voice, settings)
     out_dir = Path(args.out).expanduser() if args.out else Path.cwd() / _safe_folder_name(doc.title)
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -553,7 +587,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
             out_dir=out_dir,
             section_ids=section_ids,
             fmt=args.format,
-            rate=args.rate,
+            rate=_clamp_rate(args.rate),
             progress=bar,
             cancel=cancel,
         )
@@ -627,8 +661,12 @@ def _voices_download(voice_id: str | None) -> int:
     catalog = _catalog()
     if not voice_id:
         raise CLIError("Say which voice to download, e.g.: destiny voices download " + DEFAULT_VOICE_ID)
-    if voice_id not in {v.id for v in catalog.CATALOG}:
-        raise CLIError(f"There's no downloadable voice called '{voice_id}'. See the list with: destiny voices catalog")
+    check = getattr(catalog, "is_valid_voice_id", None)
+    if voice_id not in {v.id for v in catalog.CATALOG} and not (check is not None and check(voice_id)):
+        raise CLIError(
+            f"'{voice_id}' isn't a voice you can download (expected something like {DEFAULT_VOICE_ID}). "
+            "See the list with: destiny voices catalog"
+        )
     print(f"Downloading {voice_id}...")
     cancel = threading.Event()
     bar = _ProgressBar()
@@ -643,14 +681,14 @@ def _voices_download(voice_id: str | None) -> int:
         bar.finish()
     print(f"Done. The voice is saved in {Path(path).parent}.")
     if config.load_settings().tts_engine in ("auto", "piper"):
-        print("Destiny Bot will use Piper voices automatically.")
+        print("Athena will use Piper voices automatically.")
     return 0
 
 
 def _cmd_ai_key(args: argparse.Namespace) -> int:
     if args.remove:
         config.update_settings({"anthropic_api_key": ""})
-        print("Your Claude API key was removed from Destiny Bot's settings.")
+        print("Your Claude API key was removed from Athena's settings.")
         if os.environ.get("ANTHROPIC_API_KEY"):
             print("Note: the ANTHROPIC_API_KEY environment variable is still set, so a key is still available.")
         return 0
@@ -663,7 +701,7 @@ def _cmd_ai_key(args: argparse.Namespace) -> int:
     if any(ch.isspace() for ch in key) or not key.isprintable():
         raise CLIError("That key contains spaces or invisible characters. Copy it again and retry.")
     settings = config.update_settings({"anthropic_api_key": key})
-    print("Saved your Claude API key in Destiny Bot's settings on this computer.")
+    print("Saved your Claude API key in Athena's settings on this computer.")
     if not key.startswith("sk-"):
         print("Note: Claude API keys usually start with 'sk-'. If AI helpers fail, check the key.")
     if not settings.ai_enabled:
@@ -674,8 +712,8 @@ def _cmd_ai_key(args: argparse.Namespace) -> int:
 def _cmd_doctor(args: argparse.Namespace) -> int:
     settings = config.load_settings()
     python_ok = sys.version_info >= (3, 10)
-    print(f"Destiny Bot {__version__}")
-    print(f"Python {platform.python_version()}" + ("" if python_ok else "  (too old: Destiny Bot needs 3.10 or newer)"))
+    print(f"Athena {__version__}")
+    print(f"Python {platform.python_version()}" + ("" if python_ok else "  (too old: Athena needs 3.10 or newer)"))
     print(f"Data folder: {config.data_dir()}")
     try:
         book_count = len(Library().list())
@@ -736,7 +774,7 @@ def _cmd_wipe(args: argparse.Namespace) -> int:
             print("Nothing was deleted.")
             return 1
     wipe_user_data()
-    print("All your Destiny Bot data was erased (downloaded voices were kept).")
+    print("All your Athena data was erased (downloaded voices were kept).")
     return 0
 
 
@@ -766,10 +804,10 @@ def _rate(value: str) -> float:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="destiny",
-        description="Destiny Bot: a private study reader that reads your textbooks aloud.",
+        description="Athena: a private study reader that reads your textbooks aloud.",
         epilog="Run 'destiny' with no command to open the reader in your browser.",
     )
-    parser.add_argument("--version", action="version", version=f"Destiny Bot {__version__}")
+    parser.add_argument("--version", action="version", version=f"Athena {__version__}")
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
 
     p = sub.add_parser("serve", help="open the reader in your browser (the default)")
@@ -782,7 +820,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--port", type=_positive_port, default=8765, help="port to use (default 8765)")
     p.set_defaults(func=_cmd_app)
 
-    p = sub.add_parser("shortcut", help="add Destiny Bot shortcuts to the desktop and Start menu")
+    p = sub.add_parser("shortcut", help="add Athena shortcuts to the desktop and Start menu")
     p.add_argument("--no-start-menu", action="store_true", help="only create the desktop shortcut")
     p.set_defaults(func=_cmd_shortcut)
 
@@ -840,7 +878,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("doctor", help="check what's installed and working")
     p.set_defaults(func=_cmd_doctor)
 
-    p = sub.add_parser("wipe", help="erase all your Destiny Bot data (keeps downloaded voices)")
+    p = sub.add_parser("wipe", help="erase all your Athena data (keeps downloaded voices)")
     p.add_argument("--yes", action="store_true", help="don't ask for confirmation")
     p.set_defaults(func=_cmd_wipe)
     return parser

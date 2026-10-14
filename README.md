@@ -1,9 +1,9 @@
-# Destiny Bot 📖🔊
+# Athena 🦉📖🔊
 
 **A private study reader that reads your textbooks and class materials out loud.**
 
 Open a PDF textbook, an e-book, Word notes, lecture slides, or a photo of a handout.
-Destiny Bot cleans the text up for listening: it skips page numbers and running headers,
+Athena cleans the text up for listening: it skips page numbers and running headers,
 repairs words split across lines, and turns "e.g." and "Fig. 3" into words. Then it reads
 everything aloud in a natural voice and highlights each sentence as it goes. Click any
 sentence to jump there, change the speed, and pick up where you left off.
@@ -24,7 +24,7 @@ read tables and equations in plain words, and describe the figures on a page.
     your own API key, which is stored only in your local settings file and never shown
     in the browser.
 * **Easy to erase.** Settings → Privacy → *Erase all my data* (or `destiny wipe`)
-  deletes your books, progress, settings, and API key. Deleting the Destiny Bot
+  deletes your books, progress, settings, and API key. Deleting the Athena
   folder removes everything.
 
 ## Quick start
@@ -43,9 +43,9 @@ tick **"Add python.exe to PATH"** in the installer.
    Later launches take a few seconds.
 4. Your browser opens the reader. Click **Add material**, choose a file, and press ▶.
 
-To stop Destiny Bot, close the black terminal window, or press `Ctrl+C` in it.
+To stop Athena, close the black terminal window, or press `Ctrl+C` in it.
 
-The launchers keep everything inside the Destiny Bot folder: the app in `.venv`, and
+The launchers keep everything inside the Athena folder: the app in `.venv`, and
 your books and settings in `data`. To uninstall completely, delete the folder.
 
 ## Using the reader
@@ -94,7 +94,7 @@ DRM-protected e-books can't be opened.
 ### The study helper (optional)
 
 1. Get an API key at <https://console.anthropic.com/>. Usage is billed by Anthropic.
-2. In Destiny Bot, open Settings → Privacy & AI, turn on **Study helper**, and paste the key.
+2. In Athena, open Settings → Privacy & AI, turn on **Study helper**, and paste the key.
 3. Open the **Study helper** panel while reading to explain, ask, summarize, take a
    quiz, or describe the figures on a PDF page. Every answer can be read aloud.
 
@@ -116,7 +116,7 @@ destiny export "biology" --format mp3 --out ~/Music/Biology
 destiny voices catalog        downloadable natural voices
 destiny voices download en_US-amy-medium
 destiny doctor                check what's installed and working
-destiny wipe                  erase all Destiny Bot data
+destiny wipe                  erase all Athena data
 ```
 
 Set `DESTINY_HOME` to choose where data is stored. Otherwise it goes to

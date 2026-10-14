@@ -1,8 +1,8 @@
 /*
- * Destiny Bot: the browser reader.
+ * Athena: the browser reader.
  *
  * Plain ES2020 module with no build step and no third-party code. It talks only
- * to the local Destiny Bot server (docs/API.md). Book, AI and server text is
+ * to the local Athena server (docs/API.md). Book, AI and server text is
  * untrusted, so it is only ever inserted as text (textContent / text nodes),
  * never as HTML.
  *
@@ -201,7 +201,7 @@ function icon(name) {
 }
 
 function setIcon(holder, name) {
-  if (!holder) return;
+  if (!holder || (holder.dataset.icon === name && holder.firstElementChild)) return;
   holder.dataset.icon = name;
   holder.replaceChildren(icon(name));
 }
@@ -228,12 +228,12 @@ class ApiError extends Error {
 }
 
 const STATUS_MESSAGES = {
-  0: "Can't reach Destiny Bot. Make sure it's still running, then try again.",
-  401: 'Destiny Bot was restarted. Reload this page to continue.',
+  0: "Can't reach Athena. Make sure it's still running, then try again.",
+  401: 'Athena was restarted. Reload this page to continue.',
   403: "That isn't allowed right now. Check Settings → Privacy & AI.",
   404: "That couldn't be found. It may have been deleted.",
   413: 'That file is too big to import (the limit is 300 MB).',
-  500: 'Something went wrong inside Destiny Bot. Please try again.',
+  500: 'Something went wrong inside Athena. Please try again.',
 };
 
 function detailFrom(status, data) {
@@ -328,7 +328,7 @@ function showSessionExpired() {
     icon('alert'),
     el('div', { class: 'notice-body' },
       el('p', { class: 'notice-title', text: 'Please reload this page' }),
-      el('p', { text: 'Destiny Bot was restarted, so this page lost its connection. Reloading keeps all your books and progress.' }),
+      el('p', { text: 'Athena was restarted, so this page lost its connection. Reloading keeps all your books and progress.' }),
       el('div', { class: 'notice-actions' },
         el('button', { type: 'button', class: 'btn btn-primary btn-small', onclick: () => window.location.reload() }, 'Reload page')))));
 }
@@ -1583,7 +1583,7 @@ function setSleepMode(mode, { quiet = false } = {}) {
   } else {
     sleepTimer.mode = mode === 'section' ? 'section' : 'off';
   }
-  if (sleepTimer.mode === 'section' && player.playing && player.mode === 'webaudio') sched.stopAfterSection();
+  if (sleepTimer.mode === 'section' && sched.active) sched.stopAfterSection();
   renderSleep();
   if (!quiet) {
     announce(sleepTimer.mode === 'off' ? 'Sleep timer off'
@@ -1664,7 +1664,7 @@ function updateMediaSession() {
   navigator.mediaSession.metadata = new window.MediaMetadata({
     title: state.section.section.title,
     album: state.book.title,
-    artist: state.book.author || 'Destiny Bot',
+    artist: state.book.author || 'Athena',
     artwork: [{ src: '/static/icon.svg', sizes: '512x512', type: 'image/svg+xml' }],
   });
 }
@@ -1834,9 +1834,7 @@ function renderSection() {
     const isItem = block.kind === 'list_item';
     const isNote = isNotesBlock(block);
     if (isPaged && block.page && block.page !== lastPage && !(isItem && list) && !(isNote && notes)) {
-      if (lastPage !== null || i > (titleFromBlock ? 1 : 0) || true) {
-        article.append(el('p', { class: 'page-marker', text: pageLabel(block.page) }));
-      }
+      article.append(el('p', { class: 'page-marker', text: pageLabel(block.page) }));
       lastPage = block.page;
       list = null;
     }
@@ -1923,7 +1921,22 @@ function scrollToCurrent({ force = false, instant = false } = {}) {
   if (r.top >= c.top + margin && r.bottom <= c.bottom - margin) return;
   const smooth = !instant && !reducedMotion.matches;
   reader.programmaticUntil = performance.now() + (smooth ? 1200 : 200);
-  node.scrollIntoView({ block: r.height > c.height * 0.6 ? 'start' : 'center', behavior: smooth ? 'smooth' : 'auto' });
+  // Scroll only the reading column (scrollIntoView could also shift the page itself).
+  const offset = r.height > c.height * 0.6 ? 24 : (c.height - r.height) / 2;
+  box.scrollTo({ top: Math.max(0, box.scrollTop + (r.top - c.top) - offset), behavior: smooth ? 'smooth' : 'auto' });
+}
+
+function scrollIntoPanel(node, panel) {
+  if (!node || !panel || panel.hidden) return;
+  const r = node.getBoundingClientRect();
+  const c = panel.getBoundingClientRect();
+  if (r.top < c.top) panel.scrollTop -= c.top - r.top + 8;
+  else if (r.bottom > c.bottom) panel.scrollTop += r.bottom - c.bottom + 8;
+}
+
+function scrollThreadToEnd() {
+  const box = $('#study-thread');
+  box.scrollTop = box.scrollHeight;
 }
 
 function markUserScroll() {
@@ -2026,8 +2039,8 @@ function renderReader() {
 function renderWelcome() {
   return el('section', { class: 'welcome', 'aria-labelledby': 'welcome-title' },
     el('img', { class: 'welcome-art', src: '/static/icon.svg', alt: '', width: '84', height: '84' }),
-    el('h1', { id: 'welcome-title', text: 'Welcome to Destiny Bot' }),
-    el('p', { class: 'welcome-lead', text: 'Add a textbook, lecture slides or your notes, and Destiny Bot will read them aloud, highlighting each sentence so you can follow along.' }),
+    el('h1', { id: 'welcome-title', text: 'Welcome to Athena' }),
+    el('p', { class: 'welcome-lead', text: 'Add a textbook, lecture slides or your notes, and Athena will read them aloud, highlighting each sentence so you can follow along.' }),
     el('div', { class: 'welcome-actions' },
       el('button', { type: 'button', class: 'btn btn-primary', onclick: chooseFiles }, el('span', { class: 'i' }, icon('plus')), 'Add material'),
       el('button', { type: 'button', class: 'btn btn-secondary', onclick: openPaste }, el('span', { class: 'i' }, icon('paste')), 'Paste text')),
@@ -2200,7 +2213,12 @@ async function openBook(id, { warnings = null, focusContent = false } = {}) {
     return true;
   }
   const ok = await loadSection(sectionId, resumable ? progress.utterance : 0);
-  if (!ok) return false;
+  if (!ok) {
+    if (state.book?.id === id && !state.section) {
+      $('#article-host')?.replaceChildren(el('p', { class: 'loading-line', text: "This part of the book couldn't be opened. Try another section from Contents." }));
+    }
+    return false;
+  }
   closeOverlays();
   announce(resumable ? `Opened ${state.book.title}. Resuming where you left off.` : `Opened ${state.book.title}`);
   if (focusContent) $('#section-title')?.focus({ preventScroll: true });
@@ -2332,7 +2350,7 @@ function renderTocCurrent() {
   for (const link of $$('#toc .toc-link')) {
     if (link.dataset.sid === id) {
       link.setAttribute('aria-current', 'location');
-      if (!$('#panel-contents').hidden) link.scrollIntoView({ block: 'nearest' });
+      scrollIntoPanel(link, $('#panel-contents'));
     } else {
       link.removeAttribute('aria-current');
     }
@@ -2443,7 +2461,7 @@ function showBookmarksPanel() {
 async function deleteBook(book) {
   const ok = await confirmDialog({
     title: `Delete “${truncate(book.title, 60)}”?`,
-    message: 'This removes the book, your place in it and its bookmarks from Destiny Bot. The original file on your computer is not touched.',
+    message: 'This removes the book, your place in it and its bookmarks from Athena. The original file on your computer is not touched.',
     okLabel: 'Delete',
   });
   if (!ok) return;
@@ -2675,10 +2693,13 @@ function renderStudy() {
 }
 
 function studyIntro() {
-  if (!aiReady()) return setupCard('');
-  return el('div', { class: 'study-intro' },
-    icon('chat'),
-    el('p', { text: 'Ask anything about what you are reading. Select some text and choose Explain, or use the buttons above.' }));
+  const node = aiReady()
+    ? el('div', { class: 'study-intro' },
+      icon('chat'),
+      el('p', { text: 'Ask anything about what you are reading. Select some text and choose Explain, or use the buttons above.' }))
+    : setupCard('');
+  node.dataset.intro = '1';
+  return node;
 }
 
 function setupCard(detail) {
@@ -2741,10 +2762,10 @@ function pushItem(thread, item) {
   thread.push(item);
   if (isVisibleThread(thread)) {
     const box = $('#study-thread');
-    box.querySelector('.study-intro, .card-setup:not([data-item])')?.remove();
+    box.querySelector('[data-intro]')?.remove();
     item.node = renderStudyItem(item, thread);
     box.append(item.node);
-    item.node.scrollIntoView({ block: 'end', behavior: reducedMotion.matches ? 'auto' : 'smooth' });
+    scrollThreadToEnd();
   }
   return item;
 }
@@ -2755,9 +2776,8 @@ function replaceItem(thread, item, next) {
   thread[index] = next;
   if (isVisibleThread(thread) && item.node?.isConnected) {
     next.node = renderStudyItem(next, thread);
-    if (next.type === 'setup') next.node.dataset.item = '1';
     item.node.replaceWith(next.node);
-    next.node.scrollIntoView({ block: 'nearest', behavior: reducedMotion.matches ? 'auto' : 'smooth' });
+    scrollIntoPanel(next.node, $('#study-thread'));
   }
 }
 
@@ -3261,7 +3281,7 @@ function renderSettingsVoice() {
 async function loadCatalog() {
   const list = $('#catalog-list');
   if (!engineInfo('piper')) {
-    list.replaceChildren(el('li', { class: 'hint', text: 'Natural voices are not available in this copy of Destiny Bot.' }));
+    list.replaceChildren(el('li', { class: 'hint', text: 'Natural voices are not available in this copy of Athena.' }));
     return;
   }
   try {
@@ -3574,7 +3594,7 @@ function setupSettings() {
     local.clearAll();
     $('#wipe-dialog').close('done');
     $('#settings-dialog').close('done');
-    toast('All your Destiny Bot data was erased.', { kind: 'success' });
+    toast('All your Athena data was erased.', { kind: 'success' });
     setTimeout(() => window.location.reload(), 1200);
   });
 }
@@ -4012,8 +4032,8 @@ async function init() {
   } catch (err) {
     if (err.status !== 401) {
       $('#reader-body').replaceChildren(el('div', { class: 'welcome' },
-        el('h1', { text: "Can't connect to Destiny Bot" }),
-        el('p', { class: 'welcome-lead', text: `${errorText(err)} If you closed the Destiny Bot window, start it again and then reload this page.` }),
+        el('h1', { text: "Can't connect to Athena" }),
+        el('p', { class: 'welcome-lead', text: `${errorText(err)} If you closed the Athena window, start it again and then reload this page.` }),
         el('div', { class: 'welcome-actions' },
           el('button', { type: 'button', class: 'btn btn-primary', onclick: () => window.location.reload() }, 'Try again'))));
     }
@@ -4025,13 +4045,12 @@ async function init() {
   await refreshServerVoices();
   renderVoicePicker();
   renderLibrary();
-  renderReader();
   renderStudy();
   checkVoiceBanner();
   const last = local.get('lastBook', null);
   const target = state.books.find((b) => b.id === last) || state.books.find((b) => b.progress);
   if (target) await openBook(target.id);
-  else if (state.books.length && !mqNarrow.matches) selectSidebarTab('library');
+  else renderReader();
 }
 
 init();

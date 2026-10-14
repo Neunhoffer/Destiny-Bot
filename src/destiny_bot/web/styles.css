@@ -1,4 +1,4 @@
-/* Destiny Bot: calm, studious reader UI. No external fonts or images. */
+/* Athena: calm, studious reader UI. No external fonts or images. */
 
 /* ---------------------------------------------------------------- tokens */
 
@@ -3316,4 +3316,15 @@ input[type="radio"] {
   .reader {
     overflow: visible;
   }
+}
+
+.chooser-list {
+  max-width: 460px;
+  margin: 0 auto 24px;
+  text-align: left;
+}
+
+.chooser-list .book-item {
+  border: 1px solid var(--border);
+  background: var(--surface);
 }

@@ -112,10 +112,10 @@ _MEDIA_TYPES = {
 }
 
 _MISSING_UI_HTML = """<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Destiny Bot</title></head>
-<body><h1>Destiny Bot</h1>
-<p>The reader's web page files are missing from this copy of Destiny Bot.
-Download Destiny Bot again, or reinstall it, then restart it.</p></body></html>
+<html lang="en"><head><meta charset="utf-8"><title>Athena</title></head>
+<body><h1>Athena</h1>
+<p>The reader's web page files are missing from this copy of Athena.
+Download Athena again, or reinstall it, then restart it.</p></body></html>
 """
 
 
@@ -168,7 +168,7 @@ def _ocr_status() -> tuple[bool, str]:
     try:
         from .ingest.ocr import ocr_available
     except ImportError as exc:
-        return False, f"Reading scanned pages isn't installed in this copy of Destiny Bot ({exc})."
+        return False, f"Reading scanned pages isn't installed in this copy of Athena ({exc})."
     try:
         ok, reason = ocr_available()
     except Exception as exc:  # status must never fail because of one optional feature
@@ -385,7 +385,7 @@ class SecurityMiddleware:
         host = headers.get("host", "")
         if not self._host_allowed(host):
             await _send_json(
-                send_with_headers, 403, "Destiny Bot only answers requests addressed to 127.0.0.1 or localhost."
+                send_with_headers, 403, "Athena only answers requests addressed to 127.0.0.1 or localhost."
             )
             return
         origin = headers.get("origin")
@@ -433,7 +433,7 @@ class _UploadRejected(Exception):
 
 def _unsupported_message(name: str) -> str:
     return (
-        f"Destiny Bot can't open '{Path(name).suffix or name}' files yet. "
+        f"Athena can't open '{Path(name).suffix or name}' files yet. "
         "Supported: " + ", ".join(sorted(SUPPORTED_EXTENSIONS))
     )
 
@@ -708,7 +708,7 @@ def create_app(
     _remove_stale(temp_dir(), "upload-", 6 * 3600)
     _remove_stale(config.exports_dir(), "j_", 3600)
 
-    app = FastAPI(title="Destiny Bot", version=__version__, docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="Athena", version=__version__, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.library = library
     app.state.jobs = jobs
     app.state.token = token
@@ -764,7 +764,7 @@ def create_app(
         try:
             return _tts()
         except ImportError as exc:
-            raise HTTPException(503, f"Voices aren't available in this copy of Destiny Bot ({exc}).") from None
+            raise HTTPException(503, f"Voices aren't available in this copy of Athena ({exc}).") from None
 
     def choose_engine(name: str | None, settings: config.Settings, *, for_files: bool) -> TTSEngine:
         tts = tts_module()
@@ -790,6 +790,27 @@ def create_app(
             raise HTTPException(403, ONLINE_TTS_OFF)
         return engine
 
+    def pick_voice(engine: TTSEngine, requested: str | None, settings: config.Settings) -> str:
+        """The requested (or saved) voice when it's installed, else the engine's default."""
+        wanted = [v for v in (requested, settings.voices.get(engine.name)) if v]
+        if wanted:
+            try:
+                installed = {v.id for v in engine.list_voices() if v.installed}
+            except Exception as exc:
+                log.warning("Couldn't list %s voices: %s", engine.name, exc)
+                installed = set()
+            for voice in wanted:
+                if voice in installed:
+                    return voice
+        try:
+            default = engine.default_voice()
+        except Exception as exc:
+            log.warning("Couldn't get the default %s voice: %s", engine.name, exc)
+            default = None
+        if not default:
+            raise HTTPException(503, f"{engine.label} has no voices installed. Download one in Settings → Voices.")
+        return default
+
     def run_ai(call: Callable[[Any], Any]) -> Any:
         settings = config.load_settings()
         if not settings.ai_enabled:  # checked here too, so no text can leave unless the switch is on
@@ -797,7 +818,7 @@ def create_app(
         try:
             ai = _ai()
         except ImportError:
-            raise HTTPException(409, "AI study helpers aren't installed in this copy of Destiny Bot.") from None
+            raise HTTPException(409, "AI study helpers aren't installed in this copy of Athena.") from None
         try:
             return call(ai.Assistant(settings))
         except ai.AIUnavailable as exc:
@@ -1054,17 +1075,20 @@ def create_app(
     @app.post("/api/voices/download")
     def download_voice(body: VoiceDownloadBody) -> dict[str, Any]:
         catalog = _catalog()
-        match = next((v for v in catalog.CATALOG if v.id == body.voice_id), None)
-        if match is None:
-            raise HTTPException(404, f"There's no downloadable voice called '{body.voice_id}'.")
-        voice_id = match.id
+        voice_id = body.voice_id.strip()
+        entry = next((v for v in catalog.CATALOG if v.id == voice_id), None)
+        if entry is None and not _valid_piper_voice_id(catalog, voice_id):
+            raise HTTPException(
+                400, f"'{voice_id}' isn't a valid voice name (expected something like en_US-lessac-medium)."
+            )
+        label = entry.name if entry is not None else voice_id
 
         def run(job: Job) -> dict[str, Any]:
-            job.update(0.0, f"Downloading {match.name}")
+            job.update(0.0, f"Downloading {label}")
             catalog.download_piper_voice(voice_id, progress=job.update, cancel=job.cancel_event)
             return {"voice_id": voice_id}
 
-        job = jobs.submit("voice_download", run, message=f"Waiting to download {match.name}")
+        job = jobs.submit("voice_download", run, message=f"Waiting to download {label}")
         return {"job_id": job.id}
 
     @app.post("/api/tts")
@@ -1076,9 +1100,9 @@ def create_app(
             raise HTTPException(400, f"That's too much text to read at once ({MAX_TTS_CHARS:,} characters at most).")
         settings = config.load_settings()
         engine = choose_engine(body.engine, settings, for_files=False)
-        rate = body.rate
+        voice = pick_voice(engine, body.voice, settings)
+        rate = _clamp_rate(body.rate)
         try:
-            voice = body.voice or settings.voices.get(engine.name) or engine.default_voice()
             clip = caches.audio().get_or_create(
                 (engine.name, voice or "", f"{rate:.2f}", text),
                 lambda: _trimmed(engine.synthesize(text, voice, rate)),
@@ -1184,12 +1208,13 @@ def create_app(
             available, reason = False, friendly_error(exc)
         if not available:
             raise HTTPException(503, reason or "That voice isn't available right now.")
-        voice = body.voice or settings.voices.get(engine.name) or None
+        voice = pick_voice(engine, body.voice, settings)
+        rate = _clamp_rate(body.rate)
         options = settings.reading
         try:
             export_audiobook = _export_audiobook()
         except ImportError as exc:
-            message = f"Saving audio files isn't available in this copy of Destiny Bot ({exc})."
+            message = f"Saving audio files isn't available in this copy of Athena ({exc})."
             raise HTTPException(503, message) from None
 
         def run(job: Job) -> dict[str, Any]:
@@ -1204,7 +1229,7 @@ def create_app(
                 out_dir=out_dir,
                 section_ids=section_ids,
                 fmt=body.format,
-                rate=body.rate,
+                rate=rate,
                 progress=job.update,
                 cancel=job.cancel_event,
             )
@@ -1281,6 +1306,23 @@ def create_app(
     return app
 
 
+def _valid_piper_voice_id(catalog: Any, voice_id: str) -> bool:
+    """Any well-formed Piper voice id can be downloaded, not only the curated ones."""
+    check = getattr(catalog, "is_valid_voice_id", None)
+    try:
+        return bool(check(voice_id)) if check is not None else False
+    except Exception:
+        return False
+
+
+def _clamp_rate(rate: float) -> float:
+    try:
+        clamp = _tts().clamp_rate
+    except (ImportError, AttributeError):
+        return rate
+    return float(clamp(rate))
+
+
 def _trimmed(clip: AudioClip) -> AudioClip:
     """Drop the engine's leading/trailing silence from WAV clips: the UI times the pauses itself."""
     if clip.mime != "audio/wav":
@@ -1353,7 +1395,7 @@ def _bind_free_port(host: str, port: int, attempts: int = PORT_ATTEMPTS) -> tupl
             sock.close()
             last_error = exc
     raise OSError(
-        f"Couldn't start Destiny Bot: ports {port} to {port + attempts - 1} are all in use. "
+        f"Couldn't start Athena: ports {port} to {port + attempts - 1} are all in use. "
         "Close the other program, or choose another port with --port."
     ) from last_error
 
@@ -1453,7 +1495,7 @@ def start_server_in_thread(
     thread.start()
     if not _wait_until_serving(server, thread, host, actual_port, timeout):
         stop()
-        raise RuntimeError("Destiny Bot's reader didn't start in time. Close other copies of it and try again.")
+        raise RuntimeError("Athena's reader didn't start in time. Close other copies of it and try again.")
     return _browser_url(host, actual_port), stop
 
 
@@ -1473,7 +1515,7 @@ def run(
     loopback = _is_loopback(host)
     if not loopback and not allow_remote:
         raise ValueError(
-            f"Refusing to listen on {host}: Destiny Bot only listens on this computer (127.0.0.1) "
+            f"Refusing to listen on {host}: Athena only listens on this computer (127.0.0.1) "
             "unless you explicitly choose another address."
         )
     sock, actual_port = _bind_free_port(host, port)
@@ -1482,14 +1524,14 @@ def run(
         app = create_app(jobs=jobs, port=actual_port, bind_host=host)
         url = _browser_url(host, actual_port)
         if actual_port != port:
-            print(f"Port {port} is busy, so Destiny Bot is using port {actual_port} instead.")
+            print(f"Port {port} is busy, so Athena is using port {actual_port} instead.")
         if not loopback:
             print(
-                f"WARNING: Destiny Bot is listening on {host}, so other devices on your network can open it\n"
+                f"WARNING: Athena is listening on {host}, so other devices on your network can open it\n"
                 "and read your books, notes and settings. Only do this on a network you trust.\n"
                 "Use the default (127.0.0.1) to keep everything private to this computer."
             )
-        print(f"Destiny Bot is running at {url} (press Ctrl+C to stop)", flush=True)
+        print(f"Athena is running at {url} (press Ctrl+C to stop)", flush=True)
         if open_browser:
             timer = threading.Timer(1.0, _open_browser, args=(url,))
             timer.daemon = True
@@ -1502,4 +1544,4 @@ def run(
     finally:
         jobs.shutdown(wait=False)
         sock.close()
-    print("Destiny Bot stopped.")
+    print("Athena stopped.")
