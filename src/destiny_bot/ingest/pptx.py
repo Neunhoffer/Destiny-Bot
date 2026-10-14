@@ -17,6 +17,7 @@ from ..models import Block, BlockKind, Document
 from . import IngestError, ProgressFn
 from .common import (
     check_zip_size,
+    clean_alt_text,
     clean_display_text,
     doc_id_for_file,
     finalize_sections,
@@ -64,7 +65,7 @@ def _alt_text(shape) -> str:
     c_nv_pr = shape._element.find(".//" + _P + "cNvPr")
     if c_nv_pr is None:
         return ""
-    return (c_nv_pr.get("descr") or "").strip()
+    return clean_alt_text(c_nv_pr.get("descr") or "")
 
 
 def _page_list(numbers: list[int]) -> str:

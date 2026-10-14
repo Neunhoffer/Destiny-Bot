@@ -18,6 +18,7 @@ import unicodedata
 from typing import Callable
 
 from ..models import ReadingOptions
+from .segment import _SENTENCE_STARTERS
 
 __all__ = ["normalize_for_speech", "verbalize_math"]
 
@@ -963,7 +964,16 @@ def _clock_repl(m: re.Match[str]) -> str:
 # A period inside a sentence makes both voices pause as if the sentence ended: "Franklin D.
 # Roosevelt", "the U.S. Army", "Apple Inc. and". Those periods are dropped (the letters stay).
 _DOTTED_ACRONYM = re.compile(r"(?<![\w.])(?:[A-Z]\.){2,}|\bPh\.\s?D\.")
-_INITIAL = re.compile(rf"(?<![\w.'’])([{_UP}])\.\s+(?=[{_UP}])")
+_INITIAL = re.compile(rf"(?<![\w.'’])([{_UP}])\.\s+(?=([{_UP}][\w’']*))")
+# "Theorem G. B is a basis", "Archetype A. Study it": a lettered thing that ends a sentence.
+_LABEL_WORDS = frozenset(
+    """
+    appendix archetype chapter section part theorem lemma definition corollary proposition example exercise
+    technique figure table equation vitamin type plan option grade class group model unit step phase stage level
+    sample point line case matrix set row column book volume act scene article exhibit schedule form question
+    problem item note box panel category zone area region block building room gate hall wing team side version
+    """.split()
+)
 _COMPANY = re.compile(r"\b(Inc|Corp|Ltd|Co|Bros)\.(?=\s+\S)")
 
 
@@ -973,8 +983,17 @@ def _abbreviation_periods(text: str) -> str:
     text = _DOTTED_ACRONYM.sub(
         lambda m: " ".join(c for c in m.group() if c.isalpha()).upper() + ("." if _at_end(m) else ""), text
     )
-    text = _INITIAL.sub(r"\1 ", text)
+    text = _INITIAL.sub(_initial_repl, text)
     return _COMPANY.sub(r"\1", text)
+
+
+def _initial_repl(m: re.Match[str]) -> str:
+    """"Franklin D. Roosevelt" -> "Franklin D Roosevelt", unless the letter could end a sentence."""
+    before = re.search(r"([^\W\d_]+)\W*$", m.string[: m.start()])
+    nxt = re.split(r"['’]", m.group(2))[0]
+    if (before and before.group(1).lower() in _LABEL_WORDS) or nxt in _SENTENCE_STARTERS:
+        return m.group()
+    return m.group(1) + " "
 
 
 def _spoken_numbers(text: str) -> str:
@@ -1455,11 +1474,14 @@ _NUMBER_TOKEN = re.compile(r"^[-−]?(?:\d[\d,]*(?:\.\d+)?|\.\d+)%?$")
 _COEFFICIENT_TERM = re.compile(r"\d+(?:\.\d+)?[a-rt-z]")  # "2x" in "y = 2x - 1" (not "1980s")
 
 
-def _is_operand(token: str) -> bool:
-    """A number, a single-letter variable, a Greek-letter name, or a bracketed expression."""
+def _is_operand(token: str, *, finished: bool = False) -> bool:
+    """A number, a single-letter variable, a Greek-letter name, or a bracketed expression.
+
+    With ``finished``, finished speech (a formula like "C O 2", an amount of money) counts too.
+    """
     token = token.strip("$£€")
     if _VAULT_CHARS.fullmatch(token):
-        return True  # finished speech: a formula ("C O 2"), an amount of money
+        return finished
     if not _SPEAKABLE.search(token):
         return False  # a lone "(" is not an operand
     if _NUMBER_TOKEN.match(token):
@@ -1506,7 +1528,8 @@ def _comparison(words_with_left: str, words_without: str, *, strict: bool) -> Ca
 
 def _between_operands(spoken: str, otherwise: str) -> Callable[[re.Match[str]], str]:
     def fn(m: re.Match[str]) -> str:
-        if _is_operand(_left_token(m.string, m.start())) and _is_operand(_right_token(m.string, m.end())):
+        left, right = _left_token(m.string, m.start()), _right_token(m.string, m.end())
+        if _is_operand(left, finished=True) and _is_operand(right, finished=True):
             return f" {spoken} "
         return otherwise
 

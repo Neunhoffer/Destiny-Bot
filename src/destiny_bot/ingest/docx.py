@@ -21,6 +21,7 @@ from ..models import Block, BlockKind, Document
 from . import IngestError, ProgressFn
 from .common import (
     check_zip_size,
+    clean_alt_text,
     clean_display_text,
     doc_id_for_file,
     finalize_sections,
@@ -423,13 +424,13 @@ class _DocxReader:
                     doc_pr = child.find(_WP + "docPr")
                     alt = ""
                     if doc_pr is not None:
-                        alt = doc_pr.get("descr") or doc_pr.get("title") or ""
+                        alt = clean_alt_text(doc_pr.get("descr") or doc_pr.get("title") or "")
                     if alt.strip() and child.find(".//" + _W + "txbxContent") is None:
                         block = text_block(BlockKind.FIGURE, alt)
                         if block:
                             out.append(block)
-                elif tag.startswith(_V) and (child.get("alt") or "").strip():
-                    block = text_block(BlockKind.FIGURE, child.get("alt"))
+                elif tag.startswith(_V) and clean_alt_text(child.get("alt") or ""):
+                    block = text_block(BlockKind.FIGURE, clean_alt_text(child.get("alt") or ""))
                     if block:
                         out.append(block)
                 visit(child)

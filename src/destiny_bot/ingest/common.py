@@ -239,6 +239,27 @@ def clean_display_text(text: str, *, evidence: HyphenationEvidence | None = None
     return text.strip()
 
 
+# Programs fill in a picture's description with its file name or address ("IMG_2034.JPG",
+# "K:\\Pics\\cell.png", "https://..."), or append a note to the one they generate.
+_FILE_NAME_ALT = re.compile(
+    r"(?:^|[\\/])[^\\/]*\.(?:png|jpe?g|gif|bmp|tiff?|emf|wmf|svg|webp|heic|ico|eps|psd)$", re.I
+)
+_URL_ALT = re.compile(r"^(?:https?|file|ftp)://\S*$|^www\.\S+$", re.I)
+_AUTO_ALT_NOTE = re.compile(
+    r"[\s.]*(?:Description|Text) (?:automatically generated|generated with (?:very )?(?:high|medium|low) confidence)"
+    r"\.?$",
+    re.I,
+)
+
+
+def clean_alt_text(alt: str) -> str:
+    """A picture's description worth reading aloud ("" for a file name, path or web address)."""
+    alt = _AUTO_ALT_NOTE.sub("", clean_display_text(alt)).strip()
+    if _URL_ALT.match(alt) or (_FILE_NAME_ALT.search(alt) and len(alt.split()) <= 8):
+        return ""
+    return alt
+
+
 def title_from_filename(name: str) -> str:
     stem = Path(name).stem
     stem = re.sub(r"[_]+", " ", stem)

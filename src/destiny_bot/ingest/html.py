@@ -29,7 +29,14 @@ from lxml import html as lxml_html
 
 from ..models import Block, BlockKind, Document
 from . import ProgressFn
-from .common import clean_display_text, doc_id_for_file, finalize_sections, sections_from_blocks, title_from_filename
+from .common import (
+    clean_alt_text,
+    clean_display_text,
+    doc_id_for_file,
+    finalize_sections,
+    sections_from_blocks,
+    title_from_filename,
+)
 from .text import code_text, decode_text_bytes, superscript_text, table_block, text_block, wrap_math
 
 _HEADINGS = {"h1": 1, "h2": 2, "h3": 3, "h4": 4, "h5": 5, "h6": 6}
@@ -464,7 +471,7 @@ class _Walker:
     def _alt(self, img: Tag) -> str:
         if self._hidden(img) or _tokens(img, "role") & {"presentation", "none"}:
             return ""
-        return clean_display_text(img.get("alt") or "")
+        return clean_alt_text(img.get("alt") or "")
 
     # ------------------------------------------------------------ structure
 

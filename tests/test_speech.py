@@ -906,6 +906,9 @@ PERIODS_AND_LISTS = [
     ("a Ph.D. from MIT", "a P H D from MIT"),
     ("Apple Inc. and Microsoft Corp. grew.", "Apple Inc and Microsoft Corp grew."),
     ("It was Apple Inc.", "It was Apple Inc."),
+    ("Robert A. Beezer wrote it.", "Robert A Beezer wrote it."),
+    ("Study Technique D. We'll wait.", "Study Technique D. We'll wait."),  # a lettered thing ends the sentence
+    ("by Theorem G. B is a basis", "by Theorem G. B is a basis"),
     # A list letter "a" is not the article "uh".
     ("Steps: a) mix; b) heat", "Steps: A) mix; b) heat"),
     ("(a) the first and (b) the second", "(A) the first and (b) the second"),
