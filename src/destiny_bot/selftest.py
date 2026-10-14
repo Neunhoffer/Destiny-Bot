@@ -13,6 +13,7 @@ voice engine, OCR, the native window) are warnings.
 
 from __future__ import annotations
 
+import functools
 import importlib
 import importlib.util
 import json
@@ -454,7 +455,9 @@ def _check_engines(report: Report, quick: bool) -> None:
         )
     for engine, info in zip(engines, infos):
         if engine.online:
-            report.add("synthesis", f"{engine.name} speaks", SKIP, "online voice: not tested, to keep this check offline")
+            report.add(
+                "synthesis", f"{engine.name} speaks", SKIP, "online voice: not tested, to keep this check offline"
+            )
     report.extra["synthesis"] = synth_results
 
 
@@ -475,9 +478,8 @@ def _benchmark(engine: Any, voice: str | None, quick: bool) -> dict[str, Any]:
             return result
         runs: list[tuple[float, float]] = []
         for sentence in WARM_SENTENCES:
-            warm_clip, seconds = _run_with_timeout(
-                lambda text=sentence: engine.synthesize(text, voice), WARM_TIMEOUT_S
-            )
+            speak: Callable[[], Any] = functools.partial(engine.synthesize, sentence, voice)
+            warm_clip, seconds = _run_with_timeout(speak, WARM_TIMEOUT_S)
             warm_stats = _wav_stats(warm_clip)
             if _valid_speech(warm_stats):
                 result["error"] = f"a second sentence failed: {_valid_speech(warm_stats)}"
@@ -578,11 +580,18 @@ def _make_pdf(path: Path) -> None:
 
     doc = pymupdf.open()
     chapters = [
-        ("Chapter 1: Cells", "Cells are the basic units of life. Every living thing is made of one or more cells. "
-         "The cell membrane controls what enters and leaves the cell."),
-        ("Chapter 2: Energy", "Mitochondria release energy from food. Plants also capture energy from sunlight, "
-         "for example in the leaves."),
-    ]  # fmt: skip
+        (
+            "Chapter 1: Cells",
+            (
+                "Cells are the basic units of life. Every living thing is made of one or more cells. "
+                "The cell membrane controls what enters and leaves the cell."
+            ),
+        ),
+        (
+            "Chapter 2: Energy",
+            "Mitochondria release energy from food. Plants also capture energy from sunlight, for example in the leaves.",
+        ),
+    ]
     for title, body in chapters:
         page = doc.new_page()
         page.insert_text((72, 90), title, fontsize=20)

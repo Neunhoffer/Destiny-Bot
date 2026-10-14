@@ -254,8 +254,12 @@ def setup_logging(*, redirect: bool | None = None, name: str = LOG_FILE) -> Path
     root.addHandler(handler)
     if root.level == logging.NOTSET or root.level > logging.INFO:
         root.setLevel(logging.INFO)
-    if not redirect and sys.stderr is not None and not any(
-        isinstance(h, logging.StreamHandler) and getattr(h, "stream", None) is sys.stderr for h in root.handlers
+    if (
+        not redirect
+        and sys.stderr is not None
+        and not any(
+            isinstance(h, logging.StreamHandler) and getattr(h, "stream", None) is sys.stderr for h in root.handlers
+        )
     ):
         console = logging.StreamHandler(sys.stderr)
         console.setLevel(logging.WARNING)
@@ -271,7 +275,9 @@ def _hidden_flags() -> int:
     return CREATE_NO_WINDOW if os.name == "nt" else 0
 
 
-def _run_hidden(cmd: list[str], *, env: dict[str, str] | None = None, timeout: float = 60) -> subprocess.CompletedProcess:
+def _run_hidden(
+    cmd: list[str], *, env: dict[str, str] | None = None, timeout: float = 60
+) -> subprocess.CompletedProcess:
     """Run a helper program without flashing a console window; never raises for a non-zero exit."""
     return subprocess.run(
         cmd,
@@ -394,6 +400,7 @@ def _show_error(message: str) -> None:
             ctypes.windll.user32.MessageBoxW(None, message, APP_NAME, 0x10 | 0x10000 | 0x40000)
             return
         if sys.platform == "darwin":
+
             def applescript(text: str) -> str:
                 return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
@@ -498,11 +505,11 @@ def acquire_instance(*, wait_s: float = STARTING_GRACE_S) -> dict[str, Any] | No
             else:
                 time.sleep(0.1)
             continue
-        pid, url = info.get("pid"), info.get("url")
+        pid, url = int(info["pid"]), info.get("url")
         if pid == os.getpid():
             _write_lock(None, started)
             return None
-        if not _pid_alive(int(pid)):
+        if not _pid_alive(pid):
             log.info("Removing a stale lock from process %s", pid)
             _remove_lock_file()
             continue
@@ -583,7 +590,10 @@ def _app_browser_candidates() -> list[Path]:
     found: list[Path] = []
     if platform == "win32":
         bases = [os.environ.get(v) for v in ("ProgramFiles(x86)", "ProgramFiles", "ProgramW6432", "LOCALAPPDATA")]
-        for rel in (("Microsoft", "Edge", "Application", "msedge.exe"), ("Google", "Chrome", "Application", "chrome.exe")):
+        for rel in (
+            ("Microsoft", "Edge", "Application", "msedge.exe"),
+            ("Google", "Chrome", "Application", "chrome.exe"),
+        ):
             found.extend(Path(base, *rel) for base in bases if base)
         found.extend(_app_paths_from_registry())
     elif platform == "darwin":
@@ -783,7 +793,9 @@ def run_app(*, port: int = 8765) -> int:
     except Exception as exc:  # a read-only or full disk must not stop the app
         if sys.stderr is not None:
             print(f"Couldn't open the log file: {exc}", file=sys.stderr)
-    log.info("Starting Athena %s (frozen=%s, python %s, %s)", __version__, is_frozen(), sys.version.split()[0], sys.platform)
+    log.info(
+        "Starting Athena %s (frozen=%s, python %s, %s)", __version__, is_frozen(), sys.version.split()[0], sys.platform
+    )
 
     try:
         voices = use_bundled_voices()
@@ -894,7 +906,9 @@ def _powershell() -> str:
     exe = shutil.which("powershell") or shutil.which("powershell.exe")
     if exe:
         return exe
-    return str(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe")
+    return str(
+        Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    )
 
 
 def windows_shortcut_job(*, desktop: bool, start_menu: bool) -> tuple[list[str], dict[str, str], str]:
@@ -929,9 +943,7 @@ def _create_windows_shortcuts(*, desktop: bool, start_menu: bool) -> list[Path]:
     output = (proc.stdout or b"").decode("utf-8", "replace")
     if proc.returncode != 0:
         detail = (proc.stderr or b"").decode("utf-8", "replace").strip().splitlines()
-        raise ShortcutError(
-            "Couldn't create the shortcuts" + (f": {detail[-1]}" if detail else ".")
-        )
+        raise ShortcutError("Couldn't create the shortcuts" + (f": {detail[-1]}" if detail else "."))
     return [Path(line.strip().lstrip("\ufeff")) for line in output.splitlines() if line.strip().endswith(".lnk")]
 
 

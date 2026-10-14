@@ -266,7 +266,7 @@ def test_pid_alive():
 class _PageHandler(http.server.BaseHTTPRequestHandler):
     body = b""
 
-    def do_GET(self):  # noqa: N802
+    def do_GET(self):
         self.send_response(200)
         self.send_header("Content-Type", "text/html")
         self.end_headers()
@@ -304,7 +304,11 @@ class _Recorder:
 def test_run_app_serves_shows_the_window_and_stops(monkeypatch):
     rec = _Recorder()
     url = "http://127.0.0.1:8765/"
-    monkeypatch.setattr(desktop, "_start_server", lambda port: (rec.calls.append(("start", port)), (url, lambda: rec.calls.append(("stop",))))[1])
+    monkeypatch.setattr(
+        desktop,
+        "_start_server",
+        lambda port: (rec.calls.append(("start", port)), (url, lambda: rec.calls.append(("stop",))))[1],
+    )
 
     def fake_show(shown_url, *, wait=True):
         lock = desktop.read_lock()
@@ -356,7 +360,9 @@ def test_startup_failure_shows_a_friendly_message(monkeypatch):
 def test_window_failure_stops_the_server(monkeypatch):
     stopped: list[bool] = []
     monkeypatch.setattr(desktop, "_start_server", lambda port: ("http://127.0.0.1:8765/", lambda: stopped.append(True)))
-    monkeypatch.setattr(desktop, "show_window", lambda url, *, wait=True: (_ for _ in ()).throw(RuntimeError("no window")))
+    monkeypatch.setattr(
+        desktop, "show_window", lambda url, *, wait=True: (_ for _ in ()).throw(RuntimeError("no window"))
+    )
     monkeypatch.setattr(desktop, "_show_error", lambda message: None)
     assert desktop.run_app() == 1
     assert stopped == [True]
@@ -393,15 +399,35 @@ class FakeWebview(types.SimpleNamespace):
     def __init__(self, fail: bool = False) -> None:
         super().__init__(settings={"ALLOW_DOWNLOADS": False}, created=[], started=[], fail=fail)
 
-    def create_window(self, title, url=None, *, width=800, height=600, min_size=(200, 100), text_select=False,
-                      zoomable=False, background_color="#FFFFFF"):  # fmt: skip
-        self.created.append(dict(title=title, url=url, width=width, height=height, min_size=min_size,
-                                 text_select=text_select, zoomable=zoomable, background_color=background_color))  # fmt: skip
+    def create_window(
+        self,
+        title,
+        url=None,
+        *,
+        width=800,
+        height=600,
+        min_size=(200, 100),
+        text_select=False,
+        zoomable=False,
+        background_color="#FFFFFF",
+    ):
+        self.created.append(
+            {
+                "title": title,
+                "url": url,
+                "width": width,
+                "height": height,
+                "min_size": min_size,
+                "text_select": text_select,
+                "zoomable": zoomable,
+                "background_color": background_color,
+            }
+        )
 
     def start(self, *, private_mode=True, storage_path=None, icon=None, gui=None):
         if self.fail:
             raise RuntimeError("WebView2 failed")
-        self.started.append(dict(private_mode=private_mode, storage_path=storage_path, icon=icon))
+        self.started.append({"private_mode": private_mode, "storage_path": storage_path, "icon": icon})
 
 
 def test_native_window_settings(monkeypatch):
@@ -534,7 +560,7 @@ def test_finds_edge_on_windows(monkeypatch, tmp_path):
     edge.parent.mkdir(parents=True)
     edge.write_bytes(b"")
     monkeypatch.setattr(desktop, "_platform", lambda: "win32")
-    monkeypatch.setattr(desktop, "_app_paths_from_registry", lambda: [])
+    monkeypatch.setattr(desktop, "_app_paths_from_registry", list)
     monkeypatch.setenv("ProgramFiles(x86)", str(tmp_path / "x86"))
     monkeypatch.setenv("ProgramFiles", str(tmp_path / "pf"))
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
@@ -627,7 +653,11 @@ def test_windows_shortcut_keeps_the_launchers_data_folder(monkeypatch, tmp_path)
     python = _fake_venv(tmp_path, windows=True)
     home = r"C:\Users\Zoë O'Brien\Athena stuff\data"
     monkeypatch.setattr(desktop, "_platform", lambda: "win32")
-    monkeypatch.setattr(desktop, "_launch_target", lambda: (python.with_name("pythonw.exe"), ["-m", "destiny_bot", "app"], {"DESTINY_HOME": home}))
+    monkeypatch.setattr(
+        desktop,
+        "_launch_target",
+        lambda: (python.with_name("pythonw.exe"), ["-m", "destiny_bot", "app"], {"DESTINY_HOME": home}),
+    )
 
     _, env, _ = desktop.windows_shortcut_job(desktop=True, start_menu=True)
 
@@ -640,6 +670,7 @@ def test_windows_shortcut_keeps_the_launchers_data_folder(monkeypatch, tmp_path)
         text=True,
         env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)},
         timeout=60,
+        check=False,
     )
     assert result.returncode == 0, result.stderr
     assert "0." in result.stdout  # `destiny --version` ran with the given data folder

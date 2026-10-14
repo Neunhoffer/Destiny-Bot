@@ -234,7 +234,9 @@ def main(argv: list[str] | None = None) -> int:
         default=os.environ.get("ATHENA_BUNDLE_KOKORO", "").lower() in ("1", "true", "yes"),
         help="also bundle the Kokoro voice model (adds ~120 MB)",
     )
-    parser.add_argument("--voice-source", type=Path, help="copy the Piper voice from this folder instead of downloading")
+    parser.add_argument(
+        "--voice-source", type=Path, help="copy the Piper voice from this folder instead of downloading"
+    )
     parser.add_argument("--skip-voices", action="store_true", help="use whatever is already in packaging/build/voices")
     parser.add_argument("--skip-smoke-test", action="store_true")
     parser.add_argument("--skip-installer", action="store_true")

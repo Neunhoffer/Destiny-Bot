@@ -65,7 +65,7 @@ class FakeEngine(TTSEngine):
 
 
 def run_checks(monkeypatch, engines, quick=False):
-    import destiny_bot.tts as tts
+    from destiny_bot import tts
 
     monkeypatch.setattr(tts, "all_engines", lambda: engines)
     report = selftest.Report(io.StringIO())
@@ -177,7 +177,14 @@ def test_bundled_engines_detection(tmp_path, monkeypatch):
 
 
 def _skip_slow_steps(monkeypatch):
-    for name in ("_check_window", "_check_engines", "_check_windows_voices", "_check_ingest", "_check_server", "_check_ocr"):
+    for name in (
+        "_check_window",
+        "_check_engines",
+        "_check_windows_voices",
+        "_check_ingest",
+        "_check_server",
+        "_check_ocr",
+    ):
         monkeypatch.setattr(selftest, name, lambda *args, **kwargs: None)
 
 
@@ -208,7 +215,9 @@ def test_a_crashing_check_is_a_failure_not_a_crash(monkeypatch):
 def test_missing_optional_module_is_a_warning(monkeypatch):
     _skip_slow_steps(monkeypatch)
     monkeypatch.setattr(selftest, "CORE_MODULES", ("destiny_bot.models",))
-    monkeypatch.setattr(selftest, "OPTIONAL_MODULES", {"not_installed_extra": "something nice", "destiny_bot.gone": "x"})
+    monkeypatch.setattr(
+        selftest, "OPTIONAL_MODULES", {"not_installed_extra": "something nice", "destiny_bot.gone": "x"}
+    )
     out = io.StringIO()
     assert selftest.run_self_test(out=out) == 0
     text = out.getvalue()

@@ -291,129 +291,40 @@ def _open_pdf(path: Path, display_name: str) -> pymupdf.Document:
     return doc
 
 
+@dataclass
+class _ReadReport:
+    """What happened while reading the pages (turned into user-facing warnings)."""
+
+    ocr_enabled: bool
+    failed: list[int] = field(default_factory=list)  # 0-based pages that couldn't be read at all
+    scanned: list[int] = field(default_factory=list)  # pages without a text layer
+    garbled: list[int] = field(default_factory=list)  # pages whose text layer can't be decoded
+    outcome: dict[int, str] = field(default_factory=dict)  # page -> "done" | "empty" | "failed" (OCR)
+    ocr_reason: str = ""  # why OCR is unavailable, when it is
+
+    def pages(self, which: list[int], outcome: str | None) -> list[int]:
+        return [i for i in which if self.outcome.get(i) == outcome]
+
+
 def _load(doc: pymupdf.Document, path: Path, source_name: str, ocr: bool, progress: ProgressFn | None) -> Document:
     n = doc.page_count
-    warnings: list[str] = []
-    if getattr(doc, "is_repaired", False):
-        warnings.append("This PDF looks damaged. Destiny Bot repaired it, but some text may be missing.")
-
-    pages: list[_Page] = []
-    size_weights: Counter[float] = Counter()
-    pitch_samples: list[float] = []
-    failed: list[int] = []
-    scanned: list[int] = []  # 0-based indices of pages without a text layer
-    garbled: list[int] = []  # pages whose text layer can't be decoded
-    ocr_outcome: dict[int, str] = {}  # page -> "done" | "empty" | "failed"
-    ocr_state: dict[str, object] = {}
-
-    for i in range(n):
-        if progress:
-            progress(0.9 * i / n, f"Reading page {i + 1} of {n}")
-        try:
-            page = doc[i]
-            pg = _extract_page(page, i, size_weights, pitch_samples)
-        except Exception:
-            failed.append(i)
-            pages.append(_Page(index=i, width=612, height=792))
-            continue
-        is_garbled = _garbled(pg)
-        if is_garbled or _needs_ocr(page, pg):
-            (garbled if is_garbled else scanned).append(i)
-            if not is_garbled:
-                pg.lines = []
-            if ocr:
-                if progress:
-                    progress(0.9 * i / n, f"Reading page {i + 1} of {n} with OCR")
-                result = _ocr_page(page, ocr_state)
-                if isinstance(result, Exception):
-                    ocr_outcome[i] = "failed"
-                elif result:
-                    pg.ocr_paragraphs = result
-                    pg.lines = []
-                    ocr_outcome[i] = "done"
-                elif result is not None:
-                    ocr_outcome[i] = "empty"
-        pages.append(pg)
-
+    pages, stats, report = _read_pages(doc, ocr, progress)
     if progress:
         progress(0.92, "Organizing the text")
-
-    stats = _Stats()
-    if size_weights:
-        stats.body_size = max(size_weights.items(), key=lambda kv: (kv[1], -kv[0]))[0]
-    if len(pitch_samples) >= 3:
-        pitch_samples.sort()
-        stats.pitch = min(max(pitch_samples[len(pitch_samples) // 2], 1.0), 3.0)
 
     _mark_headers_footers(pages, stats)
     chunks: list[_Chunk] = []
     for pg in pages:
-        if pg.ocr_paragraphs:
-            chunks.extend(_ocr_chunks(pg, stats))
-        else:
-            chunks.extend(_page_chunks(pg, stats))
+        chunks.extend(_ocr_chunks(pg, stats) if pg.ocr_paragraphs else _page_chunks(pg, stats))
     _drop_repeated_ocr_margins(chunks)
     _mark_ocr_headings(chunks)
     _classify(chunks, stats)
     _assign_heading_levels(chunks)
-    chunks = _join_heading_labels(chunks)
-    chunks = _assemble(chunks)
+    chunks = _assemble(_join_heading_labels(chunks))
     blocks, positions = _to_blocks(chunks)
 
-    # ---- warnings
-    def outcome(pages0: list[int], value: str | None) -> list[int]:
-        return [i for i in pages0 if ocr_outcome.get(i) == value]
-
-    if failed:
-        warnings.append(f"{_pages_phrase(failed)} couldn't be read and {_was_were(failed)} skipped.")
-    if outcome(scanned, "done"):
-        done = outcome(scanned, "done")
-        warnings.append(
-            f"{_pages_phrase(done)} had no text layer and {_was_were(done)} read with OCR. "
-            "Recognition mistakes are possible."
-        )
-    if outcome(garbled, "done"):
-        done = outcome(garbled, "done")
-        warnings.append(
-            f"The text of {_pages_phrase(done).lower()} couldn't be decoded, so {_it_they(done)} "
-            f"{_was_were(done)} read with OCR instead. Recognition mistakes are possible."
-        )
-    reason = str(ocr_state.get("reason") or "")
-
-    def install(pages0: list[int]) -> str:
-        them = "it" if len(pages0) == 1 else "them"
-        if not ocr:
-            return f"Turn on OCR to have {them} read aloud."
-        msg = f"Install Tesseract OCR to have {them} read aloud."
-        return msg + (f" ({reason})" if reason and "tesseract" not in reason.lower() else "")
-
-    unread = outcome(scanned, None)
-    if unread:
-        what = "is a scanned image" if len(unread) == 1 else "are scanned images"
-        warnings.append(f"{_pages_phrase(unread)} {what} with no text. {install(unread)}")
-    undecoded = outcome(garbled, None) + outcome(garbled, "failed") + outcome(garbled, "empty")
-    if undecoded:
-        warnings.append(
-            f"The text of {_pages_phrase(undecoded).lower()} can't be decoded properly (the PDF's fonts "
-            "don't say which letters they draw), so parts may be missing or garbled."
-            + (f" {install(undecoded)}" if outcome(garbled, None) else "")
-        )
-    if outcome(scanned, "failed"):
-        bad = outcome(scanned, "failed")
-        warnings.append(f"OCR failed on {_pages_phrase(bad).lower()}, so {_it_they(bad)} {_was_were(bad)} skipped.")
-    if outcome(scanned, "empty"):
-        empty = outcome(scanned, "empty")
-        warnings.append(
-            f"No text was found on scanned {_pages_phrase(empty).lower()} "
-            f"({_it_they(empty)} may be {'a picture' if len(empty) == 1 else 'pictures'} or blank)."
-        )
-    if not blocks and not scanned and not failed and not garbled:
-        warnings.append("No readable text was found in this PDF.")
-
-    # ---- metadata and sections
     meta = doc.metadata or {}
     title = _metadata_title(meta.get("title")) or _heading_title(blocks) or title_from_filename(source_name)
-    author = _metadata_author(meta.get("author"))
     sections = _sections_from_outline(doc, blocks, positions, title)
     if sections is None:
         if any(b.kind == BlockKind.HEADING for b in blocks):
@@ -422,19 +333,119 @@ def _load(doc: pymupdf.Document, path: Path, source_name: str, ocr: bool, progre
             sections = _page_range_sections(blocks)
         else:
             sections = [make_section(title, 1, blocks)]
-    sections = finalize_sections(sections, title)
+    warnings = _warnings(report, has_text=bool(blocks))
+    if getattr(doc, "is_repaired", False):
+        warnings.insert(0, "This PDF looks damaged. Destiny Bot repaired it, but some text may be missing.")
     if progress:
         progress(1.0, f"Finished reading {n} page{'s' if n != 1 else ''}")
     return Document(
         id=doc_id_for_file(path),
         title=title,
-        author=author,
+        author=_metadata_author(meta.get("author")),
         source_name=source_name,
         source_type="pdf",
         page_count=n,
-        sections=sections,
+        sections=finalize_sections(sections, title),
         warnings=warnings,
     )
+
+
+def _read_pages(doc: pymupdf.Document, ocr: bool, progress: ProgressFn | None) -> tuple[list[_Page], _Stats, _ReadReport]:
+    """Extract every page (OCR where the text layer is missing or undecodable) and body-text stats."""
+    n = doc.page_count
+    report = _ReadReport(ocr_enabled=ocr)
+    pages: list[_Page] = []
+    size_weights: Counter[float] = Counter()
+    pitch_samples: list[float] = []
+    ocr_state: dict[str, object] = {}
+    for i in range(n):
+        if progress:
+            progress(0.9 * i / n, f"Reading page {i + 1} of {n}")
+        try:
+            page = doc[i]
+            pg = _extract_page(page, i, size_weights, pitch_samples)
+        except Exception:
+            report.failed.append(i)
+            pages.append(_Page(index=i, width=612, height=792))
+            continue
+        garbled = _garbled(pg)
+        if garbled or _needs_ocr(page, pg):
+            (report.garbled if garbled else report.scanned).append(i)
+            if not garbled:
+                pg.lines = []  # (a garbled text layer is kept in case OCR can't replace it)
+            if ocr:
+                if progress:
+                    progress(0.9 * i / n, f"Reading page {i + 1} of {n} with OCR")
+                result = _ocr_page(page, ocr_state)
+                if isinstance(result, Exception):
+                    report.outcome[i] = "failed"
+                elif result:
+                    pg.ocr_paragraphs = result
+                    pg.lines = []
+                    report.outcome[i] = "done"
+                elif result is not None:
+                    report.outcome[i] = "empty"
+        pages.append(pg)
+    report.ocr_reason = str(ocr_state.get("reason") or "")
+
+    stats = _Stats()
+    if size_weights:
+        stats.body_size = max(size_weights.items(), key=lambda kv: (kv[1], -kv[0]))[0]
+    if len(pitch_samples) >= 3:
+        pitch_samples.sort()
+        stats.pitch = min(max(pitch_samples[len(pitch_samples) // 2], 1.0), 3.0)
+    return pages, stats, report
+
+
+def _warnings(r: _ReadReport, *, has_text: bool) -> list[str]:
+    out: list[str] = []
+
+    def how_to_fix(pages0: list[int]) -> str:
+        them = "it" if len(pages0) == 1 else "them"
+        if not r.ocr_enabled:
+            return f"Turn on OCR to have {them} read aloud."
+        reason = r.ocr_reason
+        extra = f" ({reason})" if reason and "tesseract" not in reason.lower() else ""
+        return f"Install Tesseract OCR to have {them} read aloud.{extra}"
+
+    if r.failed:
+        out.append(f"{_pages_phrase(r.failed)} couldn't be read and {_was_were(r.failed)} skipped.")
+    done = r.pages(r.scanned, "done")
+    if done:
+        out.append(
+            f"{_pages_phrase(done)} had no text layer and {_was_were(done)} read with OCR. "
+            "Recognition mistakes are possible."
+        )
+    done = r.pages(r.garbled, "done")
+    if done:
+        out.append(
+            f"The text of {_pages_phrase(done, lower=True)} couldn't be decoded, so {_it_they(done)} "
+            f"{_was_were(done)} read with OCR instead. Recognition mistakes are possible."
+        )
+    unread = r.pages(r.scanned, None)
+    if unread:
+        what = "is a scanned image" if len(unread) == 1 else "are scanned images"
+        out.append(f"{_pages_phrase(unread)} {what} with no text. {how_to_fix(unread)}")
+    undecoded = [i for i in r.garbled if r.outcome.get(i) != "done"]
+    if undecoded:
+        msg = (
+            f"The text of {_pages_phrase(undecoded, lower=True)} is stored in a way that can't be turned "
+            "back into letters, so parts may be missing or garbled."
+        )
+        unread = r.pages(r.garbled, None)
+        out.append(msg + (f" {how_to_fix(unread)}" if unread else ""))
+    bad = r.pages(r.scanned, "failed")
+    if bad:
+        out.append(f"OCR failed on {_pages_phrase(bad, lower=True)}, so {_it_they(bad)} {_was_were(bad)} skipped.")
+    empty = r.pages(r.scanned, "empty")
+    if empty:
+        out.append(
+            f"No text was found on scanned {_pages_phrase(empty, lower=True)} "
+            f"({_it_they(empty)} may be {'a picture' if len(empty) == 1 else 'pictures'} or blank)."
+        )
+    if not has_text and not (r.scanned or r.failed or r.garbled):
+        out.append("No readable text was found in this PDF.")
+    return out
 
 
 # --------------------------------------------------------------------------- extraction
@@ -556,6 +567,12 @@ def _extract_page(page: pymupdf.Page, index: int, size_weights: Counter, pitch_s
     pg.image_rects = _image_rects(page)
     if rot is None:
         _find_tables_and_boxes(page, pg)
+    else:  # sideways page: bring picture positions into reading coordinates (tables are skipped)
+        rects = []
+        for x0, y0, x1, y1 in pg.image_rects:
+            (ax, ay), (bx, by) = rot(x0, y0), rot(x1, y1)
+            rects.append((min(ax, bx), min(ay, by), max(ax, bx), max(ay, by)))
+        pg.image_rects = rects
     return pg
 
 
@@ -863,7 +880,7 @@ def _rule_tables(pg: _Page, h_rules: list[tuple[float, float, float]]) -> list[_
             for row in rows:
                 cells = [""] * len(bands)
                 for e in sorted(row, key=lambda e: e.x0):
-                    j = next(k for k, (a, b) in enumerate(bands) if e.x0 >= a - 0.5 and e.x1 <= b + 0.5)
+                    j = next((k for k, (a, b) in enumerate(bands) if e.x0 >= a - 0.5 and e.x1 <= b + 0.5), 0)
                     cells[j] = f"{cells[j]} {e.line.text}".strip()
                 grid.append(cells)
             cleaned = _clean_table(grid)
@@ -1264,7 +1281,7 @@ def _page_chunks(pg: _Page, stats: _Stats) -> list[_Chunk]:
                         size=stats.body_size,
                         is_float=True,
                         rows=t.rows,
-                        text=" / ".join(" | ".join(c for c in row) for row in t.rows),
+                        text=clean_display_text(" / ".join(" | ".join(row) for row in t.rows)),
                     )
                 )
             else:
@@ -1513,32 +1530,16 @@ def _valid_columns(lines: list[_Elem], gutters: list[tuple[float, float]], xmin:
                 members[j].append(e)
                 break
     for m in members:
-        rows = _text_rows(m)
+        rows = _rows_of(m)
         if len(rows) < 3:
             return False
-        chars = [r[2] for r in rows]
+        chars = [sum(len(e.line.text) + 1 for e in row) for row in rows]
         if sum(chars) / len(chars) < 12 or sum(chars) < 80:
             return False
-        lefts = Counter(round(r[0] / 3) for r in rows)
+        lefts = Counter(round(min(e.x0 for e in row) / 3) for row in rows)
         if lefts.most_common(1)[0][1] < 0.35 * len(rows):
             return False  # not a text column: rows don't share a left edge
     return _side_by_side(members)
-
-
-def _text_rows(elems: list[_Elem]) -> list[tuple[float, float, int]]:
-    """Group line elements into visual rows: (left x, right x, characters) per row."""
-    rows: list[list[float]] = []  # [y0, y1, x0, x1, chars]
-    for e in sorted(elems, key=lambda e: (e.y0 + e.y1) / 2):
-        if rows:
-            r = rows[-1]
-            overlap = min(r[1], e.y1) - max(r[0], e.y0)
-            if overlap >= 0.5 * min(r[1] - r[0], e.y1 - e.y0):
-                r[0], r[1] = min(r[0], e.y0), max(r[1], e.y1)
-                r[2], r[3] = min(r[2], e.x0), max(r[3], e.x1)
-                r[4] += len(e.line.text) + 1
-                continue
-        rows.append([e.y0, e.y1, e.x0, e.x1, len(e.line.text)])
-    return [(r[2], r[3], int(r[4])) for r in rows]
 
 
 def _order_group(elems: list[_Elem]) -> list[_Elem]:
@@ -2255,7 +2256,7 @@ def _heading_title(blocks: list[Block]) -> str | None:
 # --------------------------------------------------------------------------- warnings text
 
 
-def _pages_phrase(pages0: list[int]) -> str:
+def _pages_phrase(pages0: list[int], *, lower: bool = False) -> str:
     """'Page 3' / 'Pages 3-5, 9' for 0-based page indices."""
     nums = sorted({p + 1 for p in pages0})
     parts: list[str] = []
@@ -2267,7 +2268,8 @@ def _pages_phrase(pages0: list[int]) -> str:
         parts.append(str(start) if start == prev else f"{start}-{prev}")
         if n is not None:
             start = prev = n
-    return ("Page " if len(nums) == 1 else "Pages ") + ", ".join(parts)
+    word = "Page " if len(nums) == 1 else "Pages "
+    return (word.lower() if lower else word) + ", ".join(parts)
 
 
 def _was_were(pages0: list[int]) -> str:
