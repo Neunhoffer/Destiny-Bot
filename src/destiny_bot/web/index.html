@@ -98,9 +98,9 @@
       </div>
       <div class="study-thread" id="study-thread"></div>
       <form class="study-ask" id="ask-form">
-        <label class="visually-hidden" for="ask-input">Ask a question about this section</label>
-        <textarea id="ask-input" rows="1" placeholder="Ask a question about this section…" maxlength="2000"></textarea>
-        <button type="submit" class="icon-btn icon-btn-accent" aria-label="Send question" title="Send"><span class="i" data-icon="send"></span></button>
+        <label class="visually-hidden" for="ask-input">Ask Athena a question about this section</label>
+        <textarea id="ask-input" rows="1" placeholder="Ask Athena about this section…" maxlength="2000"></textarea>
+        <button type="submit" class="icon-btn icon-btn-accent" aria-label="Send question to Athena" title="Ask Athena"><span class="i" data-icon="send"></span></button>
       </form>
     </aside>
   </div>
@@ -335,11 +335,11 @@
             <div class="subsettings" id="ai-settings">
               <div class="field">
                 <label for="api-key">Anthropic API key <span class="key-state" id="api-key-state"></span></label>
-                <div class="field-row">
-                  <input type="password" id="api-key" class="input grow" autocomplete="off" spellcheck="false" placeholder="sk-ant-…" aria-describedby="api-key-hint">
-                  <button type="button" class="btn btn-primary" id="api-key-save">Save key</button>
+                <form class="field-row" id="api-key-form" autocomplete="off">
+                  <input type="password" id="api-key" class="input grow" autocomplete="new-password" spellcheck="false" placeholder="sk-ant-…" aria-describedby="api-key-hint">
+                  <button type="submit" class="btn btn-primary" id="api-key-save">Save key</button>
                   <button type="button" class="btn btn-secondary" id="api-key-remove">Remove</button>
-                </div>
+                </form>
                 <p class="hint" id="api-key-hint">Create a key at console.anthropic.com. It is stored only on this computer and is never shown again.</p>
               </div>
               <div class="field">

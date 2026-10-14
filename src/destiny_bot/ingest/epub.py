@@ -224,10 +224,16 @@ def load_epub(path: Path, *, source_name: str, progress: ProgressFn | None = Non
     nav_item = next((item for item in book.get_items() if isinstance(item, epub.EpubNav)), None)
     ncx_item = next((item for item in book.get_items() if isinstance(item, epub.EpubNcx)), None)
     toc_base = "" if nav_item is not None or ncx_item is None else posixpath.dirname(ncx_item.file_name)
+    doc_names = {posixpath.normpath(item.file_name) for item in documents}
+    by_basename: dict[str, list[str]] = {}
+    for doc_name in doc_names:
+        by_basename.setdefault(posixpath.basename(doc_name), []).append(doc_name)
     toc_by_doc: dict[str, list[_TocEntry]] = {}
     for order, (entry_title, href, level) in enumerate(_flatten_toc(getattr(book, "toc", []))):
         doc_path, fragment = _split_href(href, toc_base)
         entry_title = clean_display_text(entry_title)
+        if doc_path not in doc_names and len(by_basename.get(posixpath.basename(doc_path), [])) == 1:
+            doc_path = by_basename[posixpath.basename(doc_path)][0]  # oddly relative link
         if doc_path and entry_title:
             toc_by_doc.setdefault(doc_path, []).append(_TocEntry(order, entry_title, level, fragment))
 

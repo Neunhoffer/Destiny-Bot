@@ -137,7 +137,7 @@ class _Line:
     symbol_lead: bool = False
     lead_marker: bool = False
     lead_spaces: int = 0  # leading blanks in the raw text (code indentation)
-    role: str = "body"  # "body" | "footnote"
+    role: str = "body"  # "body" | "footnote" | "note" (unmarked small print at the bottom)
     drop: bool = False
 
 
@@ -959,7 +959,7 @@ def _page_chunks(pg: _Page, stats: _Stats) -> list[_Chunk]:
         elems.append(_Elem("table", *t.bbox, table=t))
 
     groups = _reading_order(elems, pg)
-    _mark_footnotes(groups, stats)
+    _mark_footnotes(groups, stats, pg.height)
 
     chunks: list[_Chunk] = []
     interrupted = False
@@ -1087,7 +1087,14 @@ def _detect_gutters(elems: list[_Elem]) -> list[tuple[float, float]]:
     width = xmax - xmin
     if width < 150:
         return []
-    narrow = [e for e in elems if e.x1 - e.x0 <= 0.62 * width]
+    center = (xmin + xmax) / 2
+    # Narrow elements show the columns. Lines centred on the page (a title block above
+    # two columns) would hide the gutter; they become full-width elements later.
+    narrow = [
+        e
+        for e in elems
+        if e.x1 - e.x0 <= 0.62 * width and abs((e.x0 + e.x1) / 2 - center) > 0.03 * width
+    ]
     if len(narrow) < 6:
         return []
     nbins = int(width) + 2
@@ -1202,7 +1209,8 @@ def _merge_rows(lines: list[_Line]) -> list[_Line]:
             smaller = min(ry1 - ry0, ln.y1 - ln.y0)
             size = max(ln.size, max(r.size for r in row))
             gap = min(abs(ln.x0 - r.x1) for r in row) if all(ln.x0 >= r.x1 - 1 for r in row) else 0.0
-            if smaller > 0 and overlap >= 0.5 * smaller and not any(_h_overlap(ln, r) for r in row) and gap <= 4 * size:
+            near = gap <= 4 * size or (ln.mono and all(r.mono for r in row))
+            if smaller > 0 and overlap >= 0.5 * smaller and not any(_h_overlap(ln, r) for r in row) and near:
                 row.append(ln)
                 continue
         rows.append([ln])
@@ -1233,8 +1241,14 @@ def _h_overlap(a: _Line, b: _Line) -> bool:
     return min(a.x1, b.x1) - max(a.x0, b.x0) > 2
 
 
-def _mark_footnotes(groups: list[tuple[tuple, list[_Elem]]], stats: _Stats) -> None:
-    """Small-print lines below a column's body text that start with a note marker."""
+def _mark_footnotes(groups: list[tuple[tuple, list[_Elem]]], stats: _Stats, page_height: float) -> None:
+    """Mark small print below a column's body text.
+
+    Lines starting with a note marker ("1", "*", a raised number) become footnotes.
+    Unmarked small print set apart at the bottom (a copyright notice, a source line)
+    becomes a "note": still read, but it no longer splits a paragraph that continues
+    in the next column or on the next page.
+    """
     body = stats.body_size
     for _key, items in groups:
         lines = [e.line for e in items if e.kind == "line"]
@@ -1244,15 +1258,24 @@ def _mark_footnotes(groups: list[tuple[tuple, list[_Elem]]], stats: _Stats) -> N
         if not body_lines:
             continue
         last_body = max(ln.y1 for ln in body_lines)
-        active = False
+        below = [ln for ln in lines if ln.y0 >= last_body - 1 and ln.size <= body * 0.92]
+        if not below:
+            continue
+        first = below[0]
+        note = (
+            first.y0 - last_body >= body
+            and below[-1].y1 - first.y0 <= 0.3 * page_height
+            and not _is_caption_text(first.text)
+        )
+        role = "note" if note else ""
         for ln in lines:
             if ln.y0 < last_body - 1 or ln.size > body * 0.92:
-                active = False
+                role = ""
                 continue
             if _FOOTNOTE_START_RE.match(ln.text) or ln.lead_marker:
-                active = True
-            if active:
-                ln.role = "footnote"
+                role = "footnote"
+            if role:
+                ln.role = role
 
 
 # --------------------------------------------------------------------------- lines -> chunks
@@ -1346,6 +1369,8 @@ def _group_lines(lines: list[_Line], col: tuple, stats: _Stats, interrupted: boo
         if ch.lines[0].role == "footnote":
             ch.kind = BlockKind.FOOTNOTE
             ch.is_float = True
+        elif ch.lines[0].role == "note":
+            ch.is_float = True
         elif (
             ch.kind == BlockKind.PARAGRAPH
             and len(ch.lines) >= 2
@@ -1387,10 +1412,11 @@ def _continues(
     size = max(prev.size, ln.size)
     if abs(prev.size - ln.size) > max(0.6, 0.08 * size):
         return False
-    if prev.bold != ln.bold and not (prev.mono and ln.mono):
-        return False
     if prev.mono != ln.mono:
         return False
+    closed = _ends_terminal(prev.text) or prev.x1 < col_right - max(3 * prev.size, 0.15 * width)
+    if prev.bold != ln.bold and not (prev.mono and ln.mono) and closed:
+        return False  # a bold heading line, or a bold line after a finished paragraph
     dy = ln.baseline - prev.baseline
     expected = stats.pitch * size
     limit = expected * (2.6 if (prev.mono and ln.mono) else 1.3) + 0.5
@@ -1404,7 +1430,6 @@ def _continues(
         return True
     if eq:
         return True
-    closed = _ends_terminal(prev.text) or prev.x1 < col_right - max(3 * prev.size, 0.15 * width)
     if marker == "bullet" or (marker is not None and (closed or cur_list)):
         return False
     if _is_caption_text(ln.text) and closed:

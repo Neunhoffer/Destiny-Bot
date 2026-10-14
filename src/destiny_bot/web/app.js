@@ -2696,7 +2696,7 @@ function studyIntro() {
   const node = aiReady()
     ? el('div', { class: 'study-intro' },
       icon('chat'),
-      el('p', { text: 'Ask anything about what you are reading. Select some text and choose Explain, or use the buttons above.' }))
+      el('p', { text: 'Ask Athena anything about what you are reading. Select some text and choose Explain, or use the buttons above.' }))
     : setupCard('');
   node.dataset.intro = '1';
   return node;
@@ -2706,7 +2706,7 @@ function setupCard(detail) {
   return el('div', { class: 'card card-setup' },
     el('p', { class: 'card-title' }, icon('bulb'), 'Study helper'),
     el('h3', { text: 'Turn on the Study helper' }),
-    el('p', { class: 'card-body', text: 'It can explain tricky passages in plain words, answer your questions, summarize sections and quiz you. It is powered by Claude, from Anthropic.' }),
+    el('p', { class: 'card-body', text: 'Ask Athena to explain tricky passages in plain words, answer your questions, summarize sections and quiz you. It is powered by Claude, from Anthropic.' }),
     el('div', { class: 'privacy-note' }, icon('lock'),
       el('span', { text: 'When you use it, the text you ask about (and the section you are reading) is sent to Anthropic. Everything else stays on this computer.' })),
     detail ? el('p', { class: 'server-detail', text: detail }) : null,
@@ -3519,7 +3519,8 @@ function setupSettings() {
     if (state.section) renderSection();
     if (state.section) setCurrent(state.index, { scroll: false });
   });
-  $('#api-key-save').addEventListener('click', async () => {
+  $('#api-key-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
     const input = $('#api-key');
     const key = input.value.trim();
     if (!key) {
@@ -3533,12 +3534,6 @@ function setupSettings() {
       await refreshStatus();
     }
     renderPrivacy();
-  });
-  $('#api-key').addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      $('#api-key-save').click();
-    }
   });
   $('#api-key-remove').addEventListener('click', async () => {
     if (await saveSettings({ anthropic_api_key: '' })) {

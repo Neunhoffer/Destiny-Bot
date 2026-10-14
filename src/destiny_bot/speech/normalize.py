@@ -393,13 +393,16 @@ def _numeric_citation(m: re.Match[str]) -> str:
 
 # --------------------------------------------------------------------------- abbreviations
 
-_Rule = tuple["re.Pattern[str]", Callable[["re.Match[str]"], str]]
+_Rule = tuple["re.Pattern[str]", Callable[["re.Match[str]"], str], str]
 
 
-def _rule(pattern: str, repl: str | Callable[[re.Match[str]], str], *, end_period: bool = False) -> _Rule:
+def _rule(
+    pattern: str, repl: str | Callable[[re.Match[str]], str], needle: str, *, end_period: bool = False
+) -> _Rule:
+    """An abbreviation rule; it only runs when ``needle`` occurs in the lowercased text."""
     regex = re.compile(pattern)
     if callable(repl):
-        return regex, repl
+        return regex, repl, needle
 
     def fn(m: re.Match[str]) -> str:
         out = _cap_like(m.group(), repl)
@@ -407,7 +410,7 @@ def _rule(pattern: str, repl: str | Callable[[re.Match[str]], str], *, end_perio
             out += "."
         return out
 
-    return regex, fn
+    return regex, fn, needle
 
 
 _ORDINAL_EDITION = (
@@ -417,49 +420,55 @@ _ORDINAL_EDITION = (
 )
 
 _ABBREVIATIONS: list[_Rule] = [
-    _rule(r"(?<![\w.])[Ee]\.\s?g\.(?=[\s,;:)\]]|$)", "for example"),
-    _rule(r"(?<![\w.])[Ii]\.\s?e\.(?=[\s,;:)\]]|$)", "that is"),
-    _rule(r"\b[Ee]tc\.", "et cetera", end_period=True),
-    _rule(r"\b[Cc]f\.(?=\s)", "compare"),
-    _rule(r"\b[Vv]s\.?(?=\s)", "versus"),
-    _rule(rf"(\b[{_UP}][\w'’\-]*)\s+v\.\s+(?=[{_UP}])", lambda m: m.group(1) + " versus "),
-    _rule(r"\b[Vv]iz\.(?=[\s,])", "namely"),
-    _rule(r"\b[Rr]efs\.(?=\s)", "references"),
-    _rule(r"\b[Rr]ef\.(?=\s*\[?\d)", "reference"),
-    _rule(r"\b[Aa]pprox\.(?=\s|$)", "approximately"),
-    _rule(r"\b[Cc]a\.\s?(?=\d)", "circa "),
-    _rule(r"(?<![\w.])c\.\s?(?=\d{3,4}\b)", "circa "),
-    _rule(r"\bet\s+al\b\.?", "and colleagues", end_period=True),
+    _rule(r"(?<![\w.])[Ee]\.\s?g\.(?=[\s,;:)\]]|$)", "for example", "g."),
+    _rule(r"(?<![\w.])[Ii]\.\s?e\.(?=[\s,;:)\]]|$)", "that is", "e."),
+    _rule(r"\b[Ee]tc\.", "et cetera", "etc.", end_period=True),
+    _rule(r"\b[Cc]f\.(?=\s)", "compare", "cf."),
+    _rule(r"\b[Vv]s\.?(?=\s)", "versus", "vs"),
+    _rule(rf"(\b[{_UP}][\w'’\-]*)\s+v\.\s+(?=[{_UP}])", lambda m: m.group(1) + " versus ", " v. "),
+    _rule(r"\b[Vv]iz\.(?=[\s,])", "namely", "viz."),
+    _rule(r"\b[Rr]efs\.(?=\s)", "references", "refs."),
+    _rule(r"\b[Rr]ef\.(?=\s*\[?\d)", "reference", "ref."),
+    _rule(r"\b[Aa]pprox\.(?=\s|$)", "approximately", "approx."),
+    _rule(r"\b[Cc]a\.\s?(?=\d)", "circa ", "ca."),
+    _rule(r"(?<![\w.])c\.\s?(?=\d{3,4}\b)", "circa ", "c."),
+    _rule(r"\bet\s+al\b\.?", "and colleagues", "et", end_period=True),
     _rule(r"\b(?:[Ff]ig|FIG)(?P<s>[sS]?)\.\s*(?=\d|[IVX]+\b|\(|[A-Z]\d)",
-          lambda m: _cap_like(m.group(), "Figure" + ("s " if m.group("s") else " "))),
+          lambda m: _cap_like(m.group(), "Figure" + ("s " if m.group("s") else " ")), "fig"),
     _rule(r"\b[Ee]q(?:n)?(?P<s>s?)\.\s*(?=[\d(\[])",
-          lambda m: _cap_like(m.group(), "Equation" + ("s " if m.group("s") else " "))),
-    _rule(r"\b[Cc]hs\.\s*(?=\d|[IVXLC]+\b)", "chapters "),
-    _rule(r"\b(?:Ch|Chap|ch|chap)\.\s*(?=\d|[IVXLC]+\b)", "chapter "),
-    _rule(r"\bSec(?P<s>s?)\.\s*(?=\d|[IVXLC]+\b)", lambda m: "Sections " if m.group("s") else "Section "),
-    _rule(r"§§\s*", "Sections "),
-    _rule(r"§\s*", "Section "),
-    _rule(r"(?<![\w.])pp\.\s*(?=\d|[ivxlc]+\b)", "pages "),
-    _rule(r"(?<![\w.])p\.\s*(?=\d|[ivxlc]+\b)", "page "),
+          lambda m: _cap_like(m.group(), "Equation" + ("s " if m.group("s") else " ")), "eq"),
+    _rule(r"\b[Cc]hs\.\s*(?=\d|[IVXLC]+\b)", "chapters ", "chs."),
+    _rule(r"\b(?:Ch|Chap|ch|chap)\.\s*(?=\d|[IVXLC]+\b)", "chapter ", "ch"),
+    _rule(r"\bSec(?P<s>s?)\.\s*(?=\d|[IVXLC]+\b)", lambda m: "Sections " if m.group("s") else "Section ", "sec"),
+    _rule(r"§§\s*", "Sections ", "§§"),
+    _rule(r"§\s*", "Section ", "§"),
+    _rule(r"(?<![\w.])pp\.\s*(?=\d|[ivxlc]+\b)", "pages ", "pp."),
+    _rule(r"(?<![\w.])p\.\s*(?=\d|[ivxlc]+\b)", "page ", "p."),
     _rule(r"\b[Vv]ol(?P<s>s?)\.\s*(?=\d|[IVXLC]+\b)",
-          lambda m: _cap_like(m.group(), "volumes " if m.group("s") else "volume ")),
-    _rule(r"\b[Nn]o(?P<s>s?)\.\s*(?=\d)", lambda m: _cap_like(m.group(), "numbers " if m.group("s") else "number ")),
-    _rule(rf"\b({_ORDINAL_EDITION})\s+[Ee]d\.", lambda m: m.group(1) + " edition"),
-    _rule(r"\(\s*[Ee]d\.\s*\)", "(editor)"),
-    _rule(r"\(\s*[Ee]ds\.\s*\)", "(editors)"),
-    _rule(r"\b[Ee]ds\.(?=[\s,;)]|$)", "editors"),
-    _rule(r"(?<![\w/])[Ww]/(?:[Oo]|out)(?![\w/])", "without"),
-    _rule(r"(?<![\w/])[Ww]/(?=\s|[A-Za-z])", "with "),
-    _rule(r"\b([AaPp])\.\s?[Mm]\.", lambda m: m.group(1).upper() + " M" + ("." if _at_end(m) else "")),
-    _rule(r"\b((?:1[0-2]|0?[1-9])(?::[0-5]\d)?)([AaPp])[Mm]\b", lambda m: f"{m.group(1)} {m.group(2).upper()} M"),
-    _rule(r"\b((?:1[0-2]|0?[1-9]):[0-5]\d)\s([AaPp])[Mm]\b", lambda m: f"{m.group(1)} {m.group(2).upper()} M"),
-    _rule(r"\s*&\s*", " and "),
+          lambda m: _cap_like(m.group(), "volumes " if m.group("s") else "volume "), "vol"),
+    _rule(r"\b[Nn]o(?P<s>s?)\.\s*(?=\d)",
+          lambda m: _cap_like(m.group(), "numbers " if m.group("s") else "number "), "no"),
+    _rule(rf"\b({_ORDINAL_EDITION})\s+[Ee]d\.", lambda m: m.group(1) + " edition", "ed."),
+    _rule(r"\(\s*[Ee]d\.\s*\)", "(editor)", "ed."),
+    _rule(r"\(\s*[Ee]ds\.\s*\)", "(editors)", "eds."),
+    _rule(r"\b[Ee]ds\.(?=[\s,;)]|$)", "editors", "eds."),
+    _rule(r"(?<![\w/])[Ww]/(?:[Oo]|out)(?![\w/])", "without", "w/"),
+    _rule(r"(?<![\w/])[Ww]/(?=\s|[A-Za-z])", "with ", "w/"),
+    _rule(r"\b([AaPp])\.\s?[Mm]\.", lambda m: m.group(1).upper() + " M" + ("." if _at_end(m) else ""), ".m."),
+    _rule(r"\b((?:1[0-2]|0?[1-9])(?::[0-5]\d)?)([AaPp])[Mm]\b",
+          lambda m: f"{m.group(1)} {m.group(2).upper()} M", "m"),
+    _rule(r"\b((?:1[0-2]|0?[1-9]):[0-5]\d)\s([AaPp])[Mm]\b",
+          lambda m: f"{m.group(1)} {m.group(2).upper()} M", ":"),
+    _rule(r"\s*&\s*", " and ", "&"),
 ]
 
 
 def _expand_abbreviations(text: str) -> str:
-    for regex, fn in _ABBREVIATIONS:
-        text = regex.sub(fn, text)
+    lowered = text.lower()
+    for regex, fn, needle in _ABBREVIATIONS:
+        if needle in lowered:
+            text = regex.sub(fn, text)
+            lowered = text.lower()
     return text
 
 
@@ -467,6 +476,8 @@ def _expand_abbreviations(text: str) -> str:
 
 _NUM = r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?"
 _RANGE = re.compile(rf"(?<![\w.,\-–—−/:+])({_NUM})(\s*)([–—-])(\s*)({_NUM})(?![\w\-–—−/]|[.,:]\d)")
+_PHONE_WORDS = re.compile(r"(?i)\b(?:phone|tel|telephone|call|fax|cell|mobile|text|contact|dial|ext)\b")
+_DECADE_RANGE = re.compile(r"\b(\d{2,4}s)\s?[–—]\s?(\d{2,4}s)\b")
 _TIME_RANGE = re.compile(r"\b(\d{1,2}:\d{2})\s*[–—-]\s*(\d{1,2}:\d{2})\b")
 # "Figure 2-3" is figure 3 of chapter 2, not a range.
 _NUMBERED_THINGS = frozenset(
@@ -482,7 +493,12 @@ def _range_repl(m: re.Match[str]) -> str:
     a, sp1, dash, sp2, b = m.groups()
     if dash == "-" and (sp1 or sp2):
         return m.group()  # "10 - 2" is subtraction
-    prev = re.search(r"([A-Za-z]+)\.?\s*$", m.string[: m.start()])
+    before = m.string[: m.start()]
+    if dash == "-" and len(a) == 3 and len(b) == 4 and (
+        re.search(r"\(\d{3}\)\s*$", before) or _PHONE_WORDS.search(before[-30:])
+    ):
+        return m.group()  # "(555) 123-4567"
+    prev = re.search(r"([A-Za-z]+)\.?\s*$", before)
     if prev and prev.group(1).lower() in _NUMBERED_THINGS:
         return m.group()
     if len(b) > 1 and b[0] == "0" and b[1] != ".":
@@ -499,9 +515,10 @@ def _range_repl(m: re.Match[str]) -> str:
 
 
 def _number_ranges(text: str) -> str:
-    if not re.search(r"\d\s*[–—-]\s*\d", text):
+    if not re.search(r"\d\w?\s*[–—-]\s*\d", text):
         return text
     text = _TIME_RANGE.sub(r"\1 to \2", text)
+    text = _DECADE_RANGE.sub(r"\1 to \2", text)
     return _RANGE.sub(_range_repl, text)
 
 
@@ -1077,8 +1094,73 @@ _LEADING_DOT = re.compile(r"(?<![\w.])\.(\d)")
 _ARROW_ASCII = re.compile(r"(?<=[\w\s)])\s*(?:-{1,2}>|=>)\s*(?=[\w\s(])")
 
 
+_Step = tuple["re.Pattern[str]", "str | Callable[[re.Match[str]], str]", str]
+
+
+def _steps(*steps: tuple[str, str | Callable[[re.Match[str]], str], str]) -> list[_Step]:
+    """Compile (pattern, replacement, needle) steps; a step only runs when its needle is present."""
+    return [(re.compile(pattern), repl, needle) for pattern, repl, needle in steps]
+
+
+# Unicode symbols (only run on non-ASCII text).
+_UNICODE_STEPS = _steps(
+    (r"[≈≃]", _approx_repl, ""),
+    (r"≤|⩽", _comparison("is less than or equal to", "at most", strict=False), ""),
+    (r"≥|⩾", _comparison("is greater than or equal to", "at least", strict=False), ""),
+    (r"×", _times_repl, "×"),
+    (r"[·⋅]", _between_operands("times", ", "), ""),
+    (r"−", _minus_repl, "−"),
+    (r"∼", _tilde_repl, "∼"),
+    (r"\s*(?:—|―|--)\s*", ", ", ""),
+    (r"\s+–\s+", ", ", "–"),
+    (r"–", "-", "–"),
+    (r"…", "...", "…"),
+    (r"(?<=\d)[′″]", "", ""),
+    (r"″", " double prime ", "″"),
+    (r"′", " prime ", "′"),
+)
+# ASCII operators and leftovers, in order.
+_ASCII_STEPS = _steps(
+    (r"\s*--\s*", ", ", "--"),
+    (r"\.\s\.\s\.", "...", ". ."),
+    (r"%", " percent ", "%"),
+    (r"\b[Aa]nd\s?/\s?[Oo]r\b", lambda m: _cap_like(m.group(), "and or"), "/"),
+    (r"\b([Hh]e|[Hh]is|[Hh]im)/(she|her)\b", lambda m: f"{m.group(1)} or {m.group(2)}", "/"),
+    (_ARROW_ASCII.pattern, lambda m: " implies " if "=" in m.group() else " leads to ", ">"),
+    (r"<=|=<", _comparison("is less than or equal to", "at most", strict=True), "="),
+    (r">=|=>", _comparison("is greater than or equal to", "at least", strict=True), "="),
+    (r"!=", _between_operands("is not equal to", " "), "!="),
+    (r"={3,}", " ", "==="),
+    (r"==?", " equals ", "="),
+    (r"<", _comparison("is less than", "less than", strict=True), "<"),
+    (r">", _comparison("is greater than", "more than", strict=True), ">"),
+    (r"~", _tilde_repl, "~"),
+    (r"(?<=\s)-(?=\s)", _spaced_hyphen, " - "),
+    (r"\*", _between_operands("times", " "), "*"),
+    (r"\+", _between_operands("plus", "+"), "+"),
+    (r"\b([CF])#", r"\1 sharp", "#"),
+    (r"#\s?(?=\d)", "number ", "#"),
+    (r"(?<!\w)@(?=\w)", "at ", "@"),
+    (r"[#|_\\{}^`<>~]", " ", ""),
+)
+_ASCII_TRIGGER = re.compile(r"[\d%=<>~*#^@|_\\{}/+-]")
+_SQRT = re.compile(r"([√∛∜])\s?(\([^()]{1,60}\)|[\w.]+)")
+_DEGREE_C = re.compile(r"°\s?C\b")
+_DEGREE_F = re.compile(r"°\s?F\b")
+_ANGSTROM = re.compile(r"(?<![\w])Å(?![\w])")
+_SUP_ORDINAL_MAP = str.maketrans("ˢᵗⁿᵈʳʰ", "stndrh")
+
+
+def _run_steps(text: str, steps: list[_Step]) -> str:
+    for regex, repl, needle in steps:
+        if not needle or needle in text:
+            text = regex.sub(repl, text)
+    return text
+
+
 def _symbols(text: str) -> str:
-    if text.isascii() and not re.search(r"[\d%=<>~*#^@|_\\{}/+-]", text):
+    ascii_only = text.isascii()
+    if ascii_only and not _ASCII_TRIGGER.search(text):
         return text
     if "\\" in text:
         text = _PROSE_LATEX.sub(lambda m: " " + verbalize_math(m.group()) + " ", text)
@@ -1087,21 +1169,23 @@ def _symbols(text: str) -> str:
         text = _PROSE_POWER.sub(lambda m: " " + verbalize_math(m.group()) + " ", text)
     if "." in text:
         text = _LEADING_DOT.sub(r"0.\1", text)  # "p < .05": voices say "dot zero five"
-    if not text.isascii():
-        text = _SUP_ORDINAL.sub(lambda m: m.group(1) + m.group(2).translate(str.maketrans("ˢᵗⁿᵈʳʰ", "stndrh")), text)
-        text = _DEGREES.sub(_degrees_repl, text)
-        text = text.replace("℃", " degrees Celsius ").replace("℉", " degrees Fahrenheit ")
-        text = re.sub(r"°\s?C\b", " degrees Celsius ", text)
-        text = re.sub(r"°\s?F\b", " degrees Fahrenheit ", text)
-        text = text.replace("°", " degrees ")
+    if not ascii_only:
+        text = _SUP_ORDINAL.sub(lambda m: m.group(1) + m.group(2).translate(_SUP_ORDINAL_MAP), text)
+        if "°" in text or "℃" in text or "℉" in text:
+            text = _DEGREES.sub(_degrees_repl, text)
+            text = text.replace("℃", " degrees Celsius ").replace("℉", " degrees Fahrenheit ")
+            text = _DEGREE_C.sub(" degrees Celsius ", text)
+            text = _DEGREE_F.sub(" degrees Fahrenheit ", text)
+            text = text.replace("°", " degrees ")
         text = _FRACTION_SLASH.sub(_fraction_slash_repl, text)
         text = _FRACTION_RE.sub(_fraction_repl, text)
-        text = re.sub(r"([√∛∜])\s?(\([^()]{1,60}\)|[\w.]+)", _sqrt_repl, text)
-    text = _UNIT_AFTER_NUMBER.sub(_unit_repl, text)
+        text = _SQRT.sub(_sqrt_repl, text)
+    if any(c.isdigit() for c in text):
+        text = _UNIT_AFTER_NUMBER.sub(_unit_repl, text)
     if "per " in text or "/" in text:
         text = _UNIT_AFTER_PER.sub(_per_unit_repl, text)
-    if not text.isascii():
-        text = re.sub(r"(?<![\w])Å(?![\w])", " angstroms ", text)
+    if not ascii_only:
+        text = _ANGSTROM.sub(" angstroms ", text)
         text = _SPECIAL_UNITS.sub(lambda m: " " + _UNITS[m.group()][1] + " ", text)
         text = _FORMULA.sub(_formula_repl, text)
         text = _SUP_RUN.sub(_superscript_repl, text)
@@ -1110,44 +1194,10 @@ def _symbols(text: str) -> str:
         for sym, words in _SIMPLE_SYMBOLS:
             if sym in text:
                 text = text.replace(sym, words)
-        text = re.sub("[≈≃]", _approx_repl, text)
-        text = re.sub("≤|⩽", _comparison("is less than or equal to", "at most", strict=False), text)
-        text = re.sub("≥|⩾", _comparison("is greater than or equal to", "at least", strict=False), text)
-        text = re.sub("×", _times_repl, text)
-        text = re.sub("[·⋅]", _between_operands("times", ", "), text)
-        text = re.sub("−", _minus_repl, text)
-        text = re.sub("∼", _tilde_repl, text)
+        text = _run_steps(text, _UNICODE_STEPS)
         text = _BULLETS.sub(" ", text)
         text = _DROP_CHARS.sub("", text)
-        text = re.sub(r"\s*(?:—|―|--)\s*", ", ", text)
-        text = re.sub(r"\s+–\s+", ", ", text)
-        text = text.replace("–", "-")
-        text = text.replace("…", "...")
-        text = re.sub(r"(?<=\d)[′″]", "", text)
-        text = text.replace("″", " double prime ").replace("′", " prime ")
-    else:
-        text = re.sub(r"\s*--\s*", ", ", text)
-    text = re.sub(r"\.\s\.\s\.", "...", text)
-    text = text.replace("%", " percent ")
-    text = re.sub(r"\b[Aa]nd\s?/\s?[Oo]r\b", lambda m: _cap_like(m.group(), "and or"), text)
-    text = re.sub(r"\b([Hh]e|[Hh]is|[Hh]im)/(she|her)\b", lambda m: f"{m.group(1)} or {m.group(2)}", text)
-    text = _ARROW_ASCII.sub(lambda m: " implies " if "=" in m.group() else " leads to ", text)
-    text = re.sub(r"<=|=<", _comparison("is less than or equal to", "at most", strict=True), text)
-    text = re.sub(r">=|=>", _comparison("is greater than or equal to", "at least", strict=True), text)
-    text = re.sub(r"!=", _between_operands("is not equal to", " "), text)
-    text = re.sub(r"={3,}", " ", text)
-    text = re.sub(r"==?", " equals ", text)
-    text = re.sub(r"<", _comparison("is less than", "less than", strict=True), text)
-    text = re.sub(r">", _comparison("is greater than", "more than", strict=True), text)
-    text = re.sub(r"~", _tilde_repl, text)
-    text = re.sub(r"(?<=\s)-(?=\s)", _spaced_hyphen, text)
-    text = re.sub(r"\*", _between_operands("times", " "), text)
-    text = re.sub(r"\+", _between_operands("plus", "+"), text)
-    text = re.sub(r"\b([CF])#", r"\1 sharp", text)
-    text = re.sub(r"#\s?(?=\d)", "number ", text)
-    text = re.sub(r"(?<!\w)@(?=\w)", "at ", text)
-    text = re.sub(r"[#|_\\{}^`<>~]", " ", text)
-    return text
+    return _run_steps(text, _ASCII_STEPS)
 
 
 # --------------------------------------------------------------------------- ALL CAPS
@@ -1223,18 +1273,21 @@ def _title(word: str) -> str:
 # --------------------------------------------------------------------------- tidy
 
 
+_TIDY_STEPS = _steps(
+    (r"\(\s*(?:(?i:see|at|via|from|available at|link)\s*)?[,;:.]*\s*\)", "", "("),
+    (r"\[\s*[,;:.]*\s*\]", "", "["),
+    (r"\s+([,.;:!?)\]}])", r"\1", ""),
+    (r"([(\[{])\s+", r"\1", ""),
+    (r"([,;:])(?:\s*[,;:])+", r"\1", ""),
+    (r"[,;:]\s*([.!?])", r"\1", ""),
+    (r",(?=\S)(?!\d)", ", ", ","),
+    (r"^[\s,;:.)\]}]+", "", ""),
+    (r"[\s,;:]+$", "", ""),
+)
+
+
 def _tidy(text: str) -> str:
-    text = _WS.sub(" ", text)
-    text = re.sub(r"\(\s*(?:(?i:see|at|via|from|available at|link)\s*)?[,;:.]*\s*\)", "", text)
-    text = re.sub(r"\[\s*[,;:.]*\s*\]", "", text)
-    text = re.sub(r"\s+([,.;:!?)\]}])", r"\1", text)
-    text = re.sub(r"([(\[{])\s+", r"\1", text)
-    text = re.sub(r"([,;:])(?:\s*[,;:])+", r"\1", text)
-    text = re.sub(r"[,;:]\s*([.!?])", r"\1", text)
-    text = re.sub(r",(?=\S)(?!\d)", ", ", text)
-    text = re.sub(r"^[\s,;:.)\]}]+", "", text)
-    text = re.sub(r"[\s,;:]+$", "", text)
-    return _WS.sub(" ", text).strip()
+    return _WS.sub(" ", _run_steps(_WS.sub(" ", text), _TIDY_STEPS)).strip()
 
 
 # --------------------------------------------------------------------------- math

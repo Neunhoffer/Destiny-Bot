@@ -137,7 +137,7 @@ Inline math <math alttext="x^2"><msup><mi>x</mi><mn>2</mn></msup></math> stays i
 <footer><p>Posted in Biology</p></footer>
 </article>
 </main>
-<section role="doc-endnotes"><hr><ol><li id="fn1"><p>First footnote text. <a href="#r1" role="doc-backlink">↩︎</a></p></li></ol></section>
+<section role="doc-endnotes"><hr><ol><li id="fn1"><p>First footnote text. <a href="#r1" role="doc-backlink">&#x21A9;&#xFE0E;</a></p></li></ol></section>
 <footer role="contentinfo">Copyright 2026 Campus Inc.</footer>
 </body></html>"""
 
@@ -205,7 +205,7 @@ def test_html_footnotes_epub_and_pandoc_styles():
     <div role="doc-endnote" id="n2"><p>Growth needs energy.</p></div>
     <p class="footnote">A classic footnote paragraph.</p>
     <section class="footnotes footnotes-end-of-document" role="doc-endnotes"><hr />
-    <ol><li id="fn3"><p>Pandoc note.<a href="#fnref3" class="footnote-back" role="doc-backlink">↩︎</a></p></li></ol></section>
+    <ol><li id="fn3"><p>Pandoc note.<a href="#fnref3" class="footnote-back" role="doc-backlink">&#x21A9;&#xFE0E;</a></p></li></ol></section>
     </body></html>"""
     blocks, _ = html_to_blocks(html)
     assert pairs(blocks) == [
@@ -268,6 +268,20 @@ def test_html_main_content_drops_site_chrome_but_keeps_notes():
         (K.HEADING, "Photosynthesis"),
         (K.PARAGRAPH, "Plants convert light into chemical energy."),
         (K.FOOTNOTE, "Mostly in chloroplasts."),
+    ]
+
+
+def test_html_old_style_breaks_and_external_note_links():
+    html = """<body>First line<br>same paragraph<br><br>Second paragraph<sup><a href="notes.xhtml#n4">4</a></sup>.
+    <p>Linked<a href="#f2"><sup>2</sup></a> marker and <a href="other.html#sec">a real link</a>.</p>
+    <p><a href="big.png"><img alt="Plant cell"/> <img alt="Animal cell"/></a></p></body>"""
+    blocks, _ = html_to_blocks(html)
+    assert pairs(blocks) == [
+        (K.PARAGRAPH, "First line same paragraph"),
+        (K.PARAGRAPH, "Second paragraph."),
+        (K.PARAGRAPH, "Linked marker and a real link."),
+        (K.FIGURE, "Plant cell"),
+        (K.FIGURE, "Animal cell"),
     ]
 
 
@@ -620,6 +634,40 @@ def test_docx_structure(tmp_path):
     assert table.rows == [["Organelle", "Function"], ["Nucleus", "Stores DNA"], ["Ribosome", "Makes proteins"]]
 
 
+def test_docx_custom_styles_numbering_and_code(tmp_path):
+    import docx
+    from docx.enum.style import WD_STYLE_TYPE
+    from docx.oxml import parse_xml
+    from docx.oxml.ns import nsdecls
+
+    d = docx.Document()
+    chapter = d.styles.add_style("Chapter Heading", WD_STYLE_TYPE.PARAGRAPH)
+    chapter.base_style = d.styles["Heading 1"]
+    d.styles.add_style("TOC 1", WD_STYLE_TYPE.PARAGRAPH)
+    code = d.styles.add_style("Source Code", WD_STYLE_TYPE.PARAGRAPH)
+    code.base_style = d.styles["Normal"]
+    d.add_paragraph("Contents entry ........ 3", style="TOC 1")
+    d.add_paragraph("Chapter One", style="Chapter Heading")
+    numbered = d.add_paragraph("Numbered without a list style")
+    numbered._p.get_or_add_pPr().append(
+        parse_xml(f'<w:numPr {nsdecls("w")}><w:ilvl w:val="1"/><w:numId w:val="1"/></w:numPr>')
+    )
+    d.add_paragraph("def area(r):", style="Source Code")
+    d.add_paragraph("    return 3.14 * r * r", style="Source Code")
+    d.add_paragraph("Back to prose.")
+    d.save(str(tmp_path / "styles.docx"))
+    doc = load_document(tmp_path / "styles.docx")
+    assert_sane(doc)
+    blocks = all_blocks(doc)
+    assert pairs(blocks) == [
+        (K.HEADING, "Chapter One"),
+        (K.LIST_ITEM, "Numbered without a list style"),
+        (K.CODE, "def area(r):\n    return 3.14 * r * r"),
+        (K.PARAGRAPH, "Back to prose."),
+    ]
+    assert blocks[0].level == 1 and blocks[1].meta["list_level"] == 2
+
+
 def test_docx_title_falls_back_to_core_properties_then_filename(tmp_path):
     import docx
 
@@ -742,6 +790,32 @@ def test_pptx_slides_become_sections(tmp_path):
     ]
     assert all(b.page == number for number, sec in enumerate(doc.sections, 1) for b in sec.blocks)
     assert doc.warnings == ["Slide 5 had no text to read (pictures only, or empty)."]
+
+
+def test_pptx_explicit_bullets_override_defaults(tmp_path):
+    from lxml import etree
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    a = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[1])
+    slide.shapes.title.text = "Bullets"
+    body = slide.placeholders[1].text_frame
+    body.text = "Plain statement in a body placeholder"
+    body.paragraphs[0]._p.get_or_add_pPr().append(etree.SubElement(etree.Element("x"), f"{{{a}}}buNone"))
+    box = slide.shapes.add_textbox(Inches(1), Inches(6), Inches(4), Inches(1)).text_frame
+    box.text = "Text box with a bullet"
+    char = etree.Element(f"{{{a}}}buChar")
+    char.set("char", "•")
+    box.paragraphs[0]._p.get_or_add_pPr().append(char)
+    prs.save(str(tmp_path / "bullets.pptx"))
+    doc = load_document(tmp_path / "bullets.pptx")
+    assert pairs(doc.sections[0].blocks) == [
+        (K.HEADING, "Bullets"),
+        (K.PARAGRAPH, "Plain statement in a body placeholder"),
+        (K.LIST_ITEM, "Text box with a bullet"),
+    ]
 
 
 def test_pptx_title_from_first_slide_and_broken_file(tmp_path):

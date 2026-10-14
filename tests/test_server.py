@@ -69,6 +69,9 @@ class FakeEngine(TTSEngine):
             Voice(id="not-installed", name="X", engine=self.name, installed=False)
         ]
 
+    def default_voice(self):
+        return self.voices[0] if self.voices else None
+
     def synthesize(self, text, voice=None, rate=1.0):
         self.calls.append((text, voice, rate))
         if self.error is not None:
@@ -1199,7 +1202,7 @@ def test_export_defaults_to_all_sections_and_mp3(client, tmp_path, fakes):
     job = wait_job(client, client.post("/api/export", json={"book_id": book["id"]}).json()["job_id"])
     assert job["status"] == "done"
     call = fakes.exporter.calls[0]
-    assert call["section_ids"] is None and call["fmt"] == "mp3" and call["rate"] == 1.0 and call["voice"] is None
+    assert call["section_ids"] is None and call["fmt"] == "mp3" and call["rate"] == 1.0 and call["voice"] == "v1"
 
 
 def test_export_validation(client, tmp_path, fakes):
@@ -1513,7 +1516,7 @@ def test_integration_import_and_read_section(web_dir):
         with TestClient(create_app(token=TOKEN, jobs=jobs, web_dir=web_dir), headers=AUTH) as c:
             text = b"# Cells\n\nCells are the basic unit of life, e.g. bacteria. They divide.\n\n## Membranes\n\nMembranes control transport.\n"
             job = wait_job(c, upload(c, "biology.md", text).json()["job_id"])
-            assert job["status"] == "done", job
+            assert job["status"] == "done", job["error"]
             book = job["result"]["book"]
             data = c.get(f"/api/books/{book['id']}").json()
             first = data["toc"][0]["id"]
@@ -1569,8 +1572,9 @@ def test_integration_real_catalog(web_dir):
         jobs.shutdown(wait=True)
 
 
-@pytest.mark.skipif(not _module_ready("destiny_bot.ai", "Assistant", "AIUnavailable"),
-                    reason="destiny_bot.ai isn't available yet")
+@pytest.mark.skipif(not (_module_ready("destiny_bot.ai", "Assistant", "AIUnavailable")
+                         and _module_ready("destiny_bot.speech", "section_plain_text")),
+                    reason="destiny_bot.ai or destiny_bot.speech isn't available yet")
 def test_integration_real_ai_without_key(web_dir, tmp_path, monkeypatch):
     set_settings(ai_enabled=True)
     monkeypatch.setattr(ingest, "load_document", fake_load_document)
@@ -1582,8 +1586,6 @@ def test_integration_real_ai_without_key(web_dir, tmp_path, monkeypatch):
     try:
         with TestClient(create_app(library=lib, token=TOKEN, jobs=jobs, web_dir=web_dir), headers=AUTH) as c:
             response = c.post("/api/ai/explain", json={"book_id": doc.id, "section_id": "s0", "passage": "Cells"})
-            if response.status_code == 500 and "section_plain_text" in response.text:
-                pytest.skip("destiny_bot.speech isn't ready")
             assert response.status_code == 409, response.text
             assert isinstance(response.json()["detail"], str)
     finally:
@@ -1597,7 +1599,7 @@ def test_integration_real_pdf_import_and_page_image(web_dir, tmp_path):
     try:
         with TestClient(create_app(token=TOKEN, jobs=jobs, web_dir=web_dir), headers=AUTH) as c:
             job = wait_job(c, upload(c, "Lecture 1.pdf", pdf.read_bytes()).json()["job_id"], timeout=60)
-            assert job["status"] == "done", job
+            assert job["status"] == "done", job["error"]
             book = job["result"]["book"]
             assert book["source_type"] == "pdf" and book["page_count"] == 2
             assert book["source_name"] == "Lecture 1.pdf"
@@ -1637,7 +1639,7 @@ def test_integration_real_export(web_dir, tmp_path, monkeypatch):
                                                    "format": "mp3"})
             assert response.status_code == 200, response.text
             job = wait_job(c, response.json()["job_id"], timeout=120)
-            assert job["status"] == "done", job
+            assert job["status"] == "done", job["error"]
             files = job["result"]["files"]
             audio = [f for f in files if f["name"].endswith(".mp3")]
             assert audio and audio[0]["size"] > 0

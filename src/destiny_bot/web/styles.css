@@ -1116,6 +1116,22 @@ input[type="radio"] {
   max-width: calc(70ch + 48px);
   margin: 0 auto;
   padding: 16px 24px 0;
+  font-size: calc(1.1875rem * var(--font-scale));
+}
+
+.banners > *,
+#book-notices > * {
+  font-size: 14px;
+}
+
+#book-notices {
+  max-width: 70ch;
+  margin: 0 auto;
+  font-size: calc(1.1875rem * var(--font-scale));
+}
+
+#book-notices:not(:empty) {
+  padding-top: 16px;
 }
 
 .banners:empty {

@@ -149,7 +149,7 @@ def superscript_text(text: str) -> str:
         return ""
     if _SUPERSCRIPTABLE.fullmatch(value):
         return value.translate(_SUPERSCRIPT)
-    if value.isalpha() or " " in value or len(value) > 12:
+    if value.isalpha() or any(ch.isspace() for ch in value) or len(value) > 12:
         return value
     return "^" + wrap_math(value)
 

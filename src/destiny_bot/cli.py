@@ -902,6 +902,13 @@ def main(argv: list[str] | None = None) -> int:
     except CLIError as exc:
         _err(f"Error: {exc}")
         return 1
+    except BrokenPipeError:  # output piped into a program that stopped reading, e.g. `| head`
+        try:
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, sys.stdout.fileno())  # so the final flush at exit doesn't fail again
+        except (OSError, ValueError):
+            pass
+        return 0
     except OSError as exc:
         detail = f"{exc.strerror}: {exc.filename}" if exc.strerror and exc.filename else str(exc)
         _err(f"Error: {detail}")

@@ -53,11 +53,11 @@ _NOTES_TYPES = frozenset({"footnotes", "endnotes", "rearnotes"})
 _NOTES_ROLES = frozenset({"doc-endnotes"})
 _NOTES_CLASSES = frozenset({"footnotes", "endnotes", "references"})
 _BACKLINK_CLASSES = frozenset({"footnote-back", "footnote-backref", "mw-cite-backlink"})
-_BACKLINK_TEXTS = frozenset({"↩", "↩︎", "↑", "^", "⤴", "back", "[back]", "return"})
+_BACKLINK_TEXTS = frozenset({"↩", "\u21a9\ufe0e", "↑", "^", "⤴", "back", "[back]", "return"})
 _CHROME_ROLES = frozenset({"navigation", "search", "banner"})
 _HIDDEN_STYLE = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden", re.I)
 _TEX_ENCODINGS = frozenset({"application/x-tex", "tex", "latex", "application/x-latex", "text/x-tex"})
-_MATH_INVISIBLE = dict.fromkeys(map(ord, "⁡⁢⁣⁤"), None)
+_MATH_INVISIBLE = dict.fromkeys(map(ord, "\u2061\u2062\u2063\u2064"), None)  # function application etc.
 _VOID = "area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr"
 _SELF_CLOSING = re.compile(rf"<(?!(?:{_VOID})\b)([A-Za-z][\w:.-]*)(\s[^<>]*?)?\s*/>")
 _IGNORED_STRINGS = (Comment, Declaration, Doctype, ProcessingInstruction)
@@ -98,7 +98,7 @@ def _xlocal(tag: object) -> str:
 
 
 _MATH_BRACKETS = frozenset("()[]{}|‖⟨⟩")
-_MATH_ACCENTS = frozenset(("¯", "‾", "^", "ˆ", "~", "˜", "→", "⃗", "˙", "¨", "."))
+_MATH_ACCENTS = frozenset(("¯", "‾", "^", "ˆ", "~", "˜", "→", "\u20d7", "˙", "¨", "."))
 
 
 def _mathml_linear(el) -> str:
@@ -135,15 +135,15 @@ def _mathml_linear(el) -> str:
         separator = (el.get("separators", ",") or ",")[0]
         return f"{opener}{(separator + ' ').join(lin)}{closer}"
     if name == "mtable":
-        return "; ".join(lin)
+        return "; ".join(text for text in lin if text)
     if name in ("mtr", "mlabeledtr"):
-        return ", ".join(lin)
+        return " ".join(text for text in lin if text)  # aligned "lhs" "= rhs" cells, or matrix cells
     parts: list[str] = []
     for child, text in zip(kids, lin):
         if not text:
             continue
         if _xlocal(child.tag) == "mo" and text not in _MATH_BRACKETS:
-            parts.append(", " if text == "," else f" {text} ")
+            parts.append({",": ", ", ".": ".", ";": "; "}.get(text, f" {text} "))
         else:
             parts.append(text)
     return re.sub(r"\s+", " ", "".join(parts)).strip()
@@ -278,19 +278,30 @@ class _Walker:
         )
 
     @staticmethod
-    def _is_noteref(tag: Tag) -> bool:
+    def _only_child(tag: Tag) -> Tag | None:
+        kids = [c for c in tag.children if not (isinstance(c, NavigableString) and not c.strip())]
+        return kids[0] if len(kids) == 1 and isinstance(kids[0], Tag) else None
+
+    @staticmethod
+    def _note_link(a: Tag) -> bool:
+        """A short link to an anchor ("1", "*", "[12]"), as used for note markers."""
+        return "#" in (a.get("href") or "") and len(a.get_text(strip=True)) <= 6
+
+    def _is_noteref(self, tag: Tag) -> bool:
+        """Note-reference markers (``<sup><a href="#fn1">1</a></sup>`` ...), removed from the text."""
         name = _local(tag)
         if "noteref" in _epub_types(tag) or "doc-noteref" in _tokens(tag, "role"):
             return True
-        if name == "a" and _tokens(tag, "class") & {"footnote-ref", "noteref", "footnote-reference"}:
-            return True
-        if name == "a" and (tag.get("href") or "").startswith("#") and tag.parent is not None:
-            if _local(tag.parent) == "sup":
+        if name == "a":
+            if _tokens(tag, "class") & {"footnote-ref", "noteref", "footnote-reference"}:
                 return True
+            if not self._note_link(tag):
+                return False
+            only = self._only_child(tag)
+            return (tag.parent is not None and _local(tag.parent) == "sup") or (only is not None and _local(only) == "sup")
         if name == "sup":
-            kids = [c for c in tag.children if not (isinstance(c, NavigableString) and not c.strip())]
-            if len(kids) == 1 and isinstance(kids[0], Tag) and _local(kids[0]) == "a":
-                return (kids[0].get("href") or "").startswith("#")
+            only = self._only_child(tag)
+            return only is not None and _local(only) == "a" and self._note_link(only)
         return False
 
     @staticmethod
@@ -445,12 +456,31 @@ class _Walker:
                 images.append(node)
             elif name != "br":
                 inner = node.find_all("img")
-                if not inner or self.inline_text(node).strip() != "".join(self._alt(i) for i in inner).strip():
+                alts = "".join(self._alt(i) for i in inner)
+                if not inner or re.sub(r"\s+", "", self.inline_text(node)) != re.sub(r"\s+", "", alts):
                     return None
                 images.extend(inner)
         return images or None
 
     def _flush(self, buffer: list, ctx: _Ctx) -> None:
+        """Emit buffered inline content; a double ``<br><br>`` separates paragraphs."""
+        group: list = []
+        breaks = 0
+        for node in buffer:
+            if isinstance(node, Tag) and _local(node) == "br":
+                breaks += 1
+                group.append(node)
+            elif isinstance(node, NavigableString) and not node.strip():
+                group.append(node)
+            else:
+                if breaks >= 2:
+                    self._flush_group(group, ctx)
+                    group = []
+                breaks = 0
+                group.append(node)
+        self._flush_group(group, ctx)
+
+    def _flush_group(self, buffer: list, ctx: _Ctx) -> None:
         meaningful = [
             node
             for node in buffer

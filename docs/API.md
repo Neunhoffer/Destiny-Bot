@@ -91,3 +91,14 @@ the only intended client. All JSON. Errors use FastAPI's shape, `{"detail": "<me
 AI endpoints return `409` with a friendly `detail` when AI is turned off or no key
 is set, and `502` with a friendly `detail` when the Anthropic call fails.
 Section context sent to Claude is `section_plain_text(section, max_chars=150_000)`.
+
+## Details and edge cases
+
+- Each block in a section response also has `"notes": true|false`, which is true for PowerPoint speaker notes.
+- `422` responses carry `detail` as a plain string such as `"Invalid request: rate: ..."`, not FastAPI's list form.
+- `GET /api/voices` and `status.engines[].default_voice` leave out online engines while `online_tts_allowed` is false.
+- `POST /api/voices/download` accepts any well-formed Piper voice id; a malformed id gets `400`.
+- `/api/tts` returns `400` for text over 5,000 characters, and `503` when the engine has no voice at all. A requested or saved voice that isn't installed falls back to the engine's default voice.
+- `PUT /api/settings` returns `422` for an unknown `tts_engine`.
+- Every response carries `X-Frame-Options: DENY` and `Cross-Origin-Resource-Policy: same-origin`. `/static` responses use `Cache-Control: no-cache`, and JS/CSS media types are set explicitly, because Windows registries often map `.js` to `text/plain`.
+- A job waiting for a free worker reports `"status": "running"` with a "Waiting…" message.
