@@ -696,8 +696,13 @@ def create_app(
     bind_host: str | None = None,
     web_dir: Path | None = None,
     max_upload_bytes: int = MAX_UPLOAD_BYTES,
+    warm_up: bool = False,
 ) -> FastAPI:
-    """Build the app. ``port`` enables the strict Host check (``run()`` always passes it)."""
+    """Build the app. ``port`` enables the strict Host check (``run()`` always passes it).
+
+    ``warm_up`` loads the default offline voice in the background so the first
+    sentence starts without a multi-second model load.
+    """
     library = library if library is not None else Library()
     jobs = jobs if jobs is not None else JobManager()
     token = token or secrets.token_urlsafe(32)
@@ -713,6 +718,8 @@ def create_app(
     app.state.jobs = jobs
     app.state.token = token
     app.add_middleware(SecurityMiddleware, token=token, host_allowed=host_policy(port, bind_host))
+    if warm_up:
+        threading.Thread(target=_warm_up_voice, name="athena-voice-warmup", daemon=True).start()
 
     @app.exception_handler(RequestValidationError)
     async def _validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -1400,6 +1407,20 @@ def _bind_free_port(host: str, port: int, attempts: int = PORT_ATTEMPTS) -> tupl
     ) from last_error
 
 
+def _warm_up_voice() -> None:
+    """Load the default offline voice so pressing play is instant. Never touches online voices."""
+    try:
+        settings = config.load_settings()
+        engine = _tts().resolve_engine(settings.tts_engine, online_allowed=False)
+        if engine.online or engine.name == "browser":
+            return
+        voice = settings.voices.get(engine.name)
+        installed = {v.id for v in engine.list_voices() if v.installed}
+        engine.synthesize("Ready.", voice if voice in installed else None, 1.0)
+    except Exception as exc:  # warming up is only an optimisation
+        log.info("Voice warm-up skipped: %s", exc)
+
+
 def _browser_url(host: str, port: int) -> str:
     bare = host.strip("[]").lower()
     if bare in ("0.0.0.0", "::", "localhost") or _is_loopback(bare):
@@ -1471,7 +1492,9 @@ def start_server_in_thread(
     sock, actual_port = _bind_free_port(host, port)
     jobs = JobManager()
     try:
-        server = _uvicorn_server(create_app(jobs=jobs, port=actual_port, bind_host=host), host, actual_port)
+        server = _uvicorn_server(
+            create_app(jobs=jobs, port=actual_port, bind_host=host, warm_up=True), host, actual_port
+        )
     except BaseException:
         jobs.shutdown(wait=False)
         sock.close()
@@ -1521,7 +1544,7 @@ def run(
     sock, actual_port = _bind_free_port(host, port)
     jobs = JobManager()
     try:
-        app = create_app(jobs=jobs, port=actual_port, bind_host=host)
+        app = create_app(jobs=jobs, port=actual_port, bind_host=host, warm_up=True)
         url = _browser_url(host, actual_port)
         if actual_port != port:
             print(f"Port {port} is busy, so Athena is using port {actual_port} instead.")

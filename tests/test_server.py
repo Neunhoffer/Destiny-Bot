@@ -1647,3 +1647,30 @@ def test_integration_real_export(web_dir, tmp_path, monkeypatch):
             assert download.status_code == 200 and len(download.content) == audio[0]["size"]
     finally:
         jobs.shutdown(wait=True)
+
+
+# -- voice warm-up
+
+
+def test_warm_up_loads_default_offline_voice(fakes):
+    server._warm_up_voice()
+    assert fakes.tts.engines["piper"].calls == [("Ready.", None, 1.0)]
+
+
+def test_warm_up_uses_saved_voice_when_installed(fakes):
+    config.update_settings({"voices": {"piper": "v2"}})
+    server._warm_up_voice()
+    assert fakes.tts.engines["piper"].calls == [("Ready.", "v2", 1.0)]
+
+
+def test_warm_up_never_touches_online_voices(fakes):
+    config.update_settings({"tts_engine": "edge", "online_tts_allowed": True})
+    for name in ("piper", "system"):
+        fakes.tts.engines[name].available = False
+    server._warm_up_voice()
+    assert all(not engine.calls for engine in fakes.tts.engines.values())
+
+
+def test_warm_up_failure_is_harmless(fakes):
+    fakes.tts.engines["piper"].error = RuntimeError("model missing")
+    server._warm_up_voice()  # must not raise

@@ -33,8 +33,14 @@ edge = ["edge-tts>=6.1"]
 ai = ["anthropic>=1.0"]
 # Read scanned pages and photos of handouts (also needs the Tesseract program).
 ocr = ["pytesseract>=0.3.10", "pillow>=10"]
-all = ["destiny-bot[piper,system,edge,ai,ocr]"]
+# Kokoro: very natural offline voices (the model is a separate ~90 MB download).
+kokoro = ["kokoro-onnx>=0.4"]
+# Open the reader in its own window instead of a browser tab (`destiny app`).
+app = ["pywebview>=5.0"]
+all = ["destiny-bot[piper,kokoro,system,edge,ai,ocr,app]"]
 dev = ["destiny-bot[all]", "pytest>=8", "pytest-asyncio>=0.23", "httpx>=0.27", "playwright>=1.44"]
+# Build the desktop app and its installer (see packaging/README.md).
+build = ["destiny-bot[all]", "pyinstaller>=6.6", "pillow>=10"]
 
 [project.scripts]
 destiny = "destiny_bot.cli:main"

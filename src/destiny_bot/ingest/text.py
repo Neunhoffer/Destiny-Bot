@@ -366,7 +366,10 @@ _MD_QUOTE = re.compile(r"^ {0,3}>[ \t]?")
 _MD_LIST = re.compile(r"^(?P<indent>[ \t]*)(?P<marker>[-*+]|\d{1,9}[.)])(?:[ \t]+(?P<text>.*))?$")
 _MD_TASK = re.compile(r"^\[[ xX]\][ \t]+")
 _MD_FOOTNOTE_DEF = re.compile(r"^ {0,3}\[\^([^\]\s]+)\]:[ \t]*(.*)$")
-_MD_REF_DEF = re.compile(r"^ {0,3}\[[^\]]+\]:[ \t]*\S+")
+_MD_REF_DEF = re.compile(r"^ {0,3}\[([^\]]+)\]:[ \t]*\S+")
+_MD_REF_IMAGE = re.compile(r"!\[((?:[^\[\]]|\[[^\[\]]*\])*)\]\[[^\[\]]*\]")
+_MD_SHORTCUT_REF = re.compile(r"(?<![\]!\\])\[([^\[\]]+)\](?![\[(:])")
+_MD_HIDDEN_HTML = (("<!--", "-->"), ("<script", "</script>"), ("<style", "</style>"))
 _MD_HTML_ONLY = re.compile(r"^\s*(?:</?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?/?>\s*)+$")
 _MD_IMG_HTML = re.compile(r"<img\b[^>]*?\balt\s*=\s*(?:\"([^\"]*)\"|'([^']*)')[^>]*>", re.I)
 _MD_TABLE_DELIM_ANY = re.compile(r"^ {0,3}\|?[ \t]*:?-{3,}:?[ \t]*(?:\|[ \t]*:?-{3,}:?[ \t]*)+\|?[ \t]*$", re.M)
@@ -408,8 +411,12 @@ def looks_like_markdown(text: str) -> bool:
     return 2 * headings + 2 * setext + links + bold >= 3
 
 
-def _md_inline(text: str) -> str:
-    """Markdown inline syntax -> plain text (links keep their words, emphasis marks go)."""
+def _md_inline(text: str, refs: frozenset[str] = frozenset()) -> str:
+    """Markdown inline syntax -> plain text (links keep their words, emphasis marks go).
+
+    ``refs`` holds the (lower-cased) labels of reference definitions, so that
+    shortcut links like ``[Smith 2019]`` lose their brackets.
+    """
     stash: list[str] = []
 
     def keep(value: str) -> str:
@@ -424,6 +431,8 @@ def _md_inline(text: str) -> str:
     for _ in range(2):  # links may wrap images or other links' text
         text = _MD_LINK.sub(lambda m: m.group(1), text)
     text = _MD_REF_LINK.sub(lambda m: m.group(1), text)
+    if refs:
+        text = _MD_SHORTCUT_REF.sub(lambda m: m.group(1) if m.group(1).lower() in refs else m.group(0), text)
     text = _MD_AUTOLINK.sub(lambda m: m.group(1), text)
     text = _MD_BR.sub(" ", text)
     text = _MD_HTML_TAG.sub("", text)
@@ -450,6 +459,7 @@ def _md_figures(text: str) -> list[str] | None:
         return " "
 
     remainder = _MD_IMAGE.sub(take_markdown, text)
+    remainder = _MD_REF_IMAGE.sub(take_markdown, remainder)
     remainder = _MD_IMG_HTML.sub(take_html, remainder)
     remainder = _MD_LINK.sub(lambda m: m.group(1), remainder)  # [![alt](img)](link)
     remainder = _MD_HTML_TAG.sub("", remainder)
@@ -459,7 +469,18 @@ def _md_figures(text: str) -> list[str] | None:
 
 
 def _strip_front_matter(text: str) -> tuple[str, dict[str, str]]:
-    m = re.match(r"^\ufeff?---[ \t]*\n(.*?)\n(?:---|\.\.\.)[ \t]*(?:\n|$)", text, re.S)
+    """Remove YAML front matter (or a Pandoc "% title" block) and return its title/author."""
+    text = text.lstrip("\ufeff")
+    if text.startswith("% "):
+        lines = text.split("\n")
+        head: list[str] = []
+        while lines and lines[0].startswith("%") and len(head) < 3:
+            head.append(lines.pop(0)[1:].strip())
+        meta = {"title": head[0]} if head and head[0] else {}
+        if len(head) > 1 and head[1]:
+            meta["author"] = ", ".join(part.strip() for part in head[1].split(";") if part.strip())
+        return "\n".join(lines), meta
+    m = re.match(r"^---[ \t]*\n(.*?)\n(?:---|\.\.\.)[ \t]*(?:\n|$)", text, re.S)
     if not m:
         return text, {}
     meta: dict[str, str] = {}
@@ -470,17 +491,26 @@ def _strip_front_matter(text: str) -> tuple[str, dict[str, str]]:
     return text[m.end() :], meta
 
 
-def _remove_html_comments(lines: list[str], i: int) -> tuple[str, int]:
-    """Strip ``<!-- ... -->`` (possibly spanning lines) starting at line ``i``."""
+def _has_hidden_html(line: str) -> bool:
+    lowered = line.lower()
+    return any(opener in lowered for opener, _ in _MD_HIDDEN_HTML)
+
+
+def _remove_hidden_html(lines: list[str], i: int) -> tuple[str, int]:
+    """Strip comments, ``<script>`` and ``<style>`` (possibly spanning lines) starting at line ``i``."""
     line = lines[i]
-    while "<!--" in line:
-        before, _, after = line.partition("<!--")
-        while "-->" not in after and i + 1 < len(lines):
+    while True:
+        lowered = line.lower()
+        found = [(lowered.find(opener), opener, closer) for opener, closer in _MD_HIDDEN_HTML if opener in lowered]
+        if not found:
+            return line, i
+        start, _opener, closer = min(found)
+        before, after = line[:start], line[start:]
+        while closer not in after.lower() and i + 1 < len(lines):
             i += 1
             after = lines[i]
-        _, found, rest = after.partition("-->")
-        line = before + (rest if found else "")
-    return line, i
+        end = after.lower().find(closer)
+        line = before + (after[end + len(closer) :] if end >= 0 else "")
 
 
 def _is_table_delimiter(line: str) -> bool:
@@ -491,18 +521,25 @@ def _is_table_delimiter(line: str) -> bool:
     return bool(cells) and all(re.fullmatch(r":?-+:?", c) for c in cells)
 
 
-def _split_table_row(line: str) -> list[str]:
+def _split_table_row(line: str, refs: frozenset[str] = frozenset()) -> list[str]:
     s = line.strip()
     if s.startswith("|"):
         s = s[1:]
     if s.endswith("|") and not s.endswith("\\|"):
         s = s[:-1]
-    return [_md_inline(cell.strip().replace("\\|", "|")) for cell in re.split(r"(?<!\\)\|", s)]
+    return [_md_inline(cell.strip().replace("\\|", "|"), refs) for cell in re.split(r"(?<!\\)\|", s)]
 
 
-def markdown_blocks(text: str) -> list[Block]:
+def markdown_blocks(text: str, *, _refs: frozenset[str] | None = None) -> list[Block]:
     """Parse Markdown into blocks (headings, lists, quotes, code, tables, images...)."""
     lines = _normalize_newlines(text).split("\n")
+    refs = _refs
+    if refs is None:
+        refs = frozenset(m.group(1).strip().lower() for line in lines if (m := _MD_REF_DEF.match(line)))
+
+    def inline(value: str) -> str:
+        return _md_inline(value, refs)
+
     blocks: list[Block] = []
     para: list[str] = []
     item: list[str] | None = None
@@ -517,16 +554,16 @@ def markdown_blocks(text: str) -> list[Block]:
     def flush() -> None:
         nonlocal item
         if item is not None:
-            add(BlockKind.LIST_ITEM, _md_inline("\n".join(item)), meta={"list_level": item_level})
+            add(BlockKind.LIST_ITEM, inline("\n".join(item)), meta={"list_level": item_level})
             item = None
         if para:
             raw = "\n".join(para)
             figures = _md_figures(raw)
             if figures is not None:
                 for alt in figures:
-                    add(BlockKind.FIGURE, _md_inline(alt))
+                    add(BlockKind.FIGURE, inline(alt))
             else:
-                add(BlockKind.PARAGRAPH, _md_inline(raw))
+                add(BlockKind.PARAGRAPH, inline(raw))
             para.clear()
 
     def is_block_start(line: str) -> bool:
@@ -542,8 +579,8 @@ def markdown_blocks(text: str) -> list[Block]:
     previous_blank = True
     while i < n:
         line = lines[i]
-        if "<!--" in line:
-            line, i = _remove_html_comments(lines, i)
+        if "<" in line and _has_hidden_html(line):
+            line, i = _remove_hidden_html(lines, i)
             if not line.strip():
                 i += 1
                 continue
@@ -597,7 +634,7 @@ def markdown_blocks(text: str) -> list[Block]:
         if atx:
             flush()
             list_indents.clear()
-            add(BlockKind.HEADING, _md_inline(atx.group(2) or ""), level=len(atx.group(1)))
+            add(BlockKind.HEADING, inline(atx.group(2) or ""), level=len(atx.group(1)))
             i += 1
             previous_blank = False
             continue
@@ -606,7 +643,7 @@ def markdown_blocks(text: str) -> list[Block]:
         if setext and para and item is None:
             heading = "\n".join(para)
             para.clear()
-            add(BlockKind.HEADING, _md_inline(heading), level=1 if setext.group(1)[0] == "=" else 2)
+            add(BlockKind.HEADING, inline(heading), level=1 if setext.group(1)[0] == "=" else 2)
             i += 1
             previous_blank = False
             continue
@@ -621,10 +658,10 @@ def markdown_blocks(text: str) -> list[Block]:
         if "|" in line and i + 1 < n and _is_table_delimiter(lines[i + 1]):
             flush()
             list_indents.clear()
-            rows = [_split_table_row(line)]
+            rows = [_split_table_row(line, refs)]
             i += 2
             while i < n and lines[i].strip() and "|" in lines[i]:
-                rows.append(_split_table_row(lines[i]))
+                rows.append(_split_table_row(lines[i], refs))
                 i += 1
             block = table_block(rows)
             if block:
@@ -635,24 +672,21 @@ def markdown_blocks(text: str) -> list[Block]:
         if _MD_QUOTE.match(line):
             flush()
             list_indents.clear()
-            quote_paras: list[list[str]] = [[]]
+            quoted: list[str] = []
             while i < n:
                 current = lines[i]
                 if _MD_QUOTE.match(current):
-                    while _MD_QUOTE.match(current):
-                        current = _MD_QUOTE.sub("", current, count=1)
-                    if current.strip():
-                        quote_paras[-1].append(current)
-                    elif quote_paras[-1]:
-                        quote_paras.append([])
-                elif current.strip() and quote_paras[-1] and not is_block_start(current):
-                    quote_paras[-1].append(current)  # lazy continuation
+                    quoted.append(_MD_QUOTE.sub("", current, count=1))
+                elif current.strip() and quoted and quoted[-1].strip() and not is_block_start(current):
+                    quoted.append(current)  # lazy continuation
                 else:
                     break
                 i += 1
-            for quote in quote_paras:
-                if quote:
-                    add(BlockKind.QUOTE, _md_inline("\n".join(quote)))
+            # The quote's content is Markdown too (lists, code, nested quotes); its prose becomes QUOTE.
+            for block in markdown_blocks("\n".join(quoted), _refs=refs):
+                if block.kind == BlockKind.PARAGRAPH:
+                    block = block.model_copy(update={"kind": BlockKind.QUOTE})
+                blocks.append(block)
             previous_blank = False
             continue
 
@@ -666,7 +700,7 @@ def markdown_blocks(text: str) -> list[Block]:
                     break
                 note.append(lines[i])
                 i += 1
-            add(BlockKind.FOOTNOTE, _md_inline("\n".join(note)))
+            add(BlockKind.FOOTNOTE, inline("\n".join(note)))
             previous_blank = False
             continue
 

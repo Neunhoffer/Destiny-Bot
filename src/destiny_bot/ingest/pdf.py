@@ -168,6 +168,7 @@ class _Page:
     tables: list[_Table] = field(default_factory=list)
     boxes: list[tuple[float, float, float, float]] = field(default_factory=list)
     image_rects: list[tuple[float, float, float, float]] = field(default_factory=list)
+    figures: list[tuple[float, float, float, float]] = field(default_factory=list)  # vector diagrams
     ocr_paragraphs: list[str] | None = None
 
 
@@ -684,6 +685,60 @@ def _find_tables_and_boxes(page: pymupdf.Page, pg: _Page) -> None:
             continue
         if b not in pg.boxes:
             pg.boxes.append(b)
+    if len(paths) <= _MAX_TABLE_DRAWINGS:
+        pg.figures = _vector_figures(paths, pg, [t.bbox for t in pg.tables] + pg.boxes)
+
+
+def _vector_figures(paths: list[dict], pg: _Page, exclude: list[tuple]) -> list[tuple[float, float, float, float]]:
+    """Regions dense with vector graphics (diagrams, charts): their short text lines are labels."""
+    if len(paths) < 12:
+        return []
+    cell = 12.0
+    area = pg.width * pg.height
+    occupied: set[tuple[int, int]] = set()
+    centers: list[tuple[int, int]] = []
+    for p in paths:
+        r = p.get("rect")
+        if not r:
+            continue
+        x0, y0, x1, y1 = r
+        w, h = x1 - x0, y1 - y0
+        if w < 2 or h < 2 or w * h > 0.3 * area:
+            continue  # rules, underlines, axis lines and page backgrounds don't make a figure
+        if any(_overlap_frac(r, ex) > 0.8 for ex in exclude):
+            continue
+        i0, i1 = int(max(x0 - 3, 0) // cell), int(min(x1 + 3, pg.width) // cell)
+        j0, j1 = int(max(y0 - 3, 0) // cell), int(min(y1 + 3, pg.height) // cell)
+        for i in range(i0, i1 + 1):
+            for j in range(j0, j1 + 1):
+                occupied.add((i, j))
+        centers.append((int((x0 + x1) / 2 // cell), int((y0 + y1) / 2 // cell)))
+    comp_of: dict[tuple[int, int], int] = {}
+    comps: list[list[tuple[int, int]]] = []
+    for start in occupied:
+        if start in comp_of:
+            continue
+        comp_of[start] = len(comps)
+        stack, cells = [start], []
+        while stack:
+            c = stack.pop()
+            cells.append(c)
+            for n in ((c[0] + 1, c[1]), (c[0] - 1, c[1]), (c[0], c[1] + 1), (c[0], c[1] - 1)):
+                if n in occupied and n not in comp_of:
+                    comp_of[n] = len(comps)
+                    stack.append(n)
+        comps.append(cells)
+    counts = Counter(comp_of[c] for c in centers if c in comp_of)
+    regions = []
+    for idx, cells in enumerate(comps):
+        if counts[idx] < 12:
+            continue
+        xs = [c[0] for c in cells]
+        ys = [c[1] for c in cells]
+        rect = (min(xs) * cell, min(ys) * cell, (max(xs) + 1) * cell, (max(ys) + 1) * cell)
+        if (rect[2] - rect[0]) * (rect[3] - rect[1]) <= 0.6 * area:
+            regions.append(rect)
+    return regions
 
 
 def _clean_table(rows: list[list[str | None]]) -> list[list[str]] | None:
@@ -1003,14 +1058,19 @@ def _page_chunks(pg: _Page, stats: _Stats) -> list[_Chunk]:
 
 
 def _drop_figure_labels(lines: list[_Line], pg: _Page) -> list[_Line]:
-    """Short text sitting on top of a (non-background) picture is a diagram label, not prose."""
+    """Short text on top of a picture or inside a vector diagram is a label, not prose."""
     page_area = pg.width * pg.height
-    figs = [r for r in pg.image_rects if (r[2] - r[0]) * (r[3] - r[1]) < 0.6 * page_area]
+    figs = [r for r in pg.image_rects if (r[2] - r[0]) * (r[3] - r[1]) < 0.6 * page_area] + pg.figures
     if not figs:
         return lines
     out = []
     for ln in lines:
-        if len(ln.text) <= 40 and len(ln.text.split()) <= 5 and any(_inside(ln, r, tol=0) for r in figs):
+        if (
+            len(ln.text) <= 40
+            and len(ln.text.split()) <= 5
+            and any(_inside(ln, r, tol=0) for r in figs)
+            and not _is_caption_text(ln.text)
+        ):
             continue
         out.append(ln)
     return out
@@ -1088,13 +1148,18 @@ def _detect_gutters(elems: list[_Elem]) -> list[tuple[float, float]]:
     if width < 150:
         return []
     center = (xmin + xmax) / 2
-    # Narrow elements show the columns. Lines centred on the page (a title block above
-    # two columns) would hide the gutter; they become full-width elements later.
-    narrow = [
-        e
-        for e in elems
-        if e.x1 - e.x0 <= 0.62 * width and abs((e.x0 + e.x1) / 2 - center) > 0.03 * width
-    ]
+    lefts = Counter(round(e.x0 / 2) for e in lines)
+
+    def column_like(e: _Elem) -> bool:
+        # Lines centred on the page (a title block above two columns) would hide the
+        # gutter; they become full-width elements later. Lines of a middle column are
+        # centred too, but share their left edge with many others.
+        if abs((e.x0 + e.x1) / 2 - center) > 0.03 * width:
+            return True
+        k = round(e.x0 / 2)
+        return lefts[k - 1] + lefts[k] + lefts[k + 1] >= 4
+
+    narrow = [e for e in elems if e.x1 - e.x0 <= 0.62 * width and column_like(e)]
     if len(narrow) < 6:
         return []
     nbins = int(width) + 2
