@@ -685,7 +685,7 @@ def _mp3_bytes(seconds: float = 0.3) -> bytes:
 
 
 class FakeCommunicate:
-    instances: list["FakeCommunicate"] = []
+    instances: list[FakeCommunicate] = []
     error: BaseException | None = None
 
     def __init__(self, text, voice="en-US-AvaNeural", *, rate="+0%", **kwargs):

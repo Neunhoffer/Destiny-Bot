@@ -363,7 +363,7 @@ def test_joiner_streams_to_file(tmp_path):
 
 
 class FakePopen:
-    instances: list["FakePopen"] = []
+    instances: list[FakePopen] = []
     interrupt = False
 
     def __init__(self, cmd, **kwargs):

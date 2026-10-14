@@ -8,7 +8,6 @@ superscript markers (``word^1``), running headers / footers and page numbers.
 
 from __future__ import annotations
 
-import io
 from pathlib import Path
 from typing import Callable
 
@@ -21,6 +20,15 @@ ITALIC = "heit"
 SERIF = "tiro"
 SERIF_BOLD = "tibo"
 MONO = "cour"
+
+
+_FONTS: dict[str, pymupdf.Font] = {}
+
+
+def _font(name: str) -> pymupdf.Font:
+    if name not in _FONTS:
+        _FONTS[name] = pymupdf.Font(name)
+    return _FONTS[name]
 
 
 def text_width(text: str, font: str = REGULAR, size: float = 11) -> float:
@@ -51,6 +59,8 @@ class PdfBuilder:
         self.col = 0
         self.region_top = margin
         self.y = margin
+        self._writer: pymupdf.TextWriter | None = None
+        self._writer_page: pymupdf.Page | None = None
         self.page: pymupdf.Page = self.doc.new_page(width=width, height=height)
 
     # ----------------------------------------------------------------- layout state
@@ -67,7 +77,23 @@ class PdfBuilder:
     def bottom(self) -> float:
         return self.height - self.margin
 
+    def flush(self) -> None:
+        """Write pending text of the current page (text is batched for speed)."""
+        if self._writer is not None and self._writer_page is not None:
+            self._writer.write_text(self._writer_page)
+        self._writer = self._writer_page = None
+
+    def text(self, pos: tuple[float, float], text: str, *, font: str = REGULAR, size: float = 11) -> None:
+        """Queue one text run at ``pos`` (baseline start) on the current page."""
+        if self._writer_page is not self.page:
+            self.flush()
+            self._writer = pymupdf.TextWriter(self.page.rect)
+            self._writer_page = self.page
+        assert self._writer is not None
+        self._writer.append(pos, text, font=_font(font), fontsize=size)
+
     def new_page(self) -> None:
+        self.flush()
         self.page = self.doc.new_page(width=self.width, height=self.height)
         self.col = 0
         self.region_top = self.margin
@@ -107,6 +133,9 @@ class PdfBuilder:
         self.y += pitch
 
     def _draw_line(self, text: str, x: float, baseline: float, size: float, font: str, justify_to: float | None = None) -> None:
+        if "^" not in text and justify_to is None:
+            self.text((x, baseline), text, font=font, size=size)
+            return
         words = text.split(" ")
         gap = text_width(" ", font, size)
         if justify_to is not None and len(words) > 1:
@@ -115,11 +144,11 @@ class PdfBuilder:
         for k, word in enumerate(words):
             base, _, sup = word.partition("^")
             if base:
-                self.page.insert_text((x, baseline), base, fontname=font, fontsize=size)
+                self.text((x, baseline), base, font=font, size=size)
                 x += text_width(base, font, size)
             if sup:
                 small = size * 0.6
-                self.page.insert_text((x + 0.3, baseline - size * 0.38), sup, fontname=font, fontsize=small)
+                self.text((x + 0.3, baseline - size * 0.38), sup, font=font, size=small)
                 x += text_width(sup, font, small) + 0.6
             if k < len(words) - 1:
                 x += gap
@@ -192,7 +221,7 @@ class PdfBuilder:
         for k, ln in enumerate(lines):
             self._advance(pitch)
             if k == 0:
-                self.page.insert_text((self.x0 + 4, self.y + size), marker, fontname=self.font, fontsize=size)
+                self.text((self.x0 + 4, self.y + size), marker, font=self.font, size=size)
             self._draw_line(ln, self.x0 + indent, self.y + size, size, self.font)
             self.y += pitch
         self.y += 2
@@ -219,7 +248,7 @@ class PdfBuilder:
                 rect = pymupdf.Rect(x, top + r * rh, x + widths[c], top + (r + 1) * rh)
                 self.page.draw_rect(rect, color=(0, 0, 0), width=0.6)
                 font = BOLD if r == 0 else self.font
-                self.page.insert_text((rect.x0 + 4, rect.y1 - size * 0.6), cell, fontname=font, fontsize=size)
+                self.text((rect.x0 + 4, rect.y1 - size * 0.6), cell, font=font, size=size)
                 x += widths[c]
         self.y = top + rh * len(rows) + self.body
         return pymupdf.Rect(self.x0, top, self.x0 + sum(widths), self.y)
@@ -248,6 +277,7 @@ class PdfBuilder:
         size: float = 9,
     ) -> None:
         """Add running headers/footers; callables get the 1-based page number."""
+        self.flush()
         for i, page in enumerate(self.doc):
             n = i + 1
             if header and (h := header(n)):
@@ -258,6 +288,7 @@ class PdfBuilder:
                 page.insert_text((x, self.height - self.margin * 0.45), f, fontname=self.font, fontsize=size)
 
     def save(self, path: Path, *, toc: list | None = None, metadata: dict | None = None, **save_kwargs) -> Path:
+        self.flush()
         if toc:
             self.doc.set_toc(toc)
         if metadata:
@@ -295,10 +326,3 @@ def scanned_pdf(path: Path, pages: list[list[str]]) -> Path:
     return Path(path)
 
 
-def pdf_bytes(build: Callable[[PdfBuilder], None], **kwargs) -> bytes:
-    b = PdfBuilder(**kwargs)
-    build(b)
-    buf = io.BytesIO()
-    b.doc.save(buf)
-    b.doc.close()
-    return buf.getvalue()
