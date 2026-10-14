@@ -423,7 +423,7 @@ def _sapi_save(sapi: _Sapi, text: str, voice: str | None, sapi_rate: int, out_pa
     sapi.voice.Rate = sapi_rate  # after the voice: changing voice resets the rate
     stream = sapi.create("SAPI.SpFileStream")
     stream.Format.Type = _SAFT_22KHZ_16BIT_MONO
-    stream.Open(out_path, _SSFM_CREATE_FOR_WRITE, False)
+    stream.Open(out_path, _SSFM_CREATE_FOR_WRITE)
     try:
         sapi.voice.AudioOutputStream = stream
         sapi.voice.Speak(text, _SVSF_IS_NOT_XML)  # synchronous

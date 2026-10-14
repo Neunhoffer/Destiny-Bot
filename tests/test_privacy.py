@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -29,28 +30,39 @@ def _run_python(code: str, env: dict[str, str]) -> subprocess.CompletedProcess:
 
 
 def test_onnxruntime_telemetry_is_off_before_any_voice_loads(tmp_path):
-    """onnxruntime's built-in 1DS telemetry phones home on ``import onnxruntime`` (and keeps a
-    device id under ~/.cache/Microsoft). ``disable_telemetry_events()`` is too late for that;
-    only ``ORT_DISABLE_TELEMETRY=1`` set before the import stops it."""
+    """onnxruntime's built-in 1DS telemetry phones home to mobile.events.data.microsoft.com as
+    soon as it is imported, and keeps a device id under ~/.cache/Microsoft/DeveloperTools.
+    ``disable_telemetry_events()`` is too late for that; only ``ORT_DISABLE_TELEMETRY=1`` set
+    before the import (done in ``destiny_bot/__init__.py``) stops it."""
     pytest.importorskip("onnxruntime")
     home = tmp_path / "user"
     home.mkdir()
-    env = {k: v for k, v in os.environ.items() if k != "ORT_DISABLE_TELEMETRY"}
-    env.update(HOME=str(home), XDG_CACHE_HOME=str(home / ".cache"), LOCALAPPDATA=str(home / "AppData"),
-               USERPROFILE=str(home), DESTINY_HOME=str(tmp_path / "data"))
-    result = _run_python(
+    env = {k: v for k, v in os.environ.items() if k != "ORT_DISABLE_TELEMETRY" and "proxy" not in k.lower()}
+    env.update(HOME=str(home), XDG_CACHE_HOME=str(home / ".cache"), LOCALAPPDATA=str(home / "AppData" / "Local"),
+               APPDATA=str(home / "AppData" / "Roaming"), USERPROFILE=str(home), DESTINY_HOME=str(tmp_path / "data"))
+    code = """
+        import time
+        import destiny_bot.tts.kokoro_engine, onnxruntime
+        time.sleep(2)  # the uploader starts in the background right after the import
         """
-        import os
-        from destiny_bot.tts import catalog  # what every voice engine imports first
-        print("ORT_DISABLE_TELEMETRY=" + os.environ.get("ORT_DISABLE_TELEMETRY", ""))
-        import onnxruntime
-        """,
-        env,
-    )
+    strace = shutil.which("strace") if sys.platform.startswith("linux") else None
+    trace = tmp_path / "connect.log"
+    if strace is not None:
+        command = [strace, "-f", "-qq", "-e", "trace=connect", "-o", str(trace), sys.executable, "-c", textwrap.dedent(code)]
+        result = subprocess.run(command, env={**env, "PYTHONPATH": str(SRC)}, capture_output=True, text=True,
+                                timeout=120, check=False)
+        if result.returncode != 0 and "ptrace" in result.stderr.lower():
+            strace = None  # not allowed to trace here: fall back to the file check alone
+            result = _run_python(code, env)
+    else:
+        result = _run_python(code, env)
     assert result.returncode == 0, result.stderr
-    assert "ORT_DISABLE_TELEMETRY=1" in result.stdout
-    leftovers = [p for p in home.rglob("*") if "DeveloperTools" in str(p) or "onnxruntime" in p.name]
+    leftovers = [str(p) for p in home.rglob("*") if "DeveloperTools" in str(p) or "onnxruntime" in p.name]
     assert leftovers == []
+    if strace is not None:
+        # The process needs no network at all: any IPv4/IPv6 connect (DNS included) is a leak.
+        connects = [line for line in trace.read_text().splitlines() if "AF_INET" in line]
+        assert connects == []
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX permissions (on Windows %LOCALAPPDATA% is per-user)")
