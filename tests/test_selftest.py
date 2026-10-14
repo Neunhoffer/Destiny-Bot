@@ -96,7 +96,9 @@ def test_silent_and_short_audio_is_rejected():
     silent = selftest._wav_stats(AudioClip(make_wav(1.0, amplitude=0), "audio/wav"))
     assert "silent" in selftest._valid_speech(silent)
     short = selftest._wav_stats(AudioClip(make_wav(0.1), "audio/wav"))
-    assert "only 0.10 s" in selftest._valid_speech(short)
+    assert "only 0.10 s of audio (22050 Hz" in selftest._valid_speech(short)
+    empty = selftest._wav_stats(AudioClip(make_wav(0.2, amplitude=0), "audio/wav"))
+    assert "only 0.20 s of silence" in selftest._valid_speech(empty)
 
 
 def test_mp3_is_only_checked_for_size():

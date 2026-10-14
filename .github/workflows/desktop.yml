@@ -97,6 +97,7 @@ jobs:
           $t = Start-Process $exe -ArgumentList '--self-test' -Wait -PassThru
           Get-Content (Join-Path $env:DESTINY_HOME 'logs\self-test.txt')
           Copy-Item (Join-Path $env:DESTINY_HOME 'logs\self-test.json') dist\self-test-windows-installed.json
+          python -c "import json, sys; r = json.load(open(sys.argv[1], encoding='utf-8')); print(json.dumps({k: r.get(k) for k in ('synthesis', 'window', 'environment')}, indent=1))" dist\self-test-windows-installed.json
           if ($t.ExitCode -ne 0) { throw "The installed app's self-test failed ($($t.ExitCode))" }
 
       - name: Open the app window, open it again, close both

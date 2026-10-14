@@ -73,6 +73,20 @@ jobs:
           DESTINY_EXTRA_VOICE_DIRS: ${{ env.TEST_VOICES }}
         run: python -m destiny_bot self-test
 
+      - name: Show the voice timings and Windows voices
+        if: always()
+        shell: python
+        env:
+          DESTINY_HOME: ${{ runner.temp }}/athena-self-test
+        run: |
+          import json, os
+          from pathlib import Path
+          path = Path(os.environ["DESTINY_HOME"]) / "logs" / "self-test.json"
+          if path.is_file():
+              report = json.loads(path.read_text(encoding="utf-8"))
+              keys = ("synthesis", "windows_voices", "window")
+              print(json.dumps({k: report.get(k) for k in keys if k in report}, indent=1))
+
       - name: Upload the self-test report
         if: always()
         uses: actions/upload-artifact@v4
