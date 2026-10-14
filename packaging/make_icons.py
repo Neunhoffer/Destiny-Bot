@@ -183,6 +183,39 @@ def write_icons(out: Path) -> list[Path]:
     return [ico_path, icns_path, png_path]
 
 
+WIZARD_SCALES = (100, 125, 150, 200)
+
+
+def write_wizard_images(out: Path) -> list[Path]:
+    """Inno Setup wizard images (24-bit BMP) for each display scale.
+
+    small-<scale>.bmp: the icon in the wizard's top-right corner (55 px at 100%).
+    large-<scale>.bmp: the side panel of the finish page (164 x 314 px at 100%).
+    """
+    out.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    for scale in WIZARD_SCALES:
+        side = round(55 * scale / 100)
+        small = Image.new("RGB", (side, side), WHITE)
+        small.paste(icon := render(side), (0, 0), icon)
+        path = out / f"small-{scale}.bmp"
+        small.save(path, format="BMP")
+        written.append(path)
+
+        width, height = round(164 * scale / 100), round(314 * scale / 100)
+        panel = Image.new("RGB", (1, height))
+        for y in range(height):
+            t = y / max(height - 1, 1)
+            panel.putpixel((0, y), tuple(round(a + (b - a) * t) for a, b in zip(TOP, BOTTOM)))
+        panel = panel.resize((width, height))
+        art = render(round(width * 0.62))
+        panel.paste(art, ((width - art.width) // 2, round(height * 0.28)), art)
+        path = out / f"large-{scale}.bmp"
+        panel.save(path, format="BMP")
+        written.append(path)
+    return written
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", type=Path, default=HERE / "icons", help="output folder (default packaging/icons)")

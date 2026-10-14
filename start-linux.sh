@@ -1,8 +1,8 @@
 #!/bin/bash
-# Destiny Bot launcher for Linux: run ./start-linux.sh
+# Athena launcher for Linux: run ./start-linux.sh
 # First run: creates a private Python environment in this folder (.venv), installs
-# Destiny Bot, and downloads a natural offline voice (~60 MB). All books, settings
-# and audio stay in the "data" folder next to this file.
+# Athena, downloads a natural offline voice (~60 MB) and adds an Athena shortcut
+# (once). All books, settings and audio stay in the "data" folder next to this file.
 cd "$(dirname "$0")" || exit 1
 export DESTINY_HOME="$PWD/data"
 VENV="$PWD/.venv"
@@ -20,10 +20,10 @@ find_python() {
 
 if [ ! -f "$VENV/destiny-installed.txt" ]; then
   echo
-  echo "  Setting up Destiny Bot for the first time. This takes a few minutes..."
+  echo "  Setting up Athena for the first time. This takes a few minutes..."
   echo
   PY="$(find_python)" || {
-    echo "  Destiny Bot needs Python 3.10 or newer."
+    echo "  Athena needs Python 3.10 or newer."
     echo "  Install it with your package manager (for example: sudo apt install python3 python3-venv),"
     echo "  then run this script again."
     read -r -p "  Press Return to close."
@@ -42,6 +42,8 @@ if [ ! -f "$VENV/destiny-installed.txt" ]; then
   # The natural offline voices are optional: keep going if this computer can't install them.
   "$VENV/bin/python" -m pip install "piper-tts>=1.3" ||
     echo "  Note: natural offline voices aren't available on this computer; the system voice will be used."
+  # The app window is optional too: without it Athena opens in a browser window.
+  "$VENV/bin/python" -m pip install "pywebview>=5.0" || true
   echo installed > "$VENV/destiny-installed.txt"
 fi
 
@@ -50,4 +52,9 @@ if ! ls "$DESTINY_HOME"/voices/piper/*.onnx >/dev/null 2>&1; then
   "$VENV/bin/python" -m destiny_bot voices download en_US-lessac-medium
 fi
 
-exec "$VENV/bin/python" -m destiny_bot serve
+if [ ! -f "$VENV/destiny-shortcut.txt" ]; then
+  echo "  Adding an Athena shortcut to your applications menu and desktop..."
+  "$VENV/bin/python" -m destiny_bot shortcut && echo created > "$VENV/destiny-shortcut.txt"
+fi
+
+exec "$VENV/bin/python" -m destiny_bot app

@@ -409,7 +409,7 @@ def _show_error(message: str) -> None:
                 return
     except Exception as exc:  # the dialog is a courtesy; the log has the details either way
         log.warning("Couldn't show the error dialog: %s", exc)
-    if sys.stderr is not None:
+    if sys.stderr is not None and sys.stderr is not _log_stream:  # the log already has it
         print(message, file=sys.stderr)
 
 
@@ -734,7 +734,10 @@ def show_window(url: str, *, wait: bool = True) -> str:
             return "app-browser"
 
     if not _open_default_browser(url):
-        raise RuntimeError(f"Couldn't open a window for Athena. Open {url} in your web browser.")
+        raise RuntimeError(
+            "Athena couldn't open its window because no web browser was found. "
+            "Install Microsoft Edge or Google Chrome, then open Athena again."
+        )
     log.info("Showed the reader in the default browser")
     if wait:
         print(f"Athena is running at {url} (press Ctrl+C to stop)", flush=True)
@@ -799,7 +802,7 @@ def run_app(*, port: int = 8765) -> int:
             return 0
         log.info("Athena is already running at %s; opening another window onto it", url)
         try:
-            show_window(url, wait=True)
+            show_window(url, wait=False)  # the other copy owns the server; a native window still blocks
         except Exception as exc:
             return _fatal(exc, log_path)
         return 0

@@ -131,7 +131,9 @@ class KokoroEngine(TTSEngine):
     label = "Kokoro (most natural, offline)"
     online = False
 
-    def __init__(self, voices_dir: Path | None = None, *, variant: str | None = None, threads: int | None = None) -> None:
+    def __init__(
+        self, voices_dir: Path | None = None, *, variant: str | None = None, threads: int | None = None
+    ) -> None:
         self._voices_dir = voices_dir  # None: downloaded + bundled folders
         self._variant = variant
         self._threads = threads
@@ -191,7 +193,8 @@ class KokoroEngine(TTSEngine):
         kokoro = self._get(files)
         try:
             with self._synth_lock:
-                samples, sample_rate = kokoro.create(text, voice=voice_id, speed=native, lang=_LANGUAGES[voice_id[0]][0])
+                lang = _LANGUAGES[voice_id[0]][0]
+                samples, sample_rate = kokoro.create(text, voice=voice_id, speed=native, lang=lang)
         except ValueError as exc:
             if "phonemes" in str(exc) or "Nothing to synthesize" in str(exc):
                 return _silence_clip()  # nothing speakable (e.g. only punctuation)

@@ -351,6 +351,7 @@ def _load(doc: pymupdf.Document, path: Path, source_name: str, ocr: bool, progre
         else:
             chunks.extend(_page_chunks(pg, stats))
     _drop_repeated_ocr_margins(chunks)
+    _mark_ocr_headings(chunks)
     _classify(chunks, stats)
     _assign_heading_levels(chunks)
     chunks = _join_heading_labels(chunks)
@@ -969,33 +970,64 @@ def _ocr_chunks(pg: _Page, stats: _Stats) -> list[_Chunk]:
             raw=[para],
         )
         ch.text = clean_display_text(para)
-        if ch.text and ch.text[0] in _BULLETS:
+        if ch.text and (ch.text[0] in _BULLETS or _DASH_BULLET_RE.match(ch.text)):
             ch.kind = BlockKind.LIST_ITEM
             ch.text = ch.text[1:].strip()
+        elif _is_caption_text(ch.text):
+            ch.kind = BlockKind.CAPTION
+            ch.is_float = True
         ch.after_break = k == 0
         out.append(ch)
     return out
 
 
+def _mark_ocr_headings(chunks: list[_Chunk]) -> None:
+    """OCR gives no font sizes: treat a short title-like line before a long paragraph as a heading."""
+    for k, ch in enumerate(chunks):
+        if ch.col[0] != "ocr" or ch.kind != BlockKind.PARAGRAPH or "\n" in ch.raw[0]:
+            continue
+        nxt = chunks[k + 1] if k + 1 < len(chunks) else None
+        prev = chunks[k - 1] if k else None
+        if nxt is None or nxt.page != ch.page or nxt.kind != BlockKind.PARAGRAPH or len(nxt.text) < 150:
+            continue
+        if prev is not None and prev.page == ch.page and (len(prev.text) < 60 or not _ends_terminal(prev.text)):
+            continue  # a cluster of short lines (diagram labels) or the middle of a sentence
+        text = ch.text
+        words = text.split()
+        if not 1 <= len(words) <= 8 or _ends_terminal(text.rstrip("?")) or not text[0].isupper() and not text[0].isdigit():
+            continue
+        if not re.search(r"[^\W\d_]{4,}", text):
+            continue
+        long_words = [w for w in words if len(re.sub(r"\W", "", w)) >= 4]
+        title_case = sum(1 for w in long_words if w[0].isupper()) >= 0.6 * max(len(long_words), 1)
+        numbered = bool(_CHAPTERISH_RE.match(text) or _SECTION_NUM_RE.match(text))
+        if title_case or numbered or len(words) <= 3:
+            ch.kind = BlockKind.HEADING
+            ch.level = 1 if _CHAPTERISH_RE.match(text) else 2
+            ch.style = ("ocr",)
+
+
 def _drop_repeated_ocr_margins(chunks: list[_Chunk]) -> None:
-    """Remove running headers/footers that OCR picked up (first/last short paragraph of each page)."""
+    """Remove running headers/footers that OCR picked up (short paragraphs repeated at page edges)."""
     by_page: dict[int, list[_Chunk]] = defaultdict(list)
     for ch in chunks:
         if ch.col[0] == "ocr":
             by_page[ch.page].append(ch)
     if len(by_page) < 3:
         return
+
+    def candidate(ch: _Chunk) -> bool:
+        return len(ch.text) <= 160 and ch.raw[0].count("\n") <= 1
+
     seen: dict[str, set[int]] = defaultdict(set)
     for page, items in by_page.items():
-        for ch in {id(items[0]): items[0], id(items[-1]): items[-1]}.values():
-            if len(ch.text) <= 80 and "\n" not in ch.raw[0]:
+        for ch in items[:2] + items[-2:]:
+            if candidate(ch):
                 seen[_margin_key(ch.text)].add(page)
-    bad = {k for k, v in seen.items() if len(v) >= 3 and k}
+    bad = {k for k, v in seen.items() if k and len(v) >= 3}
     if bad:
         chunks[:] = [
-            ch
-            for ch in chunks
-            if not (ch.col[0] == "ocr" and len(ch.text) <= 80 and "\n" not in ch.raw[0] and _margin_key(ch.text) in bad)
+            ch for ch in chunks if not (ch.col[0] == "ocr" and candidate(ch) and _margin_key(ch.text) in bad)
         ]
 
 
@@ -1703,9 +1735,14 @@ def _continues(
         if ln.x0 >= first.x0 + 0.3 * size and ln.x0 <= first.x0 + 8 * size:
             return True  # hanging indent continuation
         return abs(ln.x0 - first.x0) <= 2 and not closed
-    if ln.x0 > prev.x0 + 0.6 * size and ln.x0 - col_left < 0.4 * width and len(cur.lines) >= 1:
-        if not (len(cur.lines) == 1 and abs(ln.x0 - col_left) <= 2):
-            return False  # first-line indent of a new paragraph
+    centered = (
+        abs((prev.x0 + prev.x1) / 2 - (ln.x0 + ln.x1) / 2) < max(3.0, 0.02 * width)
+        and prev.x0 > col_left + size
+        and ln.x0 > col_left + size
+    )
+    display = size >= stats.body_size * 1.12  # heading-sized text has no first-line indents
+    if ln.x0 > prev.x0 + 0.6 * size and ln.x0 - col_left < 0.4 * width and not centered and not display:
+        return False  # first-line indent of a new paragraph
     short = prev.x1 < col_right - max(3 * prev.size, 0.15 * width)
     if short and _ends_terminal(prev.text):
         return False
@@ -1803,7 +1840,7 @@ def _heading_style(ch: _Chunk) -> tuple:
 
 def _assign_heading_levels(chunks: list[_Chunk]) -> None:
     """Rank heading styles (size, then bold, then numbering depth) into levels 1..6."""
-    heads = [ch for ch in chunks if ch.kind == BlockKind.HEADING]
+    heads = [ch for ch in chunks if ch.kind == BlockKind.HEADING and ch.style != ("ocr",)]
     if not heads:
         return
     sizes = sorted({ch.size for ch in heads}, reverse=True)
@@ -2019,8 +2056,9 @@ def _sections_from_outline(
             except (AttributeError, TypeError, ValueError):
                 to_y = None
         entries.append((lvl, etitle, page, to_y))
-    if not entries:
-        return None
+    entries = [e for e in entries if not _JUNK_TITLE_RE.search(e[1])]  # "chapter3.docx", "htmldoc797.html"
+    if sum(1 for e in entries if e[0] <= 2) < 2:
+        return None  # a single bookmark says nothing about the structure: use the headings
     if not blocks:
         return []
 

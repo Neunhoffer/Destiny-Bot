@@ -1624,8 +1624,18 @@ input[type="radio"] {
 .is-current-block {
   border-radius: 10px;
   background-color: var(--hl-bg) !important;
-  box-shadow: 0 0 0 6px var(--hl-bg), -6px 0 0 6px var(--hl-line);
+  box-shadow: 0 0 0 4px var(--hl-bg), 0 0 0 6px var(--hl-line);
   transition: background-color 0.25s ease, box-shadow 0.25s ease;
+}
+
+.table-wrap.is-current-block,
+pre.code.is-current-block {
+  box-shadow: 0 0 0 2px var(--hl-line);
+}
+
+.is-current-block thead th {
+  background: transparent;
+  border-bottom-color: var(--hl-line);
 }
 
 .section-title.is-current-block {

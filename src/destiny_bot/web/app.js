@@ -519,6 +519,7 @@ function playUrl(url) {
     audioWaiter?.resolve('cancelled');
     const waiter = { resolve, reject };
     audioWaiter = waiter;
+    audio.loop = false;
     audio.defaultPlaybackRate = 1; // the voice engine already produced the speed
     audio.src = url;
     audio.playbackRate = 1;
@@ -537,6 +538,53 @@ function stopAudioElement() {
   if (!audio.paused) audio.pause();
   waiter?.resolve('cancelled');
 }
+
+/** 6 s of 8-bit silence as a WAV blob. */
+function silentWav(seconds) {
+  const rate = 8000;
+  const frames = rate * seconds;
+  const buffer = new ArrayBuffer(44 + frames);
+  const view = new DataView(buffer);
+  const ascii = (offset, text) => {
+    for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i));
+  };
+  ascii(0, 'RIFF');
+  view.setUint32(4, 36 + frames, true);
+  ascii(8, 'WAVE');
+  ascii(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // mono
+  view.setUint32(24, rate, true);
+  view.setUint32(28, rate, true);
+  view.setUint16(32, 1, true);
+  view.setUint16(34, 8, true);
+  ascii(36, 'data');
+  view.setUint32(40, frames, true);
+  new Uint8Array(buffer, 44).fill(128);
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
+/**
+ * Browsers only route media keys (headphones, keyboards, the OS media panel) to a
+ * page while a media element plays, so while Web Audio speaks, the <audio> element
+ * loops silence to keep the Media Session active.
+ */
+const mediaKeeper = {
+  url: null,
+  start() {
+    if (!('mediaSession' in navigator)) return;
+    if (!this.url) this.url = URL.createObjectURL(silentWav(6));
+    audioWaiter?.resolve('cancelled');
+    audioWaiter = null;
+    audio.loop = true;
+    if (audio.src !== this.url) audio.src = this.url;
+    audio.play().catch(() => {});
+  },
+  stop() {
+    if (audio.loop && !audio.paused) audio.pause();
+  },
+};
 
 /** Fetched speech clips keyed by engine/voice/rate/text. LRU with bounded parallel prefetch. */
 const clips = {
@@ -1288,6 +1336,7 @@ function play() {
       hardStop();
       sched.start(state.index);
     }
+    mediaKeeper.start();
   } else {
     player.mode = 'sequential';
     hardStop();
@@ -1314,6 +1363,7 @@ function pause({ announceIt = true } = {}) {
   player.playing = false;
   if (player.mode === 'webaudio' && sched.active && webAudio.ctx) {
     webAudio.ctx.suspend().catch(() => {});
+    mediaKeeper.stop();
   } else {
     hardStop();
   }
@@ -2094,7 +2144,7 @@ function renderWarnings() {
 async function checkVoiceBanner() {
   const host = $('#banners');
   $('#voice-banner')?.remove();
-  if (local.get('voiceBannerDismissed', false) || !engineInfo('piper')) return;
+  if (local.get('voiceBannerDismissed', false)) return;
   let catalog = [];
   try {
     catalog = (await api('/api/voices/catalog')).voices || [];
@@ -2102,6 +2152,8 @@ async function checkVoiceBanner() {
     return;
   }
   if (!catalog.length || catalog.some((v) => v.installed)) return;
+  const pick = catalog.find(isRecommended) || catalog[0];
+  const size = pick.size_mb ? ` (about ${Math.round(pick.size_mb)} MB)` : '';
   const dismiss = () => {
     local.set('voiceBannerDismissed', true);
     $('#voice-banner')?.remove();
@@ -2110,7 +2162,7 @@ async function checkVoiceBanner() {
     icon('voice'),
     el('div', { class: 'notice-body' },
       el('p', { class: 'notice-title', text: 'Try a natural-sounding voice' }),
-      el('p', { text: 'Download a free voice that runs entirely on this computer (about 60 MB). It sounds much more natural than the built-in one.' }),
+      el('p', { text: `Download a free voice that runs entirely on this computer${size}. It sounds much more natural than the built-in one.` }),
       el('div', { class: 'notice-actions' },
         el('button', { type: 'button', class: 'btn btn-primary btn-small', onclick: () => openSettings('voice') }, 'Choose a voice'),
         el('button', { type: 'button', class: 'btn btn-ghost btn-small', onclick: dismiss }, 'Not now')))));
@@ -3307,12 +3359,12 @@ function renderSettingsVoice() {
   if (!select.options.length) select.append(el('option', { value: '', text: 'No voices available' }));
 }
 
+function isRecommended(voice) {
+  return typeof voice.recommended === 'boolean' ? voice.recommended : voice.id === 'en_US-lessac-medium';
+}
+
 async function loadCatalog() {
   const list = $('#catalog-list');
-  if (!engineInfo('piper')) {
-    list.replaceChildren(el('li', { class: 'hint', text: 'Natural voices are not available in this copy of Athena.' }));
-    return;
-  }
   try {
     settingsUI.catalog = (await api('/api/voices/catalog')).voices || [];
   } catch (err) {
@@ -3327,14 +3379,19 @@ function renderCatalog() {
   const catalog = settingsUI.catalog;
   const banner = $('#catalog-banner');
   banner.replaceChildren();
-  if (catalog.length && !catalog.some((v) => v.installed)) {
+  if (!catalog.length) {
+    list.replaceChildren(el('li', { class: 'hint', text: 'No downloadable voices are available in this copy of Athena.' }));
+    return;
+  }
+  if (!catalog.some((v) => v.installed)) {
+    const pick = catalog.find(isRecommended) || catalog[0];
     banner.append(el('div', { class: 'notice notice-accent' }, icon('info'),
       el('div', { class: 'notice-body' }, el('p', {
-        text: 'You don’t have a natural voice yet. We recommend Lessac: clear, friendly and about 60 MB. After downloading, everything stays offline.',
+        text: `You don’t have a natural voice yet. A good first choice is ${pick.name}${pick.size_mb ? ` (about ${Math.round(pick.size_mb)} MB)` : ''}. After downloading, everything stays offline.`,
       }))));
   }
   list.replaceChildren(...catalog.map((voice) => {
-    const recommended = voice.id === 'en_US-lessac-medium';
+    const recommended = isRecommended(voice);
     const job = settingsUI.voiceJobs.get(voice.id);
     let side;
     if (voice.installed) {
@@ -3356,7 +3413,9 @@ function renderCatalog() {
     const meta = [voice.language, voice.quality ? `${voice.quality} quality` : '', voice.size_mb ? `${Math.round(voice.size_mb)} MB` : ''].filter(Boolean).join(' · ');
     return el('li', { class: `catalog-item${recommended ? ' is-recommended' : ''}`, dataset: { voiceId: voice.id } },
       el('div', { class: 'catalog-text' },
-        el('div', { class: 'catalog-name' }, voice.name, recommended ? el('span', { class: 'badge badge-accent', text: 'Recommended' }) : null),
+        el('div', { class: 'catalog-name' }, voice.name,
+          recommended ? el('span', { class: 'badge badge-accent', text: 'Recommended' }) : null,
+          voice.engine && voice.engine !== 'piper' ? el('span', { class: 'badge', text: engineInfo(voice.engine)?.label?.split(' (')[0] || voice.engine }) : null),
         el('p', { class: 'catalog-meta', text: meta }),
         voice.description ? el('p', { class: 'catalog-desc', text: voice.description }) : null),
       el('div', { class: 'catalog-side' }, side));
