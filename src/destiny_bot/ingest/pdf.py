@@ -73,7 +73,9 @@ _REF_MARK_RE = re.compile(r"^[\d,\-–*†‡§¶]+$")
 _ROMAN_RE = re.compile(r"^(?=[ivxlcdm]+$)m{0,3}(?:cm|cd|d?c{0,3})(?:xc|xl|l?x{0,3})(?:ix|iv|v?i{0,3})$", re.I)
 _PAGE_ROMAN_RE = re.compile(r"^(?=[ivxlc]+$)c{0,3}(?:xc|xl|l?x{0,3})(?:ix|iv|v?i{0,3})$", re.I)  # i .. cccxcix
 _PAGE_NUM_RE = re.compile(
-    r"^(?:page|pg\.?|p\.)?\s*[-–—]?\s*(?P<n>\d{1,4}|[ivxlcdm]{1,8})\s*[-–—]?\s*(?:(?:of|/)\s*\d{1,4})?$", re.I
+    r"^[\[(]?(?:page|pg\.?|p\.)?\s*[-–—]?\s*(?P<n>\d{1,4}|[ivxlcdm]{1,8})\s*[-–—]?\s*(?:(?:of|/)\s*\d{1,4})?"
+    r"[\])]?\.?$",
+    re.I,
 )
 _PAGE_NUM_SIDE_RE = re.compile(
     r"^(?P<a>\d{1,4}|[ivxlcdm]{1,8})\s*[|•·]\s*\S.{0,120}$|^.{0,120}\S\s*[|•·]\s*(?P<b>\d{1,4}|[ivxlcdm]{1,8})$", re.I
@@ -212,6 +214,7 @@ class _Chunk:
 class _Stats:
     body_size: float = 10.0
     pitch: float = 1.2  # baseline-to-baseline distance / font size for body text
+    body_font: str = ""  # most used font (without the subset prefix)
 
 
 # --------------------------------------------------------------------------- public API
@@ -284,8 +287,9 @@ def _open_pdf(path: Path, display_name: str) -> pymupdf.Document:
     if doc.needs_pass and not doc.authenticate(""):
         doc.close()
         raise IngestError(
-            f"'{display_name}' is password-protected. Open it in a PDF reader with the password, "
-            "save an unprotected copy (for example with Print > Save as PDF), and import that copy."
+            f"This PDF is password-protected, so Destiny Bot can't read '{display_name}'. Open it in a "
+            "PDF reader with the password, save an unprotected copy (for example with Print > Save as PDF), "
+            "and import that copy."
         )
     if doc.page_count == 0:
         doc.close()
@@ -315,9 +319,14 @@ def _load(doc: pymupdf.Document, path: Path, source_name: str, ocr: bool, progre
         progress(0.92, "Organizing the text")
 
     _mark_headers_footers(pages, stats)
+    layouts = [[] if pg.ocr_paragraphs else _page_elements(pg) for pg in pages]
+    gutters = _page_gutters(layouts)
     chunks: list[_Chunk] = []
-    for pg in pages:
-        chunks.extend(_ocr_chunks(pg, stats) if pg.ocr_paragraphs else _page_chunks(pg, stats))
+    for pg, elems, page_gutters in zip(pages, layouts, gutters):
+        if pg.ocr_paragraphs:
+            chunks.extend(_ocr_chunks(pg, stats))
+        else:
+            chunks.extend(_page_chunks(pg, elems, page_gutters, stats))
     _drop_repeated_ocr_margins(chunks)
     _mark_ocr_headings(chunks)
     _classify(chunks, stats)
@@ -352,12 +361,15 @@ def _load(doc: pymupdf.Document, path: Path, source_name: str, ocr: bool, progre
     )
 
 
-def _read_pages(doc: pymupdf.Document, ocr: bool, progress: ProgressFn | None) -> tuple[list[_Page], _Stats, _ReadReport]:
+def _read_pages(
+    doc: pymupdf.Document, ocr: bool, progress: ProgressFn | None
+) -> tuple[list[_Page], _Stats, _ReadReport]:
     """Extract every page (OCR where the text layer is missing or undecodable) and body-text stats."""
     n = doc.page_count
     report = _ReadReport(ocr_enabled=ocr)
     pages: list[_Page] = []
     size_weights: Counter[float] = Counter()
+    font_weights: Counter[str] = Counter()
     pitch_samples: list[float] = []
     ocr_state: dict[str, object] = {}
     for i in range(n):
@@ -366,6 +378,8 @@ def _read_pages(doc: pymupdf.Document, ocr: bool, progress: ProgressFn | None) -
         try:
             page = doc[i]
             pg = _extract_page(page, i, size_weights, pitch_samples)
+            for ln in pg.lines:
+                font_weights[_line_font(ln)] += ln.chars
         except Exception:
             report.failed.append(i)
             pages.append(_Page(index=i, width=612, height=792))
@@ -396,7 +410,14 @@ def _read_pages(doc: pymupdf.Document, ocr: bool, progress: ProgressFn | None) -
     if len(pitch_samples) >= 3:
         pitch_samples.sort()
         stats.pitch = min(max(pitch_samples[len(pitch_samples) // 2], 1.0), 3.0)
+    if font_weights:
+        stats.body_font = font_weights.most_common(1)[0][0]
     return pages, stats, report
+
+
+def _line_font(line: _Line) -> str:
+    """The font used for most of a line's characters (without the subset prefix)."""
+    return max(line.spans, key=lambda sp: len(sp[0].strip()))[3].split("+", 1)[-1]
 
 
 def _warnings(r: _ReadReport, *, has_text: bool) -> list[str]:
@@ -1075,7 +1096,9 @@ def _mark_ocr_headings(chunks: list[_Chunk]) -> None:
             continue  # a cluster of short lines (diagram labels) or the middle of a sentence
         text = ch.text
         words = text.split()
-        if not 1 <= len(words) <= 8 or _ends_terminal(text.rstrip("?")) or not text[0].isupper() and not text[0].isdigit():
+        if not 1 <= len(words) <= 8 or _ends_terminal(text.rstrip("?")):
+            continue
+        if not (text[0].isupper() or text[0].isdigit()):
             continue
         if not re.search(r"[^\W\d_]{4,}", text) or re.search(r"[b-df-hj-np-tv-z]{6,}", text, re.I):
             continue  # no real word, or an unpronounceable OCR misread
@@ -1136,6 +1159,20 @@ def _is_page_number(text: str) -> bool:
     return False
 
 
+def _starts_row(ln: _Line, lines: list[_Line]) -> bool:
+    """Is there text right after ``ln`` on the same row (as after a list number)?"""
+    return any(0 <= other.x0 - ln.x1 <= 2.5 * ln.size for other in _same_row(ln, lines))
+
+
+def _ends_row(ln: _Line, lines: list[_Line]) -> bool:
+    """Is there text right before ``ln`` on the same row (a list number, a bullet)?"""
+    return any(0 <= ln.x0 - other.x1 <= 2.5 * ln.size for other in _same_row(ln, lines))
+
+
+def _same_row(ln: _Line, lines: list[_Line]) -> list[_Line]:
+    return [o for o in lines if o is not ln and min(o.y1, ln.y1) - max(o.y0, ln.y0) >= 0.5 * (ln.y1 - ln.y0)]
+
+
 def _isolated(ln: _Line, lines: list[_Line], zone: str, stats: _Stats) -> bool:
     """Is a margin line set apart from the body (extra space towards the page's middle)?"""
     best: tuple[float, float] | None = None
@@ -1181,19 +1218,21 @@ def _mark_headers_footers(pages: list[_Page], stats: _Stats) -> None:
             if not _isolated(ln, pg.lines, zone, stats):
                 continue  # sits in the flow of the body text
             if _is_page_number(ln.text):
-                ln.drop = True
+                if not _starts_row(ln, pg.lines):  # "6." followed by its list item is not a page number
+                    ln.drop = True
                 continue
             if ln.size > stats.body_size * 1.6:
                 continue  # big display text (a chapter title) is never a running header
             key = (zone, _margin_key(ln.text), round(ln.size))
-            if not key[1]:
-                continue
+            if not any(c.isalpha() for c in key[1]):
+                continue  # numbers alone are only dropped as page numbers (above)
             edge = ln.y0 if zone == "top" else pg.height - ln.y1
             occurrences[key].append((pg.index, edge))
             candidates.append((key, ln))
             outermost = ln.y0 <= top_y + 2 if zone == "top" else ln.y1 >= bottom_y - 2
-            if outermost:
-                font = max(ln.spans, key=lambda sp: len(sp[0]))[3].split("+", 1)[-1]
+            font = _line_font(ln)
+            styled = ln.size <= stats.body_size * 0.95 or ln.caps or ln.italic or font != stats.body_font
+            if outermost and styled and len(ln.text) <= 80 and not _ends_row(ln, pg.lines):
                 slot = (zone, round(edge / 3), round(ln.size * 2), font)
                 slots[slot].add(pg.index)
                 slot_lines.append((slot, ln))
@@ -1225,7 +1264,8 @@ def _mark_headers_footers(pages: list[_Page], stats: _Stats) -> None:
 # --------------------------------------------------------------------------- page layout
 
 
-def _page_chunks(pg: _Page, stats: _Stats) -> list[_Chunk]:
+def _page_elements(pg: _Page) -> list[_Elem]:
+    """The page's content as layout elements: text lines, framed boxes and tables."""
     lines = [ln for ln in pg.lines if not ln.drop]
     if not lines and not pg.tables:
         return []
@@ -1257,15 +1297,23 @@ def _page_chunks(pg: _Page, stats: _Stats) -> list[_Chunk]:
         elems.append(_Elem("box", b[0], b[1], b[2], b[3], lines=blines))
     for t in pg.tables:
         elems.append(_Elem("table", *t.bbox, table=t))
+    return elems
 
-    groups = _reading_order(elems, pg)
+
+def _page_chunks(
+    pg: _Page, elems: list[_Elem], gutters: list[tuple[float, float]], stats: _Stats
+) -> list[_Chunk]:
+    """Chunks of one page in reading order."""
+    if not elems:
+        return []
+    groups = _reading_order(elems, gutters)
     _mark_footnotes(groups, stats, pg.height)
 
     chunks: list[_Chunk] = []
     interrupted = False
     for key, items in groups:
         group_lines = [e.line for e in items if e.kind == "line"]
-        bounds = (min(ln.x0 for ln in group_lines), max(ln.x1 for ln in group_lines)) if group_lines else None
+        bounds = _column_geometry(group_lines) if group_lines else None
         pending_lines: list[_Line] = []
         for el in items:
             if el.kind == "line":
@@ -1323,11 +1371,10 @@ def _drop_figure_labels(lines: list[_Line], pg: _Page) -> list[_Line]:
     return out
 
 
-def _reading_order(elems: list[_Elem], pg: _Page) -> list[tuple[tuple, list[_Elem]]]:
+def _reading_order(elems: list[_Elem], gutters: list[tuple[float, float]]) -> list[tuple[tuple, list[_Elem]]]:
     """Order page elements by column. Returns groups (column key, elements in order)."""
     if not elems:
         return []
-    gutters = _detect_gutters(elems)
     if not gutters:
         return [((0, 0), _order_group(elems))]
     bounds = [min(e.x0 for e in elems) - 1]
@@ -1389,6 +1436,32 @@ def _reading_order(elems: list[_Elem], pg: _Page) -> list[tuple[tuple, list[_Ele
     if run:
         groups.append((("span", len(spanning)), _order_group(run)))
     return groups
+
+
+def _page_gutters(layouts: list[list[_Elem]]) -> list[list[tuple[float, float]]]:
+    """Column gutters of every page. A page whose own evidence is too thin (the last page
+    of a two-column article with three lines on the right) borrows a gutter found on
+    other pages when its text fits around it."""
+    found = [_detect_gutters(elems) if elems else [] for elems in layouts]
+    known = [g for gs in found if len(gs) == 1 for g in gs]
+    for k, elems in enumerate(layouts):
+        if found[k] or not known or not elems:
+            continue
+        for g in known:
+            if _fits_gutter(elems, g):
+                found[k] = [g]
+                break
+    return found
+
+
+def _fits_gutter(elems: list[_Elem], gutter: tuple[float, float]) -> bool:
+    lines = [e for e in elems if e.kind == "line"]
+    left = [e for e in lines if e.x1 <= gutter[0] + 2]
+    right = [e for e in lines if e.x0 >= gutter[1] - 2]
+    crossing = len(lines) - len(left) - len(right)
+    if not left or not right or crossing > 0.15 * len(lines):
+        return False
+    return any(min(a.y1, b.y1) - max(a.y0, b.y0) > 0 for a in left for b in right)
 
 
 def _side_by_side(cols: list[list[_Elem]]) -> bool:
@@ -1684,20 +1757,41 @@ def _is_equation_line(line: _Line) -> bool:
     return math_chars >= max(2, 0.3 * line.chars) and (line.operators > 0 or line.math >= 0.5)
 
 
+def _column_geometry(lines: list[_Line]) -> tuple[float, float, float]:
+    """(left edge, right edge, raggedness) of a column of text lines.
+
+    Raggedness is how far full lines typically fall short of the right edge: about
+    zero for justified text, a few words' width for ragged-right text.
+    """
+    left = min(ln.x0 for ln in lines)
+    right = max(ln.x1 for ln in lines)
+    ends = sorted(ln.x1 for ln in lines if ln.x1 - ln.x0 >= 0.5 * (right - left))
+    ragged = 0.0
+    if len(ends) >= 5:
+        ragged = min(ends[int(0.9 * (len(ends) - 1))] - ends[int(0.25 * (len(ends) - 1))], 0.35 * (right - left))
+    return left, right, ragged
+
+
+def _is_short(line: _Line, col_right: float, width: float, ragged: float) -> bool:
+    """Does ``line`` stop clearly before the column's right edge (a paragraph's last line)?"""
+    return line.x1 < col_right - max(3 * line.size, 0.15 * width, 1.8 * ragged + 0.5 * line.size)
+
+
 def _group_lines(
     lines: list[_Line],
     col: tuple,
     stats: _Stats,
     interrupted: bool,
-    bounds: tuple[float, float] | None = None,
+    bounds: tuple[float, float, float] | None = None,
 ) -> list[_Chunk]:
     """Group a column's ordered lines into chunks using spacing, indentation and style.
 
-    ``bounds`` is the column's (left, right) edge when ``lines`` is only part of it.
+    ``bounds`` is the column's geometry (see :func:`_column_geometry`) when ``lines``
+    is only part of it.
     """
     if not lines:
         return []
-    col_left, col_right = bounds or (min(ln.x0 for ln in lines), max(ln.x1 for ln in lines))
+    col_left, col_right, ragged = bounds or _column_geometry(lines)
     width = max(col_right - col_left, 1.0)
     chunks: list[_Chunk] = []
     cur: _Chunk | None = None
@@ -1708,7 +1802,7 @@ def _group_lines(
         marker = _list_marker(ln)
         if cur is not None:
             prev = cur.lines[-1]
-            if _continues(cur, prev, ln, eq, cur_eq, marker, cur_list, col_left, col_right, width, stats):
+            if _continues(cur, prev, ln, eq, cur_eq, marker, cur_list, (col_left, col_right, ragged), stats):
                 cur.lines.append(ln)
                 continue
         cur = _Chunk(
@@ -1724,7 +1818,7 @@ def _group_lines(
             top=not chunks,
             indent=ln.x0 - col_left,
         )
-        cur_list = marker is not None and (marker == "bullet" or _closed_before(chunks, ln, col_right, width))
+        cur_list = marker is not None and (marker == "bullet" or _closed_before(chunks, col_right, width, ragged))
         cur_eq = eq
         if cur_list:
             cur.kind = BlockKind.LIST_ITEM
@@ -1753,14 +1847,14 @@ def _group_lines(
     return chunks
 
 
-def _closed_before(chunks: list[_Chunk], line: _Line, col_right: float, width: float) -> bool:
-    """Was the line before ``line`` the end of a sentence/item (so a numbered line starts a list)?"""
+def _closed_before(chunks: list[_Chunk], col_right: float, width: float, ragged: float) -> bool:
+    """Did the previous line end a sentence or item (so a numbered line starts a list)?"""
     if not chunks:
         return True
     prev = chunks[-1].lines[-1]
     if chunks[-1].kind == BlockKind.LIST_ITEM:
         return True
-    return _ends_terminal(prev.text) or prev.x1 < col_right - max(3 * prev.size, 0.15 * width)
+    return _ends_terminal(prev.text) or _is_short(prev, col_right, width, ragged)
 
 
 def _continues(
@@ -1771,11 +1865,12 @@ def _continues(
     cur_eq: bool,
     marker: str | None,
     cur_list: bool,
-    col_left: float,
-    col_right: float,
-    width: float,
+    geometry: tuple[float, float, float],
     stats: _Stats,
 ) -> bool:
+    """Does line ``ln`` continue chunk ``cur`` (whose last line is ``prev``)?"""
+    col_left, col_right, ragged = geometry
+    width = max(col_right - col_left, 1.0)
     if ln.role != prev.role:
         return False
     if eq != cur_eq:
@@ -1783,7 +1878,8 @@ def _continues(
     size = max(prev.size, ln.size)
     if abs(prev.size - ln.size) > max(0.6, 0.08 * size):
         return False
-    closed = _ends_terminal(prev.text) or prev.x1 < col_right - max(3 * prev.size, 0.15 * width)
+    short = _is_short(prev, col_right, width, ragged)
+    closed = short or _ends_terminal(prev.text)
     if prev.mono != ln.mono and (closed or cur.lines[0].mono or len(ln.text) > 60):
         return False  # a code block starts or ends (a short mono line mid-sentence is inline code)
     if _LEADER_RE.search(prev.text) or _LEADER_RE.search(ln.text):
@@ -1820,7 +1916,6 @@ def _continues(
     display = size >= stats.body_size * 1.12  # heading-sized text has no first-line indents
     if ln.x0 > prev.x0 + 0.6 * size and ln.x0 - col_left < 0.4 * width and not centered and not display:
         return False  # first-line indent of a new paragraph
-    short = prev.x1 < col_right - max(3 * prev.size, 0.15 * width)
     if short and _ends_terminal(prev.text):
         return False
     return True
@@ -2108,6 +2203,15 @@ def _titles_match(heading: str, title: str) -> bool:
     return SequenceMatcher(None, a, b).ratio() >= 0.85
 
 
+def _is_title_block(block: Block, title: str) -> bool:
+    """Is ``block`` the visible heading of an outline entry called ``title``?"""
+    if len(block.text) > 200:
+        return False
+    if block.kind != BlockKind.HEADING and len(block.text) > 1.5 * len(title) + 10:
+        return False  # a paragraph that merely mentions the title
+    return _titles_match(block.text, title)
+
+
 def _sections_from_outline(
     doc: pymupdf.Document, blocks: list[Block], positions: list[tuple[int, float]], title: str
 ) -> list[Section] | None:
@@ -2147,11 +2251,9 @@ def _sections_from_outline(
         idx = _find_outline_block(blocks, positions, etitle, page, to_y, cursor if top else 0)
         if idx is None:
             continue
-        b = blocks[idx]
-        if idx < len(blocks) and b.page == page and _titles_match(b.text, etitle) and len(b.text) <= 200:
-            if b.kind != BlockKind.HEADING:
-                b.kind = BlockKind.HEADING
-            b.level = min(lvl, 6)
+        if idx < len(blocks) and blocks[idx].page == page and _is_title_block(blocks[idx], etitle):
+            blocks[idx].kind = BlockKind.HEADING  # (an undetected heading becomes one)
+            blocks[idx].level = min(lvl, 6)
             matched.add(idx)
         if top:
             splits.append((idx, lvl, etitle))
@@ -2187,10 +2289,7 @@ def _find_outline_block(
         return later[0] if later else (len(blocks) if start < len(blocks) else None)
     for want_heading in (True, False):
         for i in on_page:
-            b = blocks[i]
-            if want_heading != (b.kind == BlockKind.HEADING):
-                continue
-            if len(b.text) <= 200 and _titles_match(b.text, title):
+            if want_heading == (blocks[i].kind == BlockKind.HEADING) and _is_title_block(blocks[i], title):
                 return i
     norm = _norm_title(title)
     if len(norm) >= 6:

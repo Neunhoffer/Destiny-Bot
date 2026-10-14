@@ -150,8 +150,13 @@ The builds aren't signed, so:
 - `.github/workflows/desktop.yml` runs on changes to `packaging/` or `src/`, on
   `v*` tags, and on demand. The Windows job builds the installer and runs the
   smoke test. It then installs the app silently, checks the Desktop and Start
-  menu shortcuts and the Apps & features entry, runs the installed app's full
-  `--self-test`, and uninstalls it. It uploads `Athena-Setup-windows` (the
+  menu shortcuts and the Apps & features entry, and runs the installed app's
+  full `--self-test`. Next, `check_window.py` starts `Athena.exe` the way a
+  double-click does. It checks that the "Athena" window and WebView2 come up
+  and takes a screenshot. It starts the app a second time and checks that this
+  opens a second window onto the same server. It then closes both windows and
+  checks that the app quits and removes its lock file. Finally the job
+  uninstalls the app. It uploads `Athena-Setup-windows` (the
   installer) and `athena-windows-self-test` (the JSON reports). On a `v*` tag it
   attaches both to the GitHub Release. The macOS job runs only on demand, to
   save minutes, and uploads the `.dmg`.

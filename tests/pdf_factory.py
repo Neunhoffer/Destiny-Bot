@@ -130,7 +130,9 @@ class PdfBuilder:
         self._draw_line(text, x if x is not None else self.x0, baseline, size, font)
         self.y += pitch
 
-    def _draw_line(self, text: str, x: float, baseline: float, size: float, font: str, justify_to: float | None = None) -> None:
+    def _draw_line(
+        self, text: str, x: float, baseline: float, size: float, font: str, justify_to: float | None = None
+    ) -> None:
         if "^" not in text and justify_to is None:
             self.text((x, baseline), text, font=font, size=size)
             return
@@ -199,7 +201,9 @@ class PdfBuilder:
             self.y += pitch
         self.y += self.body * 0.6 if space_after is None else space_after
 
-    def lines(self, lines: list[str], *, size: float | None = None, font: str | None = None, space_after: float = 6) -> None:
+    def lines(
+        self, lines: list[str], *, size: float | None = None, font: str | None = None, space_after: float = 6
+    ) -> None:
         """Place exact lines (to control line breaks, e.g. for hyphenation tests)."""
         for ln in lines:
             self.line(ln, size=size, font=font)

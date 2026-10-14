@@ -561,6 +561,20 @@ def _supported(func: Callable[..., Any], kwargs: dict[str, Any]) -> dict[str, An
     return {k: v for k, v in kwargs.items() if k in params}
 
 
+def _window_size(webview: Any) -> tuple[int, int]:
+    """The preferred window size, shrunk to fit small screens (e.g. 1366x768 laptops at 125%)."""
+    width, height = WINDOW_SIZE
+    try:
+        screens = list(getattr(webview, "screens", None) or [])
+        screen_w, screen_h = int(screens[0].width), int(screens[0].height)
+    except Exception:  # no screen information: keep the default size
+        return width, height
+    if screen_w > 0 and screen_h > 0:
+        width = max(MIN_WINDOW_SIZE[0], min(width, int(screen_w * 0.92)))
+        height = max(MIN_WINDOW_SIZE[1], min(height, int(screen_h * 0.85)))  # room for the taskbar
+    return width, height
+
+
 def _run_webview(webview: Any, url: str) -> None:
     """Show ``url`` in a native window; returns when the window is closed."""
     try:
@@ -569,7 +583,7 @@ def _run_webview(webview: Any, url: str) -> None:
         pass
     storage = config.data_dir() / "webview"
     storage.mkdir(parents=True, exist_ok=True)
-    width, height = WINDOW_SIZE
+    width, height = _window_size(webview)
     window_options = {
         "width": width,
         "height": height,

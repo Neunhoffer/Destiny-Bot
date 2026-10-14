@@ -75,7 +75,10 @@ def test_running_headers_footers_and_page_numbers_removed(tmp_path, footer):
     b.heading("Cells", size=20)
     for i in range(70):
         b.paragraph(para(rng, 3, f"P{i}"), first_indent=14)
-    b.decorate(header=lambda n: "Biology 101: Fall Edition" if n % 2 == 0 else "Chapter 3 Cells and Membranes", footer=footer)
+    b.decorate(
+        header=lambda n: "Biology 101: Fall Edition" if n % 2 == 0 else "Chapter 3 Cells and Membranes",
+        footer=footer,
+    )
     path = b.save(tmp_path / "hf.pdf")
     doc = load(path)
     assert doc.page_count >= 6
@@ -301,7 +304,8 @@ def test_no_false_heading_for_bold_words_and_labels(tmp_path):
     y = b.y + 11
     # A paragraph line that mixes bold and regular text
     b.page.insert_text((x, y), "Osmosis", fontname=BOLD, fontsize=11)
-    b.page.insert_text((x + text_width("Osmosis ", BOLD, 11), y), "is the diffusion of water across a membrane.", fontsize=11)
+    rest = "is the diffusion of water across a membrane."
+    b.page.insert_text((x + text_width("Osmosis ", BOLD, 11), y), rest, fontsize=11)
     b.y += 30
     b.paragraph("Water moves from low solute concentration to high solute concentration until it balances.")
     doc = load(b.save(tmp_path / "bold.pdf"))
@@ -405,7 +409,7 @@ def test_captions_footnotes_lists_and_equations(tmp_path):
     b.bullet("Active transport, which uses ATP to move molecules against their gradient and is therefore costly.")
     b.bullet("Bulk transport.", marker="▪")
     b.paragraph("Steps:", space_after=2)
-    b.lines(["1. The ligand binds.", "2. The receptor changes shape.", "a) the channel opens", "(ii) ions flow"], space_after=6)
+    b.lines(["1. The ligand binds.", "2. The receptor changes shape.", "a) the channel opens", "(ii) ions flow"])
     # A full-width line that wraps right before "2." (a number, not a list item).
     first = "Cells count the numbered steps in order, as shown in the laboratory protocol"
     while text_width(first + " of the", REGULAR, 11) < 0.95 * (b.x1 - b.x0):
@@ -498,7 +502,14 @@ def test_scanned_page_read_with_real_ocr(tmp_path):
     b.save(tmp_path / "text.pdf")
     scan = scanned_pdf(
         tmp_path / "scan.pdf",
-        [["Photosynthesis converts light energy", "into chemical energy stored in sugar.", "", "Plants release oxygen as a by-product."]],
+        [
+            [
+                "Photosynthesis converts light energy",
+                "into chemical energy stored in sugar.",
+                "",
+                "Plants release oxygen as a by-product.",
+            ]
+        ],
     )
     merged = pymupdf.open(tmp_path / "text.pdf")
     merged.insert_pdf(pymupdf.open(scan))
@@ -750,7 +761,10 @@ def test_textbook_like_integration(tmp_path):
     page_53 = len(b.doc)
     for i in range(8):
         b.paragraph(para(rng, 5, f"C{i}"), first_indent=12)
-    b.decorate(header=lambda n: "Chapter 5 The Working Cell" if n % 2 else "Campbell Essentials", footer=lambda n: str(n + 96))
+    b.decorate(
+        header=lambda n: "Chapter 5 The Working Cell" if n % 2 else "Campbell Essentials",
+        footer=lambda n: str(n + 96),
+    )
     toc = [
         [1, "Chapter 5 The Working Cell", 1],
         [2, "5.1 Membrane Structure", 1],
@@ -762,7 +776,12 @@ def test_textbook_like_integration(tmp_path):
     assert doc.page_count >= 3
     assert doc.title == "Chapter 5: The Working Cell"
     titles = [s.title for s in doc.sections]
-    assert titles[:4] == ["Chapter 5 The Working Cell", "5.1 Membrane Structure", "5.2 Passive Transport", "5.3 Active Transport"]
+    assert titles[:4] == [
+        "Chapter 5 The Working Cell",
+        "5.1 Membrane Structure",
+        "5.2 Passive Transport",
+        "5.3 Active Transport",
+    ]
     all_text = full_text(doc)
     assert "Campbell Essentials" not in all_text
     for n in range(97, 97 + doc.page_count):
@@ -817,7 +836,11 @@ def test_table_of_contents_entries(tmp_path):
 def test_code_with_comments_stays_one_block(tmp_path):
     b = PdfBuilder()
     b.paragraph("The loop below adds the numbers:")
-    rows = [("total = 0", "# start at zero"), ("for n in numbers:", "# visit each item"), ("    total += n", "# add it")]
+    rows = [
+        ("total = 0", "# start at zero"),
+        ("for n in numbers:", "# visit each item"),
+        ("    total += n", "# add it"),
+    ]
     for code, comment in rows:
         y = b.y + 10
         b.text((b.x0, y), code, font=MONO, size=10)
@@ -846,7 +869,8 @@ def test_vector_diagram_labels_are_dropped(tmp_path):
             b.page.draw_line((x - 38, y), (x - 12, y))
         if k < 8:
             b.page.draw_line((x, y + 12), (x, y + 48))
-    for label, (x, y) in [("Nucleus", (b.x0 + 10, top + 52)), ("Ribosome", (b.x0 + 160, top + 52)), ("ER", (b.x0 + 300, top + 110))]:
+    labels = [("Nucleus", b.x0 + 10, top + 52), ("Ribosome", b.x0 + 160, top + 52), ("ER", b.x0 + 300, top + 110)]
+    for label, x, y in labels:
         b.text((x, y), label, size=8)
     b.y = top + 150
     b.lines(["Figure 2.4 Parts of an animal cell."], size=9)
@@ -864,7 +888,11 @@ def test_booktabs_table_without_vertical_lines(tmp_path):
     x0, x1 = b.x0, b.x1
     y = b.y + 4
     cols = [x0 + 4, x0 + 150, x0 + 300]
-    rows = [["Process", "Energy", "Example"], ["Diffusion", "None", "Oxygen entering"], ["Pumping", "ATP", "Sodium leaving"]]
+    rows = [
+        ["Process", "Energy", "Example"],
+        ["Diffusion", "None", "Oxygen entering"],
+        ["Pumping", "ATP", "Sodium leaving"],
+    ]
     b.page.draw_line((x0, y), (x1, y), width=1)
     yy = y + 14
     for r, row in enumerate(rows):
@@ -927,7 +955,8 @@ def test_title_page_lines_fold_into_first_section(tmp_path):
         b.heading(name, size=14)
         b.paragraph(para(rng, 3))
     doc = load(b.save(tmp_path / "titlepage.pdf"))
-    assert [s.title for s in doc.sections] == ["Lecture Notes on Genetics", "Inheritance", "Mutations", "Gene Expression"]
+    titles = ["Lecture Notes on Genetics", "Inheritance", "Mutations", "Gene Expression"]
+    assert [s.title for s in doc.sections] == titles
     assert [bl.text for bl in doc.sections[0].blocks] == ["Lecture Notes on Genetics", "Dr. Maria Gomez September 2026"]
 
 
@@ -1002,7 +1031,9 @@ def test_ocr_running_headers_and_headings(tmp_path, monkeypatch):
         "Biology Reader 2026\n\nIntroduction\n\n" + "Cells are the units of life and they divide often. " * 5
         + "Around every cell\n\n7",
         "Biology Reader 2026\n\n" + "the membrane controls what enters the cell and what leaves it. " * 4 + "\n\n8",
-        "Biology Reader 2026\n\nTransport Across Membranes\n\n" + "Molecules move by diffusion and by active pumps. " * 5 + "\n\n9",
+        "Biology Reader 2026\n\nTransport Across Membranes\n\n"
+        + "Molecules move by diffusion and by active pumps. " * 5
+        + "\n\n9",
     ]
     calls = iter(pages_text)
     monkeypatch.setattr(pdf_mod, "_ocr_function", lambda: (lambda data, lang="eng": next(calls), ""))
@@ -1030,7 +1061,11 @@ def _line(*spans) -> pdf_mod._Line:
 
 
 def test_line_text_handles_icons_bullets_and_superscripts():
-    icon = _line(_span("", size=24, font="FontAwesome5Free-Solid"), _span("Note the version.", x0=30), _span(" Check it.", x0=120))
+    icon = _line(
+        _span("\uf05a", size=24, font="FontAwesome5Free-Solid"),  # an icon glyph (private use area)
+        _span("Note the version.", x0=30),
+        _span(" Check it.", x0=120),
+    )
     assert icon.text == "Note the version. Check it." and not icon.symbol_lead
     bullet = _line(_span("l", font="Wingdings"), _span("First point", x0=15))
     assert bullet.text == "First point" and bullet.symbol_lead
@@ -1048,9 +1083,44 @@ def test_line_text_handles_icons_bullets_and_superscripts():
 
 
 def test_page_number_and_margin_key_patterns():
-    for t in ["12", "xii", "Page 12", "page 3 of 10", "- 7 -", "12 | Chapter 3 Cells", "Chapter 3 | 12", "iv"]:
+    for t in ["12", "xii", "Page 12", "page 3 of 10", "- 7 -", "12 | Chapter 3 Cells", "Chapter 3 | 12", "iv", "[12]"]:
         assert pdf_mod._is_page_number(t), t
     for t in ["2026 Edition", "Chapter 3", "12 apples", "Figure 3", "mix"]:
         assert not pdf_mod._is_page_number(t), t
     assert pdf_mod._margin_key("Chapter 3 · Cells · 47") == pdf_mod._margin_key("Chapter 4 · Cells · 52")
     assert pdf_mod._margin_key("xii | Preface") == pdf_mod._margin_key("xiv | Preface")
+
+
+def test_outline_entries_past_the_text_and_mentions_in_paragraphs(tmp_path):
+    rng = random.Random(37)
+    b = PdfBuilder()
+    b.heading("Getting Started", size=16)
+    b.paragraph("This part explains Advanced Topics only briefly; " + para(rng, 2))
+    b.new_page()
+    b.paragraph("Advanced Topics")
+    b.paragraph(para(rng, 3))
+    b.new_page()  # an empty last page that the outline points at
+    toc = [[1, "Getting Started", 1], [1, "Advanced Topics", 2], [1, "Appendix", 3]]
+    doc = load(b.save(tmp_path / "outline2.pdf", toc=toc))
+    assert [s.title for s in doc.sections] == ["Getting Started", "Advanced Topics"]
+    first, second = doc.sections
+    assert first.blocks[1].kind == BlockKind.PARAGRAPH  # mentions the title, isn't it
+    assert second.blocks[0].kind == BlockKind.HEADING and second.blocks[0].text == "Advanced Topics"
+
+
+def test_numbered_item_at_top_of_page_is_not_a_page_number(tmp_path):
+    rng = random.Random(38)
+    b = PdfBuilder()
+    for page in range(4):
+        if page:
+            b.new_page()
+        b.text((b.x0, b.y + 11), f"{page + 1}.", size=11)  # a numbered step starts each page
+        b.line(f"Step {page + 1} " + sentence(rng, 6), x=b.x0 + 18)
+        b.space(14)
+        b.table([["Stage", "Place"], ["Glycolysis", "Cytoplasm"]])
+        b.paragraph(para(rng, 2))
+    b.decorate(footer=lambda n: f"{n}.")
+    doc = load(b.save(tmp_path / "steps.pdf"))
+    items = [bl.text for bl in blocks(doc) if bl.kind == BlockKind.LIST_ITEM]
+    assert [t.split()[:2] for t in items] == [[f"{n}.", "Step"] for n in range(1, 5)]
+    assert not any(bl.text.strip(".").isdigit() for bl in blocks(doc))

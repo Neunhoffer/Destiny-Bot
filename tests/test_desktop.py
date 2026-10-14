@@ -815,3 +815,49 @@ def test_cli_wires_to_these_functions():
     parser = cli.build_parser()
     assert parser.parse_args(["app", "--port", "9000"]).port == 9000
     assert parser.parse_args(["shortcut", "--no-start-menu"]).no_start_menu is True
+
+
+def test_icon_generator(tmp_path):
+    pytest.importorskip("PIL")
+    import importlib.util
+
+    from PIL import Image
+
+    spec = importlib.util.spec_from_file_location("make_icons", desktop._PROJECT_ROOT / "packaging" / "make_icons.py")
+    if spec is None or spec.loader is None:
+        pytest.skip("packaging/ isn't part of this installation")
+    make_icons = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(make_icons)
+
+    for size in (16, 32, 48, 256):
+        image = make_icons.render(size)
+        assert image.size == (size, size) and image.mode == "RGBA"
+        assert image.getpixel((0, 0))[3] == 0  # rounded corners are transparent
+        assert image.getpixel((size // 2, size - size // 4))[3] == 255
+    paths = make_icons.write_icons(tmp_path)
+    assert [p.name for p in paths] == ["icon.ico", "icon.icns", "icon-512.png"]
+    with Image.open(tmp_path / "icon.ico") as ico:
+        assert {(16, 16), (32, 32), (256, 256)} <= set(ico.info["sizes"])
+    wizard = make_icons.write_wizard_images(tmp_path / "wizard")
+    with Image.open(tmp_path / "wizard" / "small-100.bmp") as small:
+        assert small.size == (55, 55)
+    assert len(wizard) == 8
+
+
+@pytest.mark.parametrize(
+    ("screen", "expected"),
+    [((1920, 1080), (1280, 860)), ((1366, 768), (1256, 652)), ((1024, 768), (942, 652)), ((800, 600), (736, 600))],
+)
+def test_window_fits_small_screens(screen, expected):
+    fake = types.SimpleNamespace(screens=[types.SimpleNamespace(width=screen[0], height=screen[1])])
+    assert desktop._window_size(fake) == expected
+
+
+def test_window_size_without_screen_information():
+    class Broken:
+        @property
+        def screens(self):
+            raise RuntimeError("no display")
+
+    assert desktop._window_size(Broken()) == desktop.WINDOW_SIZE
+    assert desktop._window_size(types.SimpleNamespace(screens=[])) == desktop.WINDOW_SIZE
