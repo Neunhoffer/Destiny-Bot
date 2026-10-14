@@ -846,11 +846,18 @@ def test_icon_generator(tmp_path):
 
 @pytest.mark.parametrize(
     ("screen", "expected"),
-    [((1920, 1080), (1280, 860)), ((1366, 768), (1256, 652)), ((1024, 768), (942, 652)), ((800, 600), (736, 600))],
+    [
+        ((2560, 1440), (1280, 860, False)),
+        ((1920, 1080), (1280, 860, False)),
+        ((1536, 864), (1280, 691, True)),  # 1920x1080 at 125%
+        ((1366, 768), (1256, 614, True)),
+        ((1024, 768), (942, 614, True)),
+        ((800, 600), (736, 600, True)),
+    ],
 )
 def test_window_fits_small_screens(screen, expected):
     fake = types.SimpleNamespace(screens=[types.SimpleNamespace(width=screen[0], height=screen[1])])
-    assert desktop._window_size(fake) == expected
+    assert desktop._window_geometry(fake) == expected
 
 
 def test_window_size_without_screen_information():
@@ -859,5 +866,6 @@ def test_window_size_without_screen_information():
         def screens(self):
             raise RuntimeError("no display")
 
-    assert desktop._window_size(Broken()) == desktop.WINDOW_SIZE
-    assert desktop._window_size(types.SimpleNamespace(screens=[])) == desktop.WINDOW_SIZE
+    default = (*desktop.WINDOW_SIZE, False)
+    assert desktop._window_geometry(Broken()) == default
+    assert desktop._window_geometry(types.SimpleNamespace(screens=[])) == default

@@ -47,6 +47,7 @@ APP_MUTEX = "AthenaReaderAppMutex"  # the installer's AppMutex: it asks the user
 MAC_SHORTCUT_BUNDLE_ID = "com.athena.reader.source"
 WINDOW_SIZE = (1280, 860)
 MIN_WINDOW_SIZE = (420, 600)
+SMALL_SCREEN_MARGIN = 120  # room for the taskbar and title bar; smaller screens get a maximized window
 LIGHT_BACKGROUND = "#f5f3ee"  # the reader's --bg colours, shown while the page loads
 DARK_BACKGROUND = "#14171b"
 
@@ -561,18 +562,25 @@ def _supported(func: Callable[..., Any], kwargs: dict[str, Any]) -> dict[str, An
     return {k: v for k, v in kwargs.items() if k in params}
 
 
-def _window_size(webview: Any) -> tuple[int, int]:
-    """The preferred window size, shrunk to fit small screens (e.g. 1366x768 laptops at 125%)."""
+def _window_geometry(webview: Any) -> tuple[int, int, bool]:
+    """(width, height, maximized) for the reader's window.
+
+    On screens too small for the preferred size (a 1366x768 laptop, or 1920x1080 at
+    125% scaling) the window opens maximized, so it never hides behind the taskbar;
+    its restored size still fits the screen.
+    """
     width, height = WINDOW_SIZE
     try:
         screens = list(getattr(webview, "screens", None) or [])
         screen_w, screen_h = int(screens[0].width), int(screens[0].height)
     except Exception:  # no screen information: keep the default size
-        return width, height
-    if screen_w > 0 and screen_h > 0:
-        width = max(MIN_WINDOW_SIZE[0], min(width, int(screen_w * 0.92)))
-        height = max(MIN_WINDOW_SIZE[1], min(height, int(screen_h * 0.85)))  # room for the taskbar
-    return width, height
+        return width, height, False
+    if screen_w <= 0 or screen_h <= 0:
+        return width, height, False
+    maximized = screen_w < width + 80 or screen_h < height + SMALL_SCREEN_MARGIN
+    width = max(MIN_WINDOW_SIZE[0], min(width, int(screen_w * 0.92)))
+    height = max(MIN_WINDOW_SIZE[1], min(height, int(screen_h * 0.8)))
+    return width, height, maximized
 
 
 def _run_webview(webview: Any, url: str) -> None:
@@ -583,10 +591,11 @@ def _run_webview(webview: Any, url: str) -> None:
         pass
     storage = config.data_dir() / "webview"
     storage.mkdir(parents=True, exist_ok=True)
-    width, height = _window_size(webview)
+    width, height, maximized = _window_geometry(webview)
     window_options = {
         "width": width,
         "height": height,
+        "maximized": maximized,
         "min_size": MIN_WINDOW_SIZE,
         "text_select": True,  # readers select passages to ask about
         "zoomable": True,
