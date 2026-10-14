@@ -101,7 +101,7 @@ jobs:
           if ($t.ExitCode -ne 0) { throw "The installed app's self-test failed ($($t.ExitCode))" }
 
       - name: Open the app window, open it again, close both
-        run: python packaging/check_window.py "$env:LOCALAPPDATA\Programs\Athena\Athena.exe" --screenshot dist/athena-window-windows.png
+        run: python packaging/check_window.py "$env:LOCALAPPDATA\Programs\Athena\Athena.exe" --screenshot dist/athena-window-windows.png --print-screenshot
 
       - name: Uninstall
         shell: pwsh

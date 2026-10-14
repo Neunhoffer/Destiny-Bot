@@ -76,18 +76,21 @@ def page_ok(url: str) -> bool:
         return False
 
 
-def screenshot(hwnd: int, out: Path) -> None:
+def screenshot(hwnd: int, out: Path, *, print_base64: bool = False) -> None:
+    import base64
+    import io
+
     from PIL import ImageGrab
 
     rect = wintypes.RECT()
     ctypes.windll.user32.SetForegroundWindow(hwnd)
     ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
     time.sleep(1.0)
-    image = ImageGrab.grab(bbox=(rect.left, rect.top, rect.right, rect.bottom), all_screens=True)
+    image = ImageGrab.grab(bbox=(rect.left, rect.top, rect.right, rect.bottom), all_screens=True).convert("RGB")
     image.save(out)
     # How much of the window shows the reader's background colour (light or dark theme)?
-    small = image.convert("RGB").resize((160, 110))
-    pixels = list(small.getdata())
+    raw = image.resize((160, 110)).tobytes()
+    pixels = [raw[i : i + 3] for i in range(0, len(raw), 3)]
     themed = sum(
         1
         for r, g, b in pixels
@@ -97,6 +100,12 @@ def screenshot(hwnd: int, out: Path) -> None:
     print(
         f"Screenshot saved to {out} ({image.width}x{image.height}); {100 * themed / len(pixels):.0f}% reader background"
     )
+    if print_base64:  # for reading the screenshot from the job log when artifacts can't be fetched
+        small = image.copy()
+        small.thumbnail((900, 900))
+        buf = io.BytesIO()
+        small.save(buf, format="JPEG", quality=70)
+        print("SCREENSHOT_JPEG_BASE64 " + base64.b64encode(buf.getvalue()).decode("ascii"))
 
 
 def close(proc: subprocess.Popen, hwnd: int, what: str) -> None:
@@ -116,6 +125,7 @@ def main() -> int:
     parser.add_argument("exe", type=Path)
     parser.add_argument("--screenshot", type=Path, default=Path("athena-window.png"))
     parser.add_argument("--home", type=Path, help="data folder to use (default: a new temp folder)")
+    parser.add_argument("--print-screenshot", action="store_true", help="also print it as base64 JPEG")
     args = parser.parse_args()
     if sys.platform != "win32":
         print("This check only runs on Windows.")
@@ -141,7 +151,7 @@ def main() -> int:
         wait_for("WebView2 to start", lambda: (home / "webview" / "EBWebView").is_dir(), 60)
         print("WebView2 started (webview/EBWebView exists)")
         time.sleep(6)  # let the reader render
-        screenshot(hwnd, args.screenshot)
+        screenshot(hwnd, args.screenshot, print_base64=args.print_screenshot)
 
         # Opening Athena again while it runs: a second window onto the same reader.
         time.sleep(max(0.0, 17 - (time.time() - float(info.get("started") or 0))))
