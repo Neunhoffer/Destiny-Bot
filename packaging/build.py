@@ -159,6 +159,7 @@ def smoke_test(app: Path) -> Path:
     print(f"Smoke test passed: {report['summary']}")
     if not report_txt.is_file():
         print("(no text report was written)")
+    shutil.rmtree(home, ignore_errors=True)
     return saved
 
 
