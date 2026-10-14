@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "destiny-bot"
+version = "0.1.0"
+description = "A private, offline-first study reader that reads textbooks and class materials aloud."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "pydantic>=2.5",
+  "fastapi>=0.110",
+  "uvicorn>=0.27",
+  "python-multipart>=0.0.9",
+  "pymupdf>=1.24",
+  "ebooklib>=0.18",
+  "beautifulsoup4>=4.12",
+  "lxml>=5.0",
+  "python-docx>=1.1",
+  "python-pptx>=0.6.23",
+  "lameenc>=1.7",
+]
+
+[project.optional-dependencies]
+# Natural-sounding neural voices that run 100% offline (recommended).
+piper = ["piper-tts>=1.3"]
+# Windows/macOS/Linux system voices through the OS speech engine.
+system = ["pyttsx3>=2.90; sys_platform == 'win32'"]
+# Microsoft Edge online neural voices (sends text to Microsoft; off by default).
+edge = ["edge-tts>=6.1"]
+# Claude-powered study helpers (sends text to Anthropic; off by default).
+ai = ["anthropic>=1.0"]
+# Read scanned pages and photos of handouts (also needs the Tesseract program).
+ocr = ["pytesseract>=0.3.10", "pillow>=10"]
+all = ["destiny-bot[piper,system,edge,ai,ocr]"]
+dev = ["destiny-bot[all]", "pytest>=8", "pytest-asyncio>=0.23", "httpx>=0.27", "playwright>=1.44"]
+
+[project.scripts]
+destiny = "destiny_bot.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+destiny_bot = ["web/*", "web/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+  "slow: takes more than a few seconds",
+  "e2e: drives the web UI in a real browser",
+]
