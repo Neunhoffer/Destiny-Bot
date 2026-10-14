@@ -1621,13 +1621,15 @@ def _mark_footnotes(groups: list[tuple[tuple, list[_Elem]]], stats: _Stats, page
             and below[-1].y1 - first.y0 <= 0.3 * page_height
             and not _is_caption_text(first.text)
         )
-        role = "note" if note else ""
+        role = ""
         for ln in lines:
             if ln.y0 < last_body - 1 or ln.size > body * 0.92:
                 role = ""
                 continue
             if _FOOTNOTE_START_RE.match(ln.text) or ln.lead_marker:
                 role = "footnote"
+            elif ln is first and note:
+                role = "note"
             if role:
                 ln.role = role
 

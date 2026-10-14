@@ -1,0 +1,82 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: pytest (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      TEST_VOICES: ${{ github.workspace }}/../test-voices
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install espeak-ng, Tesseract and ffmpeg
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends espeak-ng tesseract-ocr ffmpeg
+
+      - name: Install Destiny Bot with every extra
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      # A real Piper voice, so the real-synthesis tests and the self-test can use it.
+      - name: Cache the test voice
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TEST_VOICES }}
+          key: test-voice-piper-en_US-lessac-medium-v1
+
+      - name: Download the test voice
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          from destiny_bot.tts.catalog import download_piper_voice
+          path = download_piper_voice("en_US-lessac-medium", voices_dir=Path(os.environ["TEST_VOICES"]) / "piper")
+          print(path, path.stat().st_size)
+
+      - name: Run the tests
+        env:
+          DESTINY_TEST_PIPER_VOICE: ${{ env.TEST_VOICES }}/piper/en_US-lessac-medium.onnx
+        run: python -m pytest -m "not e2e" -ra --durations=20
+
+      # Which voices does this machine have, and how fast is each engine? (SAPI on Windows)
+      - name: Self-test
+        if: always()
+        env:
+          DESTINY_HOME: ${{ runner.temp }}/athena-self-test
+          DESTINY_EXTRA_VOICE_DIRS: ${{ env.TEST_VOICES }}
+        run: python -m destiny_bot self-test
+
+      - name: Upload the self-test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: self-test-${{ runner.os }}
+          path: ${{ runner.temp }}/athena-self-test/logs/
+          if-no-files-found: warn
