@@ -183,6 +183,8 @@ class _Chunk:
     is_float: bool = False
     in_box: bool = False
     after_break: bool = False  # something (a float, an image gap) interrupted the flow before it
+    top: bool = False  # first chunk of its column run (nothing above it in the flow)
+    indent: float | None = None  # first-line indent relative to the column's left edge
     bold: bool = False
     level: int | None = None
     rows: list[list[str]] | None = None
@@ -222,15 +224,25 @@ def load_pdf(
 
 
 def _open_pdf(path: Path, display_name: str) -> pymupdf.Document:
+    not_pdf = IngestError(
+        f"'{display_name}' doesn't look like a valid PDF file, or it is damaged. "
+        "Try opening it in a PDF reader and saving a new copy."
+    )
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(1024)
+    except FileNotFoundError as exc:
+        raise IngestError(f"File not found: {path}") from exc
+    except OSError as exc:
+        raise IngestError(f"Couldn't open '{display_name}': {exc.strerror or exc}") from exc
+    if b"%PDF" not in head:
+        raise not_pdf
     try:
         doc = pymupdf.open(path, filetype="pdf")
     except FileNotFoundError as exc:
         raise IngestError(f"File not found: {path}") from exc
     except Exception as exc:  # FileDataError, RuntimeError, ...
-        raise IngestError(
-            f"'{display_name}' doesn't look like a valid PDF file, or it is damaged. "
-            "Try opening it in a PDF reader and saving a new copy."
-        ) from exc
+        raise not_pdf from exc
     if doc.needs_pass and not doc.authenticate(""):
         doc.close()
         raise IngestError(
@@ -596,6 +608,8 @@ def _is_reference_context(before: str, marker: str) -> bool:
 
 def _image_rects(page: pymupdf.Page) -> list[tuple[float, float, float, float]]:
     try:
+        if not page.get_images():
+            return []  # cheap check: the page uses no images at all
         infos = page.get_image_info()
     except Exception:
         return []
@@ -803,20 +817,19 @@ def _drop_repeated_ocr_margins(chunks: list[_Chunk]) -> None:
     for ch in chunks:
         if ch.col[0] == "ocr":
             by_page[ch.page].append(ch)
-    if len(by_page) < 2:
+    if len(by_page) < 3:
         return
     seen: dict[str, set[int]] = defaultdict(set)
     for page, items in by_page.items():
         for ch in {id(items[0]): items[0], id(items[-1]): items[-1]}.values():
-            if len(ch.text) <= 80:
+            if len(ch.text) <= 80 and "\n" not in ch.raw[0]:
                 seen[_margin_key(ch.text)].add(page)
-    threshold = 2 if len(by_page) <= 6 else 3
-    bad = {k for k, v in seen.items() if len(v) >= threshold and k}
+    bad = {k for k, v in seen.items() if len(v) >= 3 and k}
     if bad:
         chunks[:] = [
             ch
             for ch in chunks
-            if not (ch.col[0] == "ocr" and len(ch.text) <= 80 and _margin_key(ch.text) in bad)
+            if not (ch.col[0] == "ocr" and len(ch.text) <= 80 and "\n" not in ch.raw[0] and _margin_key(ch.text) in bad)
         ]
 
 
@@ -1098,7 +1111,21 @@ def _detect_gutters(elems: list[_Elem]) -> list[tuple[float, float]]:
             start = None
     if start is not None:
         runs.append((start, hi))
-    candidates = [(xmin + a, xmin + b + 1) for a, b in runs if b - a + 1 >= 5]
+    candidates = []
+    for a, b in runs:
+        # Narrow the run to its emptiest part: the gutter proper, not the ragged edge of a column.
+        low = min(cov[a : b + 1])
+        k = a
+        while k <= b:
+            if cov[k] == low:
+                j = k
+                while j + 1 <= b and cov[j + 1] == low:
+                    j += 1
+                if j - k + 1 >= 5:
+                    candidates.append((xmin + k, xmin + j + 1))
+                k = j + 1
+            else:
+                k += 1
     if not candidates:
         return []
     if _valid_columns(lines, candidates, xmin, xmax):
@@ -1297,6 +1324,8 @@ def _group_lines(lines: list[_Line], col: tuple, stats: _Stats, interrupted: boo
             lines=[ln],
             bold=ln.bold,
             after_break=interrupted and not chunks,
+            top=not chunks,
+            indent=ln.x0 - col_left,
         )
         cur_list = marker is not None and (marker == "bullet" or _closed_before(chunks, ln, col_right, width))
         cur_eq = eq
@@ -1553,7 +1582,7 @@ def _join_heading_labels(chunks: list[_Chunk]) -> list[_Chunk]:
 # --------------------------------------------------------------------------- assembly
 
 
-def _continues_across(p: _Chunk, q: _Chunk, broken: bool) -> bool:
+def _continues_across(p: _Chunk, q: _Chunk, broken: bool, indent_style: bool) -> bool:
     """Does chunk ``q`` continue paragraph ``p`` (split by a column/page break or a float)?"""
     if q.kind != BlockKind.PARAGRAPH or p.kind not in (BlockKind.PARAGRAPH, BlockKind.LIST_ITEM):
         return False
@@ -1561,6 +1590,10 @@ def _continues_across(p: _Chunk, q: _Chunk, broken: bool) -> bool:
         return False
     if abs(p.size - q.size) > max(0.6, 0.08 * p.size):
         return False
+    if broken and indent_style and p.kind == BlockKind.PARAGRAPH and q.indent is not None:
+        # In a book whose paragraphs start with an indent, a flush-left chunk at the top
+        # of a column / page (or after a figure) is the rest of the previous paragraph.
+        return q.indent < 0.3 * q.size
     if _ends_terminal(p.text):
         return False
     first = q.text[0]
@@ -1577,8 +1610,23 @@ def _continues_across(p: _Chunk, q: _Chunk, broken: bool) -> bool:
     return p.kind == BlockKind.PARAGRAPH and len(p.text) >= 60 and (tail[-1].isalnum()) and not p.bold
 
 
+def _uses_first_line_indents(chunks: list[_Chunk]) -> bool:
+    """Do this document's paragraphs start with an indented first line?"""
+    indented = flush = 0
+    for ch in chunks:
+        if ch.kind != BlockKind.PARAGRAPH or len(ch.lines) < 2 or ch.top or ch.indent is None or ch.in_box:
+            continue
+        step = ch.lines[0].x0 - ch.lines[1].x0
+        if step > 0.6 * ch.size and ch.indent > 0.6 * ch.size:
+            indented += 1
+        elif abs(step) <= 1.5:
+            flush += 1
+    return indented >= 3 and indented >= 0.6 * (indented + flush)
+
+
 def _assemble(chunks: list[_Chunk]) -> list[_Chunk]:
     """Merge paragraphs split by breaks; floats that interrupt a paragraph move after it."""
+    indent_style = _uses_first_line_indents(chunks)
     out: list[_Chunk] = []
     pending: list[_Chunk] = []
     open_para: _Chunk | None = None
@@ -1593,7 +1641,7 @@ def _assemble(chunks: list[_Chunk]) -> list[_Chunk]:
             continue
         if open_para is not None:
             broken = bool(pending) or ch.after_break or ch.col != open_para.end_col
-            if _continues_across(open_para, ch, broken):
+            if _continues_across(open_para, ch, broken, indent_style):
                 open_para.text = clean_display_text(open_para.text + "\n" + ch.text)
                 open_para.end_col = ch.col
                 continue

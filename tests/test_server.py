@@ -581,6 +581,13 @@ def test_upload_filename_paths_are_stripped(client, tmp_path):
     assert job["result"]["book"]["source_name"] == "notes.md"
 
 
+def test_upload_unicode_filename(client):
+    name = "Biología – capítulo 1.md"
+    job = wait_job(client, upload(client, name, b"# Capitulo\n").json()["job_id"])
+    assert job["status"] == "done", job
+    assert job["result"]["book"]["source_name"] == name
+
+
 # -- UI files
 
 
@@ -1273,6 +1280,63 @@ def test_content_disposition():
     header.encode("latin-1")
 
 
+# -- running in a background thread (for the desktop window)
+
+
+def _get(port: int, path: str, headers: dict[str, str] | None = None) -> tuple[int, bytes]:
+    import http.client
+
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    try:
+        conn.request("GET", path, headers={"Host": f"127.0.0.1:{port}", **(headers or {})})
+        response = conn.getresponse()
+        return response.status, response.read()
+    finally:
+        conn.close()
+
+
+def _free_port() -> int:
+    import socket
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def test_start_server_in_thread(fakes):
+    import socket
+
+    port = _free_port()
+    blocker = socket.socket()
+    blocker.bind(("127.0.0.1", port))
+    blocker.listen(1)
+    try:
+        url, stop = server.start_server_in_thread(port=port)
+    finally:
+        blocker.close()
+    try:
+        match = re.fullmatch(r"http://127\.0\.0\.1:(\d+)/", url)
+        assert match, url
+        actual = int(match.group(1))
+        assert port < actual < port + server.PORT_ATTEMPTS  # the busy port was skipped
+        status, body = _get(actual, "/")
+        assert status in (200, 500)  # 500 only while the web UI files are missing
+        assert _get(actual, "/api/status")[0] == 401
+        assert _get(actual, "/", {"Host": "evil.com"})[0] == 403
+        if status == 200:
+            token = re.search(rb'name="destiny-token" content="([^"]+)"', body).group(1).decode()
+            ok, data = _get(actual, "/api/settings", {"X-Destiny-Token": token})
+            assert ok == 200 and b"anthropic_api_key_set" in data
+    finally:
+        stop()
+    stop()  # a second call does nothing
+    with pytest.raises(OSError):  # stopped: nothing listens any more
+        _get(actual, "/")
+    assert not [t for t in threading.enumerate() if t.name == "destiny-server"]
+    with pytest.raises(ValueError):
+        server.start_server_in_thread(host="0.0.0.0", port=port)
+
+
 # -- jobs
 
 
@@ -1487,5 +1551,62 @@ def test_integration_real_ai_without_key(web_dir, tmp_path, monkeypatch):
                 pytest.skip("destiny_bot.speech isn't ready")
             assert response.status_code == 409, response.text
             assert isinstance(response.json()["detail"], str)
+    finally:
+        jobs.shutdown(wait=True)
+
+
+@pytest.mark.skipif(not _module_ready("destiny_bot.ingest.pdf", "load_pdf"), reason="the PDF loader isn't available yet")
+def test_integration_real_pdf_import_and_page_image(web_dir, tmp_path):
+    pdf = make_pdf(tmp_path / "lecture.pdf", pages=2)
+    jobs = JobManager()
+    try:
+        with TestClient(create_app(token=TOKEN, jobs=jobs, web_dir=web_dir), headers=AUTH) as c:
+            job = wait_job(c, upload(c, "Lecture 1.pdf", pdf.read_bytes()).json()["job_id"], timeout=60)
+            assert job["status"] == "done", job
+            book = job["result"]["book"]
+            assert book["source_type"] == "pdf" and book["page_count"] == 2
+            assert book["source_name"] == "Lecture 1.pdf"
+            page = c.get(f"/api/books/{book['id']}/pages/2.png")
+            assert page.status_code == 200 and page.content.startswith(b"\x89PNG")
+            assert c.get(f"/api/books/{book['id']}/pages/3.png").status_code == 404
+    finally:
+        jobs.shutdown(wait=True)
+
+
+@pytest.mark.skipif(not _module_ready("destiny_bot.tts.cache", "AudioCache"), reason="the audio cache isn't available yet")
+def test_integration_real_audio_cache(app_factory, fakes, monkeypatch):
+    from destiny_bot.tts.cache import AudioCache
+
+    monkeypatch.setattr(server, "_audio_cache_class", lambda: AudioCache)
+    with TestClient(app_factory(), headers=AUTH) as c:
+        first = c.post("/api/tts", json={"text": "Cached on disk.", "rate": 1.1})
+        second = c.post("/api/tts", json={"text": "Cached on disk.", "rate": 1.1})
+        assert first.status_code == second.status_code == 200
+        assert first.content == second.content
+        assert len(fakes.tts.engines["piper"].calls) == 1
+        assert [p.suffix for p in config.cache_dir().iterdir()] == [".wav"]
+
+
+@pytest.mark.skipif(
+    not (_module_ready("destiny_bot.export", "export_audiobook") and _module_ready("destiny_bot.speech", "plan_section")
+         and _system_voice_ready()),
+    reason="the real exporter, speech planner or a system voice isn't available",
+)
+def test_integration_real_export(web_dir, tmp_path, monkeypatch):
+    monkeypatch.setattr(ingest, "load_document", fake_load_document)
+    jobs = JobManager()
+    try:
+        with TestClient(create_app(token=TOKEN, jobs=jobs, web_dir=web_dir), headers=AUTH) as c:
+            book = import_book(c, tmp_path, "bio.md")
+            response = c.post("/api/export", json={"book_id": book["id"], "section_ids": ["s2"], "engine": "system",
+                                                   "format": "mp3"})
+            assert response.status_code == 200, response.text
+            job = wait_job(c, response.json()["job_id"], timeout=120)
+            assert job["status"] == "done", job
+            files = job["result"]["files"]
+            audio = [f for f in files if f["name"].endswith(".mp3")]
+            assert audio and audio[0]["size"] > 0
+            download = c.get(audio[0]["url"])
+            assert download.status_code == 200 and len(download.content) == audio[0]["size"]
     finally:
         jobs.shutdown(wait=True)

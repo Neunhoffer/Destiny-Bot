@@ -1041,3 +1041,6 @@ def test_cache_clear_and_errors(tmp_path):
     with pytest.raises(TTSError):
         cache.get_or_create(("c",), lambda: (_ for _ in ()).throw(TTSError("boom")))
     assert cache.get(("c",)) is None
+    shutil.rmtree(tmp_path)  # folder wiped while the app runs: caching still works
+    cache.get_or_create(("d",), _clip)
+    assert cache.get(("d",)) is not None

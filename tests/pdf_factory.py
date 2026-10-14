@@ -185,7 +185,7 @@ class PdfBuilder:
         font: str | None = None,
         first_indent: float = 0,
         space_after: float | None = None,
-        justify: bool = True,
+        justify: bool = False,
         left_indent: float = 0,
     ) -> None:
         size = size or self.body
@@ -227,9 +227,9 @@ class PdfBuilder:
         self.y += 2
 
     def footnote(self, text: str, *, size: float = 8) -> None:
-        """Place a footnote at the bottom of the current page (above the bottom margin)."""
+        """Place a footnote below the text area of the current page (in the bottom margin)."""
         lines = self.wrap(text, self.x1 - self.x0, size, self.font)
-        y = self.bottom - len(lines) * size * 1.25
+        y = self.bottom + 12
         self.page.draw_line((self.x0, y - 6), (self.x0 + 120, y - 6), width=0.5)
         for ln in lines:
             self._draw_line(ln, self.x0, y + size, size, self.font)

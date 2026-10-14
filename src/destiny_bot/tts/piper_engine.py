@@ -66,7 +66,8 @@ class PiperEngine(TTSEngine):
             return RECOMMENDED_VOICE
         voices = self.list_voices()
         english = [v.id for v in voices if (v.language or "").startswith("en")]
-        return (english or [v.id for v in voices] or [None])[0]
+        candidates = english or [v.id for v in voices]
+        return candidates[0] if candidates else None
 
     def synthesize(self, text: str, voice: str | None = None, rate: float = 1.0) -> AudioClip:
         if not text or not text.strip():
@@ -275,10 +276,11 @@ def _language(voice_id: str, meta: dict[str, Any]) -> str | None:
 def _derived_name(voice_id: str, meta: dict[str, Any], language: str | None) -> str:
     """'en_US-foo_bar-high' -> 'Foo Bar (en-US, high quality)'."""
     parts = voice_id.split("-")
+    quality: Any
     if len(parts) >= 3:
         speaker, quality = "-".join(parts[1:-1]), parts[-1]
     else:
-        speaker, quality = (meta.get("dataset") or voice_id), meta.get("quality")
-    speaker = str(speaker).replace("_", " ").strip().title() or voice_id
+        speaker, quality = str(meta.get("dataset") or voice_id), meta.get("quality")
+    speaker = speaker.replace("_", " ").strip().title() or voice_id
     details = [d for d in (language, f"{str(quality).replace('_', ' ')} quality" if quality else None) if d]
     return f"{speaker} ({', '.join(details)})" if details else speaker

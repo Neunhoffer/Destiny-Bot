@@ -8,6 +8,7 @@ silent MP3 at the same sample rate.
 
 from __future__ import annotations
 
+import importlib
 import io
 import os
 import shutil
@@ -22,7 +23,7 @@ from array import array
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, Iterator, Literal
+from typing import Any, BinaryIO, Iterator, Literal
 
 from .tts.base import AudioClip, TTSError
 
@@ -778,7 +779,7 @@ def _stop(proc: subprocess.Popen) -> None:
 
 
 def _play_winsound(data: bytes) -> None:
-    import winsound  # type: ignore[import-not-found]
+    winsound: Any = importlib.import_module("winsound")  # Windows only
 
     errors: list[BaseException] = []
 

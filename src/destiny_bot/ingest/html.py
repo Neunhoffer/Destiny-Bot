@@ -8,12 +8,24 @@ hidden elements, page-number markers and note-reference markers are dropped.
 
 from __future__ import annotations
 
+import html as html_lib
 import re
+import warnings
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from bs4 import BeautifulSoup, Comment, Declaration, Doctype, NavigableString, ProcessingInstruction, Tag
+from bs4 import (
+    BeautifulSoup,
+    Comment,
+    Declaration,
+    Doctype,
+    NavigableString,
+    ProcessingInstruction,
+    Tag,
+    XMLParsedAsHTMLWarning,
+)
 from bs4.dammit import EncodingDetector
+from lxml import html as lxml_html
 
 from ..models import Block, BlockKind, Document
 from . import ProgressFn
@@ -30,7 +42,6 @@ _BLOCK_TAGS = frozenset(
     "figure footer form h1 h2 h3 h4 h5 h6 header hgroup hr html legend li main menu ol p pre section "
     "summary table tbody td tfoot th thead tr ul".split()
 )
-_BLOCK_LIST = sorted(_BLOCK_TAGS)
 _CONTENT_ANCESTORS = frozenset("article section main aside blockquote figure".split())
 _INLINE_NAMES = frozenset("a abbr b bdi bdo cite code data dfn em i kbd mark q s samp small span strong sub sup time u var".split())
 _LAYOUT_SIGNS = ["table", "h1", "h2", "h3", "h4", "h5", "h6"]
@@ -79,35 +90,40 @@ def decode_html_bytes(data: bytes) -> str:
     return decode_text_bytes(data, declared=declared)
 
 
-def _mathml_linear(node) -> str:
-    """Best-effort linear text for a MathML element (``x^2 + (a)/(b)``)."""
-    if isinstance(node, NavigableString):
-        return "" if isinstance(node, _IGNORED_STRINGS) else str(node).strip()
-    if not isinstance(node, Tag):
+def _xlocal(tag: object) -> str:
+    """Local name of an lxml tag: ``{ns}mi`` / ``m:mi`` / ``mi`` -> ``mi``."""
+    if not isinstance(tag, str):
         return ""
-    name = _local(node)
-    kids = [child for child in node.children if isinstance(child, Tag)]
-    lin = [_mathml_linear(child) for child in kids]
+    return tag.rsplit("}", 1)[-1].rsplit(":", 1)[-1].lower()
+
+
+_MATH_BRACKETS = frozenset("()[]{}|‖⟨⟩")
+_MATH_ACCENTS = frozenset(("¯", "‾", "^", "ˆ", "~", "˜", "→", "⃗", "˙", "¨", "."))
+
+
+def _mathml_linear(el) -> str:
+    """Best-effort linear text for a MathML element (lxml): ``x^2 + (a + b)/2``."""
+    name = _xlocal(el.tag)
     if name in ("annotation", "annotation-xml", "none", "mprescripts", "mphantom"):
         return ""
     if name == "mspace":
         return " "
     if name in ("mi", "mn", "mo", "mtext", "ms"):
-        return node.get_text().translate(_MATH_INVISIBLE).strip()
+        return "".join(el.itertext()).translate(_MATH_INVISIBLE).strip()
+    kids = [child for child in el if isinstance(child.tag, str)]
+    lin = [_mathml_linear(child) for child in kids]
     if name == "semantics":
         return lin[0] if lin else ""
     if name == "mfrac" and len(lin) == 2:
         return f"{wrap_math(lin[0])}/{wrap_math(lin[1])}"
     if name == "msup" and len(lin) == 2:
         return f"{wrap_math(lin[0])}^{wrap_math(lin[1])}"
-    if name == "msub" and len(lin) == 2:
+    if name in ("msub", "munder") and len(lin) == 2:
         return f"{lin[0]}_{wrap_math(lin[1])}"
     if name in ("msubsup", "munderover") and len(lin) == 3:
         return f"{lin[0]}_{wrap_math(lin[1])}^{wrap_math(lin[2])}"
-    if name == "munder" and len(lin) == 2:
-        return f"{lin[0]}_{wrap_math(lin[1])}"
     if name == "mover" and len(lin) == 2:
-        if lin[1] in ("¯", "‾", "^", "ˆ", "~", "˜", "→", "⃗", "˙", "¨", "."):
+        if lin[1] in _MATH_ACCENTS:
             return f"{lin[0]}{lin[1]}"
         return f"{wrap_math(lin[0])}^{wrap_math(lin[1])}"
     if name == "msqrt":
@@ -115,34 +131,68 @@ def _mathml_linear(node) -> str:
     if name == "mroot" and len(lin) == 2:
         return f"root({lin[1]}, {lin[0]})"
     if name == "mfenced":
-        opener, closer = node.get("open", "("), node.get("close", ")")
-        separator = (node.get("separators", ",") or ",")[0]
+        opener, closer = el.get("open", "("), el.get("close", ")")
+        separator = (el.get("separators", ",") or ",")[0]
         return f"{opener}{(separator + ' ').join(lin)}{closer}"
     if name == "mtable":
         return "; ".join(lin)
-    if name == "mtr" or name == "mlabeledtr":
+    if name in ("mtr", "mlabeledtr"):
         return ", ".join(lin)
     parts: list[str] = []
     for child, text in zip(kids, lin):
         if not text:
             continue
-        if _local(child) == "mo" and text not in "()[]{}|‖⟨⟩":
+        if _xlocal(child.tag) == "mo" and text not in _MATH_BRACKETS:
             parts.append(", " if text == "," else f" {text} ")
         else:
             parts.append(text)
     return re.sub(r"\s+", " ", "".join(parts)).strip()
 
 
-def _math_text(math: Tag) -> str:
+_PLACEHOLDER_ALT = re.compile(r"(alt(ernative|ernate)?[ -]?text|description)\s+(is\s+)?(not\s+available|unavailable|missing)|equation|math|formula|image", re.I)
+
+
+def _lxml_math_text(math) -> str:
+    """Spoken/display form of a MathML element: alttext, else its TeX annotation, else linear text."""
     alt = (math.get("alttext") or "").strip()
-    if alt:
+    if alt and not _PLACEHOLDER_ALT.fullmatch(alt):
         return alt
-    for child in math.find_all(True):
-        if _local(child) == "annotation" and (child.get("encoding") or "").strip().lower() in _TEX_ENCODINGS:
-            tex = child.get_text().strip()
+    for child in math.iter():
+        if _xlocal(child.tag) == "annotation" and (child.get("encoding") or "").strip().lower() in _TEX_ENCODINGS:
+            tex = "".join(child.itertext()).strip()
             if tex:
                 return tex
     return _mathml_linear(math)
+
+
+_MATH_ELEMENT = re.compile(r"<((?:[\w-]+:)?math)\b[^>]*>.*?</\1\s*>", re.S | re.I)
+
+
+def _collapse_math(markup: str) -> str:
+    """Replace each MathML element by an empty ``<math alttext="...">``.
+
+    Equations can hold most of a STEM book's tags; converting them with lxml up
+    front keeps BeautifulSoup fast and gives every equation a text form.
+    """
+    if "math" not in markup:
+        return markup
+
+    def replace_math(match: re.Match[str]) -> str:
+        try:
+            element = lxml_html.fragment_fromstring(match.group(0))
+        except Exception:
+            return match.group(0)
+        text = html_lib.unescape(_lxml_math_text(element))
+        display = html_lib.escape(element.get("display") or "", quote=True)
+        return f'<math alttext="{html_lib.escape(text, quote=True)}" display="{display}"></math>'
+
+    return _MATH_ELEMENT.sub(replace_math, markup)
+
+
+def _math_text(math: Tag) -> str:
+    """Text of a (collapsed) ``<math>`` element in the soup."""
+    alt = (math.get("alttext") or "").strip()
+    return alt or re.sub(r"\s+", " ", math.get_text(" ")).strip()
 
 
 @dataclass(frozen=True)
@@ -169,6 +219,7 @@ class _Walker:
         self.blocks: list[Block] = []
         self.anchors: dict[str, int] = {}
         self._prefix: str | None = None
+        self._block_inside: dict[int, bool] = {}
 
     # ------------------------------------------------------------ classification
 
@@ -262,7 +313,22 @@ class _Walker:
             return True
         if name in ("img", "br", "math"):
             return False
-        return tag.find(_BLOCK_LIST) is not None
+        return self._contains_block(tag)
+
+    def _contains_block(self, tag: Tag) -> bool:
+        """Whether an inline element wraps block content (memoised: nested spans stay linear)."""
+        key = id(tag)
+        cached = self._block_inside.get(key)
+        if cached is None:
+            cached = False
+            for child in tag.children:
+                if isinstance(child, Tag):
+                    name = _local(child)
+                    if name in _BLOCK_TAGS or (name != "math" and self._contains_block(child)):
+                        cached = True
+                        break
+            self._block_inside[key] = cached
+        return cached
 
     # ------------------------------------------------------------ output
 
@@ -581,19 +647,23 @@ def _list_marker(number: int, style: str) -> str:
     return f"{number}."
 
 
-def _soup(html: str | bytes) -> BeautifulSoup:
+def _soup(html: str | bytes) -> tuple[BeautifulSoup, str]:
     markup = decode_html_bytes(html) if isinstance(html, (bytes, bytearray)) else html
     # XHTML (EPUB) uses <a id="p1"/>, <div/> ...; the HTML parser would leave those open.
     markup = _SELF_CLOSING.sub(r"<\1\2></\1>", markup)
-    return BeautifulSoup(markup, "lxml")
+    markup = _collapse_math(markup)
+    with warnings.catch_warnings():
+        # The forgiving HTML parser is deliberate: real-world XHTML is often not well-formed XML.
+        warnings.simplefilter("ignore", XMLParsedAsHTMLWarning)
+        return BeautifulSoup(markup, "lxml"), markup
 
 
-def _content_root(soup: BeautifulSoup) -> Tag:
+def _content_root(soup: BeautifulSoup, markup: str) -> Tag:
+    """``<main>`` when the page marks its main content (dropping site chrome), else ``<body>``."""
     body = soup.body or soup
+    if not re.search(r"<main\b|role\s*=\s*[\"']?main\b", markup, re.I):
+        return body
     candidates = body.find_all("main") or body.find_all(attrs={"role": "main"})
-    if not candidates:
-        articles = body.find_all("article")
-        candidates = [a for a in articles if a.find_parent("article") is None]
     if len(candidates) == 1:
         main = candidates[0]
         total = len(body.get_text(" ", strip=True))
@@ -604,7 +674,7 @@ def _content_root(soup: BeautifulSoup) -> Tag:
 
 def parse_html(html: str | bytes, *, page: int | None = None) -> HtmlContent:
     """Blocks, title, author and anchor positions of one HTML document."""
-    soup = _soup(html)
+    soup, markup = _soup(html)
     title = None
     for candidate in soup.find_all("title"):
         if candidate.find_parent("svg") is None:
@@ -616,7 +686,7 @@ def parse_html(html: str | bytes, *, page: int | None = None) -> HtmlContent:
         author = clean_display_text(meta.get("content") or "") or None
     walker = _Walker(page)
     body = soup.body or soup
-    root = _content_root(soup)
+    root = _content_root(soup, markup)
     if root is not body:
         walker._record_anchor(root)
     walker.walk_container(root, _Ctx())

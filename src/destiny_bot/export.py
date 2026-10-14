@@ -77,6 +77,10 @@ def export_audiobook(
     try:
         for number, (section, plan) in enumerate(plans, start=1):
             title = section.title.strip() or f"Section {number}"
+
+            def on_utterance(i: int, n: int, title: str = title, before: int = done) -> None:
+                report((before + i) / total_utts * 0.99, f"Recording {title} ({i}/{n})")
+
             path, seconds = _record_section(
                 section_title=title,
                 plan=plan,
@@ -91,9 +95,7 @@ def export_audiobook(
                 out_dir=out_dir,
                 written=written,
                 cancel=cancel,
-                on_utterance=lambda i, n, t=title, before=done: report(
-                    (before + i) / total_utts * 0.99, f"Recording {t} ({i}/{n})"
-                ),
+                on_utterance=on_utterance,
             )
             done += len(plan)
             tracks.append((path, seconds, title))

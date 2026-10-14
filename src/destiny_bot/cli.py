@@ -2,6 +2,9 @@
 
     destiny                        open the reader in your browser (same as ``destiny serve``)
     destiny serve [--port N] [--no-browser] [--host H]
+    destiny app [--port N]         open the reader in its own window
+    destiny shortcut [--no-start-menu]
+    destiny self-test [--quick]
     destiny import FILE...
     destiny list
     destiny toc BOOK
@@ -288,7 +291,8 @@ def _choose_engine(name: str | None, settings: config.Settings) -> TTSEngine:
             engine = tts.get_engine(name)
         except KeyError:
             names = ", ".join(getattr(tts, "ENGINE_NAMES", ()))
-            raise CLIError(f"There's no voice engine called '{name}'." + (f" Choose from: {names}." if names else ""))
+            hint = f" Choose from: {names}." if names else ""
+            raise CLIError(f"There's no voice engine called '{name}'.{hint}") from None
     else:
         engine = tts.resolve_engine(settings.tts_engine, online_allowed=settings.online_tts_allowed)
     if engine.name == "browser":
@@ -335,6 +339,48 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     except ValueError as exc:
         raise CLIError(str(exc)) from None
     return 0
+
+
+def _desktop() -> Any:
+    try:
+        from . import desktop
+    except ImportError as exc:
+        raise CLIError(
+            f"The desktop app isn't available in this copy of Destiny Bot ({exc}). "
+            "Run 'destiny' to open the reader in your browser instead."
+        ) from None
+    return desktop
+
+
+def _cmd_app(args: argparse.Namespace) -> int:
+    desktop = _desktop()
+    try:
+        run_app = desktop.run_app
+    except AttributeError:
+        raise CLIError("The desktop app isn't ready in this copy of Destiny Bot. Run 'destiny' instead.") from None
+    return int(run_app(port=args.port) or 0)
+
+
+def _cmd_shortcut(args: argparse.Namespace) -> int:
+    desktop = _desktop()
+    try:
+        create_shortcuts = desktop.create_shortcuts
+    except AttributeError:
+        raise CLIError("Creating shortcuts isn't available in this copy of Destiny Bot.") from None
+    paths = list(create_shortcuts(desktop=True, start_menu=not args.no_start_menu) or [])
+    if not paths:
+        print("No shortcuts were created.")
+    for path in paths:
+        print(f"Created {path}")
+    return 0
+
+
+def _cmd_self_test(args: argparse.Namespace) -> int:
+    try:
+        from .selftest import run_self_test
+    except ImportError as exc:
+        raise CLIError(f"The self-test isn't available in this copy of Destiny Bot ({exc}).") from None
+    return int(run_self_test(quick=args.quick) or 0)
 
 
 def _cmd_import(args: argparse.Namespace) -> int:
@@ -666,7 +712,8 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             print(f"  Couldn't choose a voice: {exc}")
 
     ocr_ok, ocr_reason = _ocr_status()
-    print(f"\nScanned pages and photos (OCR): {'ready' if ocr_ok else 'not available'}" + (f" - {ocr_reason}" if ocr_reason else ""))
+    ocr_state = "ready" if ocr_ok else "not available"
+    print(f"\nScanned pages and photos (OCR): {ocr_state}" + (f" - {ocr_reason}" if ocr_reason else ""))
 
     key_state = "set" if settings.resolved_api_key() else "not set (run: destiny ai-key)"
     print(f"AI study helpers: {'on' if settings.ai_enabled else 'off'}; API key {key_state}; model {settings.ai_model}")
@@ -730,6 +777,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-browser", action="store_true", help="don't open a browser window")
     p.add_argument("--host", default=None, help="address to listen on (default 127.0.0.1, this computer only)")
     p.set_defaults(func=_cmd_serve)
+
+    p = sub.add_parser("app", help="open the reader in its own window")
+    p.add_argument("--port", type=_positive_port, default=8765, help="port to use (default 8765)")
+    p.set_defaults(func=_cmd_app)
+
+    p = sub.add_parser("shortcut", help="add Destiny Bot shortcuts to the desktop and Start menu")
+    p.add_argument("--no-start-menu", action="store_true", help="only create the desktop shortcut")
+    p.set_defaults(func=_cmd_shortcut)
+
+    p = sub.add_parser("self-test", help="check that reading, voices and the reader all work")
+    p.add_argument("--quick", action="store_true", help="skip the slower checks")
+    p.set_defaults(func=_cmd_self_test)
 
     p = sub.add_parser("import", help="add files to your library")
     p.add_argument("files", nargs="+", metavar="FILE")

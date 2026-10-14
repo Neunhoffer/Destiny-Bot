@@ -104,7 +104,11 @@ class AudioCache:
             return
         ext = clip.extension
         path = self.root / f"{digest}{ext}"
-        fd, tmp = tempfile.mkstemp(dir=self.root, prefix=_TEMP_PREFIX, suffix=ext)
+        try:
+            self.root.mkdir(parents=True, exist_ok=True)  # it may have been wiped meanwhile
+            fd, tmp = tempfile.mkstemp(dir=self.root, prefix=_TEMP_PREFIX, suffix=ext)
+        except OSError:
+            return
         try:
             with os.fdopen(fd, "wb") as fh:
                 fh.write(clip.data)

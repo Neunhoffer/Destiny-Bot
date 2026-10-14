@@ -441,7 +441,8 @@ class _WindowsBackend(_Backend):
     def default_voice(self) -> str | None:
         voices = self.voices()
         english = [v.id for v in voices if (v.language or "").startswith("en")]
-        return (english or [v.id for v in voices] or [None])[0]
+        candidates = english or [v.id for v in voices]
+        return candidates[0] if candidates else None
 
     def synthesize(self, text: str, voice: str | None, wpm: int, rate: float) -> AudioClip:
         with tempfile.TemporaryDirectory(prefix="destiny-sapi-", ignore_cleanup_errors=True) as tmp:

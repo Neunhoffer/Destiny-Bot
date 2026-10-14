@@ -203,7 +203,7 @@ class Library:
             try:
                 summary, meta = self._summary_and_meta(child.name)
             except (KeyError, OSError, ValueError) as exc:
-                log.warning("Skipping unreadable library entry %s: %s", child.name, exc)
+                log.info("Skipping unreadable library entry %s: %s", child.name, exc)
                 continue
             sort_key = meta.get("last_opened") or summary.added_at
             entries.append((str(sort_key), summary))
@@ -226,7 +226,7 @@ class Library:
         try:
             doc = Document.model_validate_json(doc_path.read_bytes())
         except (OSError, ValueError) as exc:  # pydantic's ValidationError is a ValueError
-            log.warning("Couldn't read %s: %s", doc_path, exc)
+            log.info("Couldn't read %s: %s", doc_path, exc)
             raise KeyError(doc_id) from None
         if doc.id != doc_id:
             raise KeyError(doc_id)
@@ -380,7 +380,7 @@ class Library:
         except FileNotFoundError:
             return None
         except (OSError, ValueError) as exc:
-            log.warning("Ignoring damaged %s: %s", path, exc)
+            log.info("Ignoring damaged %s: %s", path, exc)
             return None
         return data if isinstance(data, dict) else None
 

@@ -153,7 +153,7 @@ def test_two_column_reading_order(tmp_path):
     b.paragraph("FULLWIDTH " + para(rng, 2))
     b.set_columns(2)
     for i in range(16):
-        b.paragraph(para(rng, 3, f"COL{i:02d}"), first_indent=12)
+        b.paragraph(para(rng, 3, f"COL{i:02d}"), first_indent=12, justify=True)
     path = b.save(tmp_path / "twocol.pdf")
     doc = load(path)
     order = [t.split()[0] for t in texts(doc)]
@@ -173,7 +173,8 @@ def test_single_column_keeps_order_with_indents_and_short_lines(tmp_path):
     rng = random.Random(6)
     b = PdfBuilder()
     for i in range(10):
-        b.paragraph(para(rng, 2, f"S{i}"), first_indent=18 if i % 2 else 0, space_after=0 if i % 2 else 8)
+        # styles: indented first line, or no indent but space before it
+        b.paragraph(para(rng, 2, f"S{i}"), first_indent=18 if i % 3 else 0, space_after=8 if i % 3 == 2 else 0)
     doc = load(b.save(tmp_path / "single.pdf"))
     assert [t.split()[0] for t in texts(doc)] == [f"S{i}" for i in range(10)]
 
@@ -191,8 +192,10 @@ def test_three_columns(tmp_path):
 def test_cross_page_paragraph_merge_with_footnote(tmp_path):
     rng = random.Random(8)
     b = PdfBuilder()
-    for i in range(3):
+    i = 0
+    while b.y < b.bottom - 150:
         b.paragraph(para(rng, 3, f"Intro{i}"), first_indent=14)
+        i += 1
     long = para(rng, 14, "SPLIT")
     b.paragraph(long, first_indent=14)
     b.paragraph("AFTER " + para(rng, 2), first_indent=14)
@@ -400,8 +403,11 @@ def test_captions_footnotes_lists_and_equations(tmp_path):
     b.bullet("Bulk transport.", marker="▪")
     b.paragraph("Steps:", space_after=2)
     b.lines(["1. The ligand binds.", "2. The receptor changes shape.", "a) the channel opens", "(ii) ions flow"], space_after=6)
-    b.paragraph("Cells count steps 1. through 3. in order, as shown in the protocol described in")
-    b.lines(["2. The next sentence continues normally."])
+    # A full-width line that wraps right before "2." (a number, not a list item).
+    first = "Cells count the numbered steps in order, as shown in the laboratory protocol"
+    while text_width(first + " of the", REGULAR, 11) < 0.95 * (b.x1 - b.x0):
+        first += " of the"
+    b.lines([first + " of", "2. The next sentence continues normally."])
     html = '<p style="font-family: serif; font-size: 12pt">∑ x<sub>i</sub> = ∫ f(t) dt + √(α + β)</p>'
     rect = pymupdf.Rect(b.x0, b.y, b.x1, b.y + 30)
     b.page.insert_htmlbox(rect, html)
@@ -422,9 +428,9 @@ def test_captions_footnotes_lists_and_equations(tmp_path):
         "a) the channel opens",
         "(ii) ions flow",
     ]
-    wrapped = next(bl for bl in blocks(doc) if bl.text.startswith("Cells count steps"))
+    wrapped = next(bl for bl in blocks(doc) if bl.text.startswith("Cells count the"))
     assert wrapped.kind == BlockKind.PARAGRAPH
-    assert wrapped.text.endswith("described in 2. The next sentence continues normally.")
+    assert wrapped.text.endswith(" of 2. The next sentence continues normally.")
     eq = [bl for bl in blocks(doc) if bl.kind == BlockKind.EQUATION]
     assert len(eq) == 1 and "∫" in eq[0].text
     fns = [bl for bl in blocks(doc) if bl.kind == BlockKind.FOOTNOTE]
@@ -508,16 +514,22 @@ def test_scanned_pages_with_mocked_ocr(tmp_path, monkeypatch):
 
     def fake_ocr(data: bytes, *, lang: str = "eng") -> str:
         calls.append(data[:8])
-        return "Mitosis has four\nphases in total.\n\n• Prophase\n• Metaphase\n\n12\n"
+        if len(calls) == 1:
+            return "Mitosis has four\nphases in total.\n\n• Prophase\n• Metaphase\n\n12\n"
+        return "the cell then divides into\ntwo daughter cells.\n\nCytokinesis follows.\n\n13\n"
 
     monkeypatch.setattr(pdf_mod, "_ocr_function", lambda: (fake_ocr, ""))
     scan = scanned_pdf(tmp_path / "scan.pdf", [["anything"], ["more"]])
     doc = load(scan)
     assert len(calls) == 2 and all(c.startswith(b"\x89PNG") for c in calls)
     ts = texts(doc)
-    assert ts.count("Mitosis has four phases in total.") == 2
-    assert [bl.text for bl in blocks(doc) if bl.kind == BlockKind.LIST_ITEM][:2] == ["Prophase", "Metaphase"]
-    assert "12" not in ts
+    assert ts[0] == "Mitosis has four phases in total."
+    assert [bl.text for bl in blocks(doc) if bl.kind == BlockKind.LIST_ITEM] == [
+        "Prophase",
+        "Metaphase the cell then divides into two daughter cells.",  # continues across the page break
+    ]
+    assert ts[-1] == "Cytokinesis follows."
+    assert "12" not in ts and "13" not in ts
     assert all(bl.page in (1, 2) for bl in blocks(doc))
     assert any("Pages 1-2 had no text layer" in w for w in doc.warnings)
 
@@ -730,9 +742,10 @@ def test_textbook_like_integration(tmp_path):
     b.lines(["Figure 5.1 A fluid mosaic membrane."], size=8.5)
     b.heading("5.2 Passive Transport", size=13)
     for i in range(10):
-        b.paragraph(para(rng, 5, f"B{i}"), first_indent=12)
+        b.paragraph(para(rng, 5, f"B{i}"), first_indent=12, justify=True)
     b.table([["Process", "Energy"], ["Diffusion", "None"], ["Pumping", "ATP"]])
     b.heading("5.3 Active Transport", size=13)
+    page_53 = len(b.doc)
     for i in range(8):
         b.paragraph(para(rng, 5, f"C{i}"), first_indent=12)
     b.decorate(header=lambda n: "Chapter 5 The Working Cell" if n % 2 else "Campbell Essentials", footer=lambda n: str(n + 96))
@@ -740,7 +753,7 @@ def test_textbook_like_integration(tmp_path):
         [1, "Chapter 5 The Working Cell", 1],
         [2, "5.1 Membrane Structure", 1],
         [2, "5.2 Passive Transport", 1],
-        [2, "5.3 Active Transport", 2],
+        [2, "5.3 Active Transport", page_53],
     ]
     path = b.save(tmp_path / "textbook.pdf", toc=toc, metadata={"title": "Microsoft Word - ch5.docx"})
     doc = load(path)

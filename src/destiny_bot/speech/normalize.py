@@ -286,8 +286,14 @@ _NOT_AUTHOR = frozenset(
     Famine Election Elections Constitution Amendment Era Period Age Dynasty Empire Republic
     Movement Plan Program Programme Project Mission Battle Siege Invasion Season Series Episode
     Draft Reprint Session Term Semester Quarter Total Population Estimated Approx Firmware Apollo
-    The A An This That These Those His Her Its Their Our My Your Fiscal Budget Bowl Super World Wave
-    Round Tier Group Batch
+    The A An This That These Those His Her Its Their Our My Your Fiscal Budget Bowl Wave Round Tier
+    Group Batch Week Weeks Month Months Decade Century Spring Term Fall Term
+    London Paris Berlin Rome Vienna Madrid Moscow Tokyo Beijing Peking Boston Chicago Philadelphia
+    Geneva Amsterdam Stockholm Copenhagen Oslo Athens Cairo Delhi Mumbai Bombay Shanghai Sydney
+    Toronto York Kyoto Prague Budapest Warsaw Lisbon Dublin Edinburgh Brussels Florence Venice Milan
+    Munich Hamburg Zurich Barcelona Seoul Jerusalem Istanbul Constantinople Baghdad Tehran Mexico
+    Brazil China Japan India France Germany England Britain Italy Spain Russia America Africa
+    Europe Asia Canada Australia Egypt Greece Ireland Scotland Wales Texas California Florida
     """.split()
 )
 _DETERMINERS = frozenset("the a an this that these those his her its their our my your".split())
@@ -397,7 +403,7 @@ def _rule(pattern: str, repl: str | Callable[[re.Match[str]], str], *, end_perio
 
     def fn(m: re.Match[str]) -> str:
         out = _cap_like(m.group(), repl)
-        if end_period and _at_end(m):
+        if end_period and m.group().endswith(".") and _at_end(m):
             out += "."
         return out
 
@@ -418,6 +424,8 @@ _ABBREVIATIONS: list[_Rule] = [
     _rule(r"\b[Vv]s\.?(?=\s)", "versus"),
     _rule(rf"(\b[{_UP}][\w'’\-]*)\s+v\.\s+(?=[{_UP}])", lambda m: m.group(1) + " versus "),
     _rule(r"\b[Vv]iz\.(?=[\s,])", "namely"),
+    _rule(r"\b[Rr]efs\.(?=\s)", "references"),
+    _rule(r"\b[Rr]ef\.(?=\s*\[?\d)", "reference"),
     _rule(r"\b[Aa]pprox\.(?=\s|$)", "approximately"),
     _rule(r"\b[Cc]a\.\s?(?=\d)", "circa "),
     _rule(r"(?<![\w.])c\.\s?(?=\d{3,4}\b)", "circa "),
@@ -426,8 +434,8 @@ _ABBREVIATIONS: list[_Rule] = [
           lambda m: _cap_like(m.group(), "Figure" + ("s " if m.group("s") else " "))),
     _rule(r"\b[Ee]q(?:n)?(?P<s>s?)\.\s*(?=[\d(\[])",
           lambda m: _cap_like(m.group(), "Equation" + ("s " if m.group("s") else " "))),
-    _rule(r"\b[Cc]hs\.\s*(?=\d|[IVXLC]+\b)", "Chapters "),
-    _rule(r"\b(?:Ch|Chap|ch|chap)\.\s*(?=\d|[IVXLC]+\b)", "Chapter "),
+    _rule(r"\b[Cc]hs\.\s*(?=\d|[IVXLC]+\b)", "chapters "),
+    _rule(r"\b(?:Ch|Chap|ch|chap)\.\s*(?=\d|[IVXLC]+\b)", "chapter "),
     _rule(r"\bSec(?P<s>s?)\.\s*(?=\d|[IVXLC]+\b)", lambda m: "Sections " if m.group("s") else "Section "),
     _rule(r"§§\s*", "Sections "),
     _rule(r"§\s*", "Section "),
@@ -439,8 +447,8 @@ _ABBREVIATIONS: list[_Rule] = [
     _rule(rf"\b({_ORDINAL_EDITION})\s+[Ee]d\.", lambda m: m.group(1) + " edition"),
     _rule(r"\(\s*[Ee]d\.\s*\)", "(editor)"),
     _rule(r"\(\s*[Ee]ds\.\s*\)", "(editors)"),
-    _rule(r"\b[Ee]ds\.(?=[\s,;)])", "editors"),
-    _rule(r"(?<![\w/])[Ww]/[Oo](?![\w/])", "without"),
+    _rule(r"\b[Ee]ds\.(?=[\s,;)]|$)", "editors"),
+    _rule(r"(?<![\w/])[Ww]/(?:[Oo]|out)(?![\w/])", "without"),
     _rule(r"(?<![\w/])[Ww]/(?=\s|[A-Za-z])", "with "),
     _rule(r"\b([AaPp])\.\s?[Mm]\.", lambda m: m.group(1).upper() + " M" + ("." if _at_end(m) else "")),
     _rule(r"\b((?:1[0-2]|0?[1-9])(?::[0-5]\d)?)([AaPp])[Mm]\b", lambda m: f"{m.group(1)} {m.group(2).upper()} M"),
@@ -813,7 +821,7 @@ _UNIT_AFTER_PER = re.compile(
     rf"(?:(?<=\bper )|(?<=[a-z]{{3}})/)({_unit_alternation([k for k in _UNITS if len(k) > 1])})([²³])?(?![\w/])"
 )
 _SPECIAL_UNITS = re.compile(
-    r"(?<![\w])(" + "|".join(re.escape(k) for k in sorted(_UNITS, key=len, reverse=True) if re.search("[µμΩ]", k))
+    r"(?<![\w])(" + "|".join(re.escape(k) for k in sorted(_UNITS, key=len, reverse=True) if re.search("[µμ]", k))
     + r")(?![\w])"
 )
 _DEGREES = re.compile(r"(?<![\w.])(-?\d+(?:\.\d+)?)\s?(?:°\s?([CFK])\b|(℃)|(℉)|°)")
@@ -1070,7 +1078,7 @@ _ARROW_ASCII = re.compile(r"(?<=[\w\s)])\s*(?:-{1,2}>|=>)\s*(?=[\w\s(])")
 
 
 def _symbols(text: str) -> str:
-    if text.isascii() and not re.search(r"[%=<>~*#^@|_\\{}/-]|\.\d", text):
+    if text.isascii() and not re.search(r"[\d%=<>~*#^@|_\\{}/+-]", text):
         return text
     if "\\" in text:
         text = _PROSE_LATEX.sub(lambda m: " " + verbalize_math(m.group()) + " ", text)
@@ -1134,6 +1142,7 @@ def _symbols(text: str) -> str:
     text = re.sub(r"~", _tilde_repl, text)
     text = re.sub(r"(?<=\s)-(?=\s)", _spaced_hyphen, text)
     text = re.sub(r"\*", _between_operands("times", " "), text)
+    text = re.sub(r"\+", _between_operands("plus", "+"), text)
     text = re.sub(r"\b([CF])#", r"\1 sharp", text)
     text = re.sub(r"#\s?(?=\d)", "number ", text)
     text = re.sub(r"(?<!\w)@(?=\w)", "at ", text)
@@ -1330,13 +1339,20 @@ _SHORT_WORDS = frozenset({"and", "or", "if", "for", "not", "the", "mod", "pH", "
 
 
 class _MathItem:
-    __slots__ = ("words", "kind", "complex", "func")
+    __slots__ = ("words", "kind", "complex", "func", "head")
 
-    def __init__(self, words: str, kind: str = "atom", complex_: bool = False, func: bool = False) -> None:
+    def __init__(
+        self, words: str, kind: str = "atom", complex_: bool = False, func: bool = False, head: str = ""
+    ) -> None:
         self.words = words
         self.kind = kind  # "atom", "op", "rel", "sep", "paren", "bigop"
         self.complex = complex_
-        self.func = func  # a function name waiting for its argument ("sine" + "of x")
+        self.func = func  # a function name waiting for its argument: "sine" + "of x"
+        self.head = head  # the single letter this atom is built on ("f" in "f prime"), for "f(x)"
+
+    def but(self, words: str, complex_: bool | None = None) -> _MathItem:
+        """A copy with new words (postfix operators keep the function-ness and head letter)."""
+        return _MathItem(words, "atom", self.complex if complex_ is None else complex_, self.func, self.head)
 
 
 class _MathParser:
@@ -1454,18 +1470,20 @@ class _MathParser:
         if tok[0].isdigit() or (tok[0] == "." and len(tok) > 1):
             return _MathItem(tok if tok[0] != "." else "0" + tok)
         if tok.isalpha():
+            if tok in ("max", "min") and self.peek(skip_space=False) in ("(", "_"):
+                return self.bigop(tok)
             if tok in _MATH_FUNCS:
                 return self.function(_MATH_FUNCS[tok])
-            if tok in _MATH_BIGOPS:
-                return self.bigop(tok)
             if tok == "sqrt":
                 return self.command("sqrt")
+            if tok == "mod":
+                return _MathItem("mod", "op")
             if len(tok) >= 4 or tok in _SHORT_WORDS:
                 return _MathItem(tok)  # a word: "mass", "rate", "max"
             if len(tok) == 1:
-                return _MathItem(tok)
+                return _MathItem(tok, head=tok)
             self.toks[self.i : self.i] = list(tok[1:])  # "xy" is x times y: read letter by letter
-            return _MathItem(tok[0])
+            return _MathItem(tok[0], head=tok[0])
         if tok.startswith("\\"):
             return self.command(tok[1:])
         return self.symbol(tok)
@@ -1594,7 +1612,7 @@ class _MathParser:
                 sub, _ = self.arg()
                 if re.fullmatch(r"[A-Za-z]{2,3}", sub) and sub.lower() not in {"max", "min", "eff", "avg", "tot"}:
                     sub = " ".join(sub)
-                item = _MathItem(f"{item.words} sub {sub}", "atom", True, item.func)
+                item = item.but(f"{item.words} sub {sub}", True)
             elif nxt == "^":
                 self.take()
                 if self.peek() in ("\\circ",) or (self.peek() == "{" and self._group_is("\\circ")):
@@ -1617,16 +1635,15 @@ class _MathParser:
                     phrase = " star"
                 else:
                     phrase = f" to the power of {power}" + ("," if cx else "")
-                base = item.words + ("," if item.kind == "paren" and item.complex else "")
-                if item.kind == "paren" and item.complex:
-                    base = f"the quantity {item.words},"
-                item = _MathItem(base + phrase, "atom", True, item.func)
+                base = f"the quantity {item.words}," if item.kind == "paren" and item.complex else item.words
+                item = item.but(base + phrase, True)
             elif nxt == "'":
                 self.take()
-                item = _MathItem(item.words + " prime", "atom", item.complex, item.func)
+                item = item.but(item.words + " prime")
+                item.func = item.func or item.head in _FUNC_LETTERS
             elif nxt == "!" and self.peek(skip_space=False) == "!":
                 self.take()
-                item = _MathItem(item.words + " factorial", "atom", item.complex)
+                item = item.but(item.words + " factorial")
             else:
                 return item
 
@@ -1641,33 +1658,30 @@ class _MathParser:
 
 
 def _join_math(items: list[_MathItem]) -> tuple[str, bool]:
+    """Join parsed items into words; also report whether the result is more than one simple term."""
     out: list[str] = []
     atoms = 0
-    has_op = False
+    has_op = any(item.complex for item in items) and len(items) == 1
     prev: _MathItem | None = None
     for item in items:
         words = item.words
         if item.kind == "paren":
-            fn_call = prev is not None and (
-                prev.func
-                or (prev.kind == "atom" and len(prev.words) == 1 and prev.words.isalpha()
-                    and (prev.words in _FUNC_LETTERS or not item.complex))
-            )
-            if fn_call:
-                words = ("of " if not prev.func else "") + words + ("," if item.complex else "")
+            if prev is not None and prev.kind == "bigop":
+                words += "," if item.complex else ""  # max(a, b)
+            elif prev is not None and (
+                prev.func or (prev.head and (prev.head in _FUNC_LETTERS or not item.complex))
+            ):
+                words = f"of {words}" + ("," if item.complex else "")  # f(x), sin(x), x(t)
             elif item.complex:
-                words = ("times " if prev is not None and prev.kind == "atom" else "") + f"the quantity {words},"
+                lead = "times " if prev is not None and prev.kind in ("atom", "paren") else ""
+                words = f"{lead}the quantity {words},"  # 2(x + 1)
             atoms += 1
-        elif item.kind in ("op", "rel"):
-            has_op = True
         elif item.kind == "atom":
-            if prev is not None and prev.func and not words.startswith("of "):
-                words = "of " + words
+            if prev is not None and prev.func:
+                words = "of " + words  # sin x
             atoms += 1
-        elif item.kind == "bigop":
+        elif item.kind in ("op", "rel", "bigop"):
             has_op = True
-        if prev is not None and prev.func and item.kind == "paren" and not words.startswith("of "):
-            words = "of " + words
         out.append(words)
         prev = item
     text = _WS.sub(" ", " ".join(w for w in out if w)).strip()

@@ -1046,7 +1046,9 @@ def create_app(
         catalog = _catalog()
         installed = {path.stem for path in catalog.installed_piper_voices()}
         return {
-            "voices": [{**voice.model_dump(mode="json"), "installed": voice.id in installed} for voice in catalog.CATALOG]
+            "voices": [
+                {**voice.model_dump(mode="json"), "installed": voice.id in installed} for voice in catalog.CATALOG
+            ]
         }
 
     @app.post("/api/voices/download")
@@ -1187,7 +1189,8 @@ def create_app(
         try:
             export_audiobook = _export_audiobook()
         except ImportError as exc:
-            raise HTTPException(503, f"Saving audio files isn't available in this copy of Destiny Bot ({exc}).") from None
+            message = f"Saving audio files isn't available in this copy of Destiny Bot ({exc})."
+            raise HTTPException(503, message) from None
 
         def run(job: Job) -> dict[str, Any]:
             assert job.files_dir is not None
@@ -1371,6 +1374,89 @@ def _open_browser(url: str) -> None:
         log.info("Couldn't open a browser: %s", exc)
 
 
+def _uvicorn_server(app: FastAPI, host: str, port: int) -> Any:
+    import uvicorn
+
+    server_config = uvicorn.Config(
+        app,
+        host=host,
+        port=port,
+        log_level="warning",
+        access_log=False,
+        lifespan="off",
+        ws="none",
+        server_header=False,
+        proxy_headers=False,
+        timeout_graceful_shutdown=5,
+    )
+    return uvicorn.Server(server_config)
+
+
+def _wait_until_serving(server: Any, thread: threading.Thread, host: str, port: int, timeout: float) -> bool:
+    """True once uvicorn has started and answers an HTTP request."""
+    import http.client
+
+    deadline = time.monotonic() + timeout
+    connect_host = "127.0.0.1" if host.strip("[]") in ("0.0.0.0", "::", "localhost") else host.strip("[]")
+    while time.monotonic() < deadline and thread.is_alive():
+        if getattr(server, "started", False):
+            conn = http.client.HTTPConnection(connect_host, port, timeout=2)
+            try:
+                conn.request("GET", "/", headers={"Host": f"127.0.0.1:{port}"})
+                conn.getresponse().read()
+                return True
+            except OSError:
+                pass
+            finally:
+                conn.close()
+        time.sleep(0.02)
+    return False
+
+
+def start_server_in_thread(
+    *, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, timeout: float = 10.0
+) -> tuple[str, Callable[[], None]]:
+    """Start the server in a background thread, for a native-window wrapper.
+
+    Uses the first free port from ``port`` on, waits until the server answers
+    requests, and returns ``(base_url, stop)``. ``stop()`` shuts uvicorn down
+    cleanly and waits for its thread; calling it again does nothing. Only
+    loopback addresses are allowed here.
+    """
+    host = (host or DEFAULT_HOST).strip()
+    if not _is_loopback(host):
+        raise ValueError(f"Refusing to listen on {host}: the app window only needs this computer (127.0.0.1).")
+    sock, actual_port = _bind_free_port(host, port)
+    jobs = JobManager()
+    try:
+        server = _uvicorn_server(create_app(jobs=jobs, port=actual_port, bind_host=host), host, actual_port)
+    except BaseException:
+        jobs.shutdown(wait=False)
+        sock.close()
+        raise
+    thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, name="destiny-server", daemon=True)
+    lock = threading.Lock()
+    stopped = False
+
+    def stop() -> None:
+        nonlocal stopped
+        with lock:
+            if stopped:
+                return
+            stopped = True
+        server.should_exit = True
+        if thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=15)
+        jobs.shutdown(wait=False)
+        sock.close()
+
+    thread.start()
+    if not _wait_until_serving(server, thread, host, actual_port, timeout):
+        stop()
+        raise RuntimeError("Destiny Bot's reader didn't start in time. Close other copies of it and try again.")
+    return _browser_url(host, actual_port), stop
+
+
 def run(
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
@@ -1383,8 +1469,6 @@ def run(
     Listening on anything but a loopback address needs ``allow_remote=True`` (the CLI
     passes it when the user explicitly gives ``--host``) and prints a privacy warning.
     """
-    import uvicorn
-
     host = (host or DEFAULT_HOST).strip()
     loopback = _is_loopback(host)
     if not loopback and not allow_remote:
@@ -1410,20 +1494,9 @@ def run(
             timer = threading.Timer(1.0, _open_browser, args=(url,))
             timer.daemon = True
             timer.start()
-        server_config = uvicorn.Config(
-            app,
-            host=host,
-            port=actual_port,
-            log_level="warning",
-            access_log=False,
-            lifespan="off",
-            ws="none",
-            server_header=False,
-            proxy_headers=False,
-            timeout_graceful_shutdown=5,
-        )
+        server = _uvicorn_server(app, host, actual_port)
         try:
-            uvicorn.Server(server_config).run(sockets=[sock])
+            server.run(sockets=[sock])
         except KeyboardInterrupt:  # uvicorn re-raises the Ctrl+C it already handled gracefully
             pass
     finally:

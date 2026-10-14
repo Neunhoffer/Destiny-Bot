@@ -548,6 +548,56 @@ def test_serve_defaults(monkeypatch):
     assert cli.main(["serve", "--port", "70000"]) == 2
 
 
+def _fake_module(name: str, **attrs):
+    import types
+
+    module = types.ModuleType(name)
+    module.__dict__.update(attrs)
+    return module
+
+
+def test_app_shortcut_and_self_test(monkeypatch, capsys, tmp_path):
+    calls = []
+
+    def run_app(*, port):
+        calls.append(("app", port))
+        return 0
+
+    def create_shortcuts(*, desktop, start_menu):
+        calls.append(("shortcut", desktop, start_menu))
+        return [tmp_path / "Destiny Bot.lnk"] + ([tmp_path / "Start Menu" / "Destiny Bot.lnk"] if start_menu else [])
+
+    def run_self_test(*, quick):
+        calls.append(("self-test", quick))
+        return 3
+
+    monkeypatch.setitem(sys.modules, "destiny_bot.desktop",
+                        _fake_module("destiny_bot.desktop", run_app=run_app, create_shortcuts=create_shortcuts))
+    monkeypatch.setitem(sys.modules, "destiny_bot.selftest",
+                        _fake_module("destiny_bot.selftest", run_self_test=run_self_test))
+
+    assert cli.main(["app"]) == 0
+    assert cli.main(["app", "--port", "9100"]) == 0
+    assert cli.main(["shortcut"]) == 0
+    out = capsys.readouterr().out
+    assert f"Created {tmp_path / 'Destiny Bot.lnk'}" in out and "Start Menu" in out
+    assert cli.main(["shortcut", "--no-start-menu"]) == 0
+    assert "Start Menu" not in capsys.readouterr().out
+    assert cli.main(["self-test"]) == 3
+    assert cli.main(["self-test", "--quick"]) == 3
+    assert calls == [("app", 8765), ("app", 9100), ("shortcut", True, True), ("shortcut", True, False),
+                     ("self-test", False), ("self-test", True)]
+
+
+def test_app_commands_without_their_modules(monkeypatch, capsys):
+    monkeypatch.setitem(sys.modules, "destiny_bot.desktop", None)
+    monkeypatch.setitem(sys.modules, "destiny_bot.selftest", None)
+    for argv in (["app"], ["shortcut"], ["self-test", "--quick"]):
+        assert cli.main(argv) == 1, argv
+        err = capsys.readouterr().err
+        assert err.startswith("Error: ") and "isn't available" in err and "Traceback" not in err
+
+
 def test_server_refuses_remote_without_permission():
     from destiny_bot import server
 
@@ -604,3 +654,30 @@ def test_integration_doctor(capsys):
     assert cli.main(["doctor"]) == 0
     out = capsys.readouterr().out
     assert "Voices:" in out and "piper" in out and "browser" in out
+
+
+def _system_voice_ready() -> bool:
+    if not _ready("destiny_bot.tts", "get_engine"):
+        return False
+    try:
+        from destiny_bot.tts import get_engine
+
+        return bool(get_engine("system").is_available()[0])
+    except Exception:
+        return False
+
+
+@pytest.mark.skipif(not (_ready("destiny_bot.speech", "plan_section") and _system_voice_ready()),
+                    reason="the real speech planner or a system voice isn't available")
+def test_integration_read_with_real_voice(tmp_path, capsys, monkeypatch):
+    from destiny_bot import audio
+
+    played: list[AudioClip] = []
+    monkeypatch.setattr(audio, "play_clip", played.append)
+    monkeypatch.setattr(ingest, "load_document", fake_load_document)
+    doc = add_book(tmp_path, "biology.md")
+    assert cli.main(["read", doc.id, "--engine", "system", "--section", "s1"]) == 0
+    out = capsys.readouterr().out
+    assert "Lipids form a bilayer." in out
+    assert played and all(clip.data for clip in played)
+    assert Library().get_progress(doc.id).section_id == "s1"
