@@ -448,11 +448,11 @@ class _WindowsBackend(_Backend):
         self._lock = threading.Lock()
 
     def _powershell(self) -> str | None:
-        exe = shutil.which("powershell") or shutil.which("powershell.exe")
-        if exe:
-            return exe
+        # Windows' own copy first: a PATH search on Windows also looks in the current folder.
         candidate = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe"
-        return str(candidate) if candidate.is_file() else None
+        if candidate.is_file():
+            return str(candidate)
+        return shutil.which("powershell") or shutil.which("powershell.exe")
 
     def _sapi(self) -> _SapiWorker | None:
         with self._lock:

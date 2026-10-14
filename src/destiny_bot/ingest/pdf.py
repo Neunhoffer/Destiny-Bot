@@ -92,7 +92,8 @@ _CHAPTERISH_RE = re.compile(
     re.I,
 )
 _SECTION_NUM_RE = re.compile(r"^(\d{1,3}(?:\.\d{1,3}){0,4})\.?\s+\S")
-_LEADER_RE = re.compile(r"(?:[.·…_]\s?){4,}\s*\d{1,4}$")
+# (starts only where a run of leaders starts, so that long runs of dots stay linear-time)
+_LEADER_RE = re.compile(r"(?<![.·…_])(?<![.·…_]\s)(?:[.·…_]\s?){4,}\s*\d{1,4}$")
 _TERMINAL = ".!?:;…"
 _CLOSERS = " \"'”’)»]"
 _FUNCTION_WORDS = frozenset(
@@ -1205,6 +1206,8 @@ def _mark_headers_footers(pages: list[_Page], stats: _Stats) -> None:
     candidates: list[tuple[tuple, _Line]] = []
     slots: dict[tuple, set[int]] = defaultdict(set)  # header "slot" -> pages using it
     slot_lines: list[tuple[tuple, _Line]] = []
+    notices: dict[tuple, set[int]] = defaultdict(set)  # small-print block in a margin band -> pages
+    notice_lines: list[tuple[tuple, list[_Line]]] = []
     for pg in pages:
         if not pg.lines:
             continue
@@ -1212,6 +1215,9 @@ def _mark_headers_footers(pages: list[_Page], stats: _Stats) -> None:
         bottom_band = pg.height * (1 - _BAND)
         top_y = min(ln.y0 for ln in pg.lines)
         bottom_y = max(ln.y1 for ln in pg.lines)
+        for key, block in _margin_notices(pg, stats, top_band, bottom_band):
+            notices[key].add(pg.index)
+            notice_lines.append((key, block))
         for ln in pg.lines:
             if ln.y1 <= top_band:
                 zone = "top"
@@ -1259,12 +1265,37 @@ def _mark_headers_footers(pages: list[_Page], stats: _Stats) -> None:
     busy_slots = {slot for slot, pset in slots.items() if len(pset) >= max(3, 0.4 * n_pages)}
     drop = [ln for key, ln in candidates if key in repeated]
     drop += [ln for slot, ln in slot_lines if slot in busy_slots]
+    # A copyright or license notice printed in small type at the foot of some pages (every
+    # chapter opener, say) repeats word for word, however far apart those pages are.
+    drop += [ln for key, block in notice_lines if len(notices[key]) >= 3 for ln in block]
     total = sum(ln.chars for pg in pages for ln in pg.lines if not ln.drop)
     removed = sum(ln.chars for ln in {id(ln): ln for ln in drop}.values())
     if total and removed > 0.5 * total:
         return  # the "header" is the content itself (e.g. one line per page)
     for ln in drop:
         ln.drop = True
+
+
+def _margin_notices(
+    pg: _Page, stats: _Stats, top_band: float, bottom_band: float
+) -> list[tuple[tuple, list[_Line]]]:
+    """Text blocks of small print lying wholly in the top or bottom band (notices, imprints)."""
+    blocks: dict[int, list[_Line]] = defaultdict(list)
+    for ln in pg.lines:
+        blocks[ln.pblock].append(ln)
+    out = []
+    for lines in blocks.values():
+        if all(ln.y1 <= top_band for ln in lines):
+            zone = "top"
+        elif all(ln.y0 >= bottom_band for ln in lines):
+            zone = "bottom"
+        else:
+            continue
+        text = " ".join(ln.text for ln in lines)
+        if len(text) >= 40 and all(ln.size <= stats.body_size * 0.95 for ln in lines):
+            if not any(_inside(ln, t.bbox) for ln in lines for t in pg.tables):
+                out.append(((zone, _margin_key(text)), lines))
+    return out
 
 
 # --------------------------------------------------------------------------- page layout

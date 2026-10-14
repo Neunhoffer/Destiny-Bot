@@ -15,7 +15,14 @@ from lxml import etree
 
 from ..models import Block, BlockKind, Document
 from . import IngestError, ProgressFn
-from .common import clean_display_text, doc_id_for_file, finalize_sections, make_section, title_from_filename
+from .common import (
+    check_zip_size,
+    clean_display_text,
+    doc_id_for_file,
+    finalize_sections,
+    make_section,
+    title_from_filename,
+)
 from .text import table_block, text_block
 
 _A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
@@ -268,6 +275,7 @@ def load_pptx(path: Path, *, source_name: str, progress: ProgressFn | None = Non
     import pptx
 
     path = Path(path)
+    check_zip_size(path, source_name)
     if progress:
         progress(0.0, "Opening presentation")
     try:

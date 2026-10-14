@@ -19,7 +19,14 @@ from lxml import etree
 
 from ..models import Block, BlockKind, Document
 from . import IngestError, ProgressFn
-from .common import clean_display_text, doc_id_for_file, finalize_sections, sections_from_blocks, title_from_filename
+from .common import (
+    check_zip_size,
+    clean_display_text,
+    doc_id_for_file,
+    finalize_sections,
+    sections_from_blocks,
+    title_from_filename,
+)
 from .text import code_text, superscript_text, table_block, text_block, wrap_math
 
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
@@ -381,6 +388,12 @@ class _DocxReader:
                     continue
                 if not 0xF000 <= code <= 0xF0FF:  # symbol-font private-use glyphs can't be mapped reliably
                     parts.append(chr(code))
+            elif tag == _W + "ruby":  # East Asian text with a pronunciation guide: read the text itself
+                base = child.find(_W + "rubyBase")
+                if base is not None:
+                    inner = _Para()
+                    self._inline(base, inner)
+                    parts.append("".join(inner.parts))
             elif tag in (_W + "footnoteReference", _W + "endnoteReference"):
                 para.notes.append((_local(tag)[: -len("Reference")], child.get(_W + "id") or ""))
             elif tag in (_W + "drawing", _W + "pict", _W + "object", _MC + "AlternateContent"):
@@ -484,6 +497,7 @@ def load_docx(path: Path, *, source_name: str, progress: ProgressFn | None = Non
     import docx
 
     path = Path(path)
+    check_zip_size(path, source_name)
     if progress:
         progress(0.0, "Opening document")
     try:

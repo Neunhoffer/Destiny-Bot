@@ -21,6 +21,7 @@ from lxml import html as lxml_html
 from ..models import Block, BlockKind, Document, Section
 from . import IngestError, ProgressFn
 from .common import (
+    check_zip_size,
     clean_display_text,
     doc_id_for_file,
     finalize_sections,
@@ -203,6 +204,7 @@ def _has_text(content: HtmlContent) -> bool:
 def load_epub(path: Path, *, source_name: str, progress: ProgressFn | None = None) -> Document:
     """Load an EPUB e-book. Raises :class:`IngestError` for DRM-protected or broken files."""
     path = Path(path)
+    check_zip_size(path, source_name)
     _check_drm(path)
     ebooklib, epub, TolerantReader = _ebooklib()
     if progress:

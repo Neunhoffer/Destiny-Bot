@@ -46,6 +46,14 @@ def disable_onnx_telemetry() -> None:
         pass
 
 
+def engine_start_problem(label: str, exc: BaseException) -> str:
+    """Why a voice engine's packages failed to load (``label`` e.g. "The Kokoro voice engine")."""
+    reason = f"{label} couldn't start: {exc}"
+    if "DLL load failed" in str(exc):  # Windows, usually onnxruntime without the Visual C++ runtime
+        reason += ". Installing Microsoft's Visual C++ Redistributable (x64) usually fixes this."
+    return reason
+
+
 def espeak_path_reason(path: Path | str) -> str:
     """Why Piper/Kokoro can't start when :func:`espeak_data_path` gives None."""
     example = "C:\\Athena" if sys.platform == "win32" else "~/Athena"
@@ -172,6 +180,7 @@ __all__ = [
     "all_engines",
     "clamp_rate",
     "disable_onnx_telemetry",
+    "engine_start_problem",
     "espeak_data_path",
     "espeak_path_reason",
     "get_engine",

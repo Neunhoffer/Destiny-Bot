@@ -1203,6 +1203,7 @@ const sched = {
   waitingSince: 0, // performance.now() when the listener started waiting for the voice
   holdUntil: 0, // a sentence held back after running dry starts then (audio clock)
   rateChangedAt: -Infinity,
+  planned: 0, // clips the last lookahead asked for
   stalls: [], // performance.now() of recent waits in the middle of reading
 
   start(index) {
@@ -1331,7 +1332,10 @@ const sched = {
     } catch {
       /* the next section isn't loaded yet; the scheduler reports problems when it gets there */
     }
-    if (valid()) clips.plan(wanted);
+    if (valid()) {
+      this.planned = wanted.length;
+      clips.plan(wanted);
+    }
   },
 
   /**
@@ -4443,6 +4447,7 @@ function exposeDebugHooks() {
         voice: activeVoice(),
         rtf: Object.fromEntries([...clips.synth.keys()].map((e) => [e, clips.rtf(e)])),
         lookahead: clips.lookaheadSeconds(activeEngine()),
+        plannedAhead: sched.planned,
         clipEntries: clips.entries.size,
         clipBlobs: entries().filter((e) => e.blob).length,
         objectUrls: entries().filter((e) => e.url).length,

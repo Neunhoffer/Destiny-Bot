@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 import unicodedata
+import zipfile
 from collections import Counter
 from pathlib import Path
 from typing import Iterable
@@ -22,15 +23,50 @@ _LIGATURES = {
     "ﬆ": "st",
 }
 _INVISIBLE = dict.fromkeys(map(ord, "­​‌‍⁠﻿"), None)  # soft hyphen, zero-widths, BOM
-_SPACES = re.compile(r"[ \t  -   　]+")
+# Control codes (except tab, line breaks and other whitespace): never text. PDFs with math
+# fonts and badly decoded files leave them behind.
+_INVISIBLE.update(dict.fromkeys([*range(0x00, 0x09), *range(0x0E, 0x1C), 0x7F, *range(0x80, 0x85), *range(0x86, 0xA0)]))
 # A word hyphenated at a line break: "infor-\nmation", "self-\nesteem", "pre-\nColumbian".
 _HYPHEN_BREAK = re.compile(r"(?<!\w)(\w+)[-\u2010\u2011][ \t]*\n\s*(\w+)")
 _SOFT_HYPHEN_BREAK = re.compile(r"\u00ad[ \t]*\n\s*")  # a discretionary hyphen: always rejoin
 _DASH_BREAK = re.compile(r"(?<=\w)([\u2013\u2014])[ \t]*\n\s*(?=\w)")  # "1990–\n2000": no space
-_NEWLINES = re.compile(r"\s*\n\s*")
+_WS_RUN = re.compile(r"\s+")  # (one pass: r"\s*\n\s*" would be quadratic on long runs of spaces)
 
 # A section longer than this many characters is split into parts (~40 minutes of speech).
 MAX_SECTION_CHARS = 40_000
+
+
+# Word, PowerPoint and EPUB files are zip archives whose parts are unpacked into memory. A
+# small file built to unpack to gigabytes (a "zip bomb") must not freeze the computer.
+MAX_UNPACKED_BYTES = 1 << 30  # everything, pictures and videos included
+MAX_PART_BYTES = 320 << 20  # one part (a video can be nearly as big as the 300 MB upload limit)
+MAX_MARKUP_BYTES = 256 << 20  # the XML / XHTML parts that get parsed
+_MARKUP_SUFFIXES = frozenset({"", ".xml", ".rels", ".xhtml", ".html", ".htm", ".opf", ".ncx", ".svg"})
+
+
+def check_zip_size(path: Path, source_name: str) -> None:
+    """Raise :class:`IngestError` if the zip archive at ``path`` unpacks to too much data.
+
+    Damaged archives pass silently: the loader reports them in its own words.
+    (Python's zip reader never inflates a part beyond its declared size.)
+    """
+    from . import IngestError
+
+    try:
+        with zipfile.ZipFile(path) as zf:
+            infos = zf.infolist()
+    except (zipfile.BadZipFile, OSError, ValueError, EOFError):
+        return
+    total = sum(info.file_size for info in infos)
+    markup = sum(info.file_size for info in infos if Path(info.filename).suffix.lower() in _MARKUP_SUFFIXES)
+    biggest = max((info.file_size for info in infos), default=0)
+    if total > MAX_UNPACKED_BYTES or markup > MAX_MARKUP_BYTES or biggest > MAX_PART_BYTES:
+        size = f"{total / (1 << 30):.1f} GB" if total >= 1 << 30 else f"{total >> 20} MB"
+        raise IngestError(
+            f"'{Path(source_name).name}' would unpack to {size} of data, far more than a normal document, so it "
+            "wasn't opened (that keeps your computer from freezing). The file may be damaged. If it opens "
+            "normally in Word, PowerPoint or your e-book reader, save a new copy there and import that."
+        )
 
 
 def doc_id_for_bytes(data: bytes) -> str:
@@ -144,7 +180,7 @@ class HyphenationEvidence:
 
 
 _WORD = re.compile(r"[^\W\d_]+")
-_COMPOUND = re.compile(r"([^\W\d_]+)-(?=([^\W\d_]+))")
+_COMPOUND = re.compile(r"(?<![^\W\d_])([^\W\d_]+)-(?=([^\W\d_]+))")  # (anchored: linear time)
 
 
 def _line_break_hyphen(left: str, right: str, before: str, evidence: HyphenationEvidence | None) -> str:
@@ -199,8 +235,7 @@ def clean_display_text(text: str, *, evidence: HyphenationEvidence | None = None
     if "\u00ad" in text:
         text = _SOFT_HYPHEN_BREAK.sub("", text)  # (before fix_characters drops the soft hyphens)
     text = rejoin_line_breaks(fix_characters(text), evidence)
-    text = _NEWLINES.sub(" ", text)
-    text = _SPACES.sub(" ", text)
+    text = _WS_RUN.sub(" ", text)  # line breaks, tabs, no-break and other spaces -> one space
     return text.strip()
 
 

@@ -30,6 +30,7 @@ from destiny_bot.tts.base import AudioClip, EngineUnavailable, TTSError
 from destiny_bot.tts.browser_engine import BrowserEngine
 from destiny_bot.tts.cache import AudioCache
 from destiny_bot.tts.edge_engine import NETWORK_ERROR, EdgeEngine
+from destiny_bot.tts import kokoro_engine
 from destiny_bot.tts.kokoro_engine import NO_MODEL_REASON, NO_PACKAGE_REASON, KokoroEngine
 from destiny_bot.tts.piper_engine import NO_VOICE_REASON, PiperEngine
 from destiny_bot.tts.system_engine import SystemEngine
@@ -41,6 +42,18 @@ HAS_ESPEAK = bool(shutil.which("espeak-ng") or shutil.which("espeak"))
 def no_bundled_voices(monkeypatch):
     """Tests opt in to bundled voice folders explicitly."""
     monkeypatch.delenv(catalog.EXTRA_DIRS_ENV, raising=False)
+
+
+REAL_KOKORO_ESPEAK_CHECK = kokoro_engine._check_espeak_data
+REAL_PIPER_ESPEAK_CHECK = PiperEngine._check_espeak_dir
+
+
+@pytest.fixture(autouse=True)
+def espeak_folder_ok(request, monkeypatch):
+    """Tests with fake voices don't depend on how long this machine's espeak-ng path is."""
+    if not {"kokoro_model_dir", "piper_voice_path"} & set(request.fixturenames):
+        monkeypatch.setattr(kokoro_engine, "_check_espeak_data", lambda: None)
+        monkeypatch.setattr(PiperEngine, "_check_espeak_dir", lambda self: None)
 
 
 @pytest.fixture
@@ -500,6 +513,31 @@ def test_kokoro_unavailable_reasons(monkeypatch):
         fresh.synthesize("Hello")
 
 
+def test_engines_explain_a_dll_load_failure(monkeypatch):
+    # On Windows onnxruntime fails with ImportError("DLL load failed ...") when the Visual C++
+    # runtime is missing; that must not be reported as "the package isn't installed".
+    import importlib.abc
+    import importlib.util
+
+    class DllFailure(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+        def find_spec(self, name, path, target=None):
+            return importlib.util.spec_from_loader(name, self) if name in ("kokoro_onnx", "piper") else None
+
+        def create_module(self, spec):
+            return None
+
+        def exec_module(self, module):
+            raise ImportError("DLL load failed while importing onnxruntime_pybind11_state: The specified module could not be found.")
+
+    for name in ("kokoro_onnx", "piper"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    monkeypatch.setattr(sys, "meta_path", [DllFailure(), *sys.meta_path])
+    for engine in (KokoroEngine(), PiperEngine()):
+        ok, reason = engine.is_available()
+        assert not ok and "DLL load failed" in reason and "Visual C++ Redistributable" in reason
+        assert "isn't installed" not in reason
+
+
 def test_kokoro_lists_curated_voices(fake_kokoro):
     voices = fake_kokoro.list_voices()
     assert [v.id for v in voices] == ["af_heart", "af_bella", "bm_george"]  # curated order, odd ones hidden
@@ -651,6 +689,7 @@ def test_piper_hands_espeak_an_ascii_data_path(monkeypatch):
     import piper
 
     monkeypatch.setattr(phonemize_espeak, "ESPEAK_DATA_DIR", Path(ZOE_DATA))
+    monkeypatch.setattr(PiperEngine, "_check_espeak_dir", REAL_PIPER_ESPEAK_CHECK)
     _windows_short_names(monkeypatch, ZOE_SHORT)
     seen: list[dict] = []
     monkeypatch.setattr(piper.PiperVoice, "load", staticmethod(lambda *a, **kw: seen.append(kw) or FakePiperVoice(a[0])))
@@ -676,6 +715,7 @@ def test_kokoro_hands_espeak_an_ascii_data_path(monkeypatch):
     from phonemizer.backend.espeak.wrapper import EspeakWrapper
 
     write_fake_kokoro(config.voices_dir() / "kokoro")
+    monkeypatch.setattr(kokoro_engine, "_check_espeak_data", REAL_KOKORO_ESPEAK_CHECK)
     monkeypatch.setattr(espeakng_loader, "get_data_path", lambda: ZOE_DATA)
     monkeypatch.setattr(onnxruntime, "InferenceSession", lambda *a, **kw: "session")
 
@@ -948,6 +988,7 @@ def _decode_ps(cmd: list[str]) -> str:
 def test_system_windows_powershell(monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
     _fake_comtypes(monkeypatch, None)  # comtypes (SAPI from Python) not installed
+    monkeypatch.setenv("SystemRoot", "/nonexistent")  # found through PATH, also on a real Windows
     monkeypatch.setattr(shutil, "which", lambda name: PS_EXE if name == "powershell" else None)
     seen: list[dict] = []
 
@@ -1075,6 +1116,7 @@ def _fake_comtypes(monkeypatch, sapi: FakeSapi | None) -> None:
 
 
 def _powershell_speaks(monkeypatch, seconds: float = 0.2) -> FakeRun:
+    monkeypatch.setenv("SystemRoot", "/nonexistent")  # found through PATH, also on a real Windows
     monkeypatch.setattr(shutil, "which", lambda name: PS_EXE if name == "powershell" else None)
 
     def handler(cmd, kwargs):
@@ -1184,6 +1226,19 @@ def test_system_windows_language_codes():
 
     assert _lcid_language("409") == "en-US" and _lcid_language("809;9") == "en-GB"
     assert _lcid_language("c0a") == "es-ES" and _lcid_language("") is None and _lcid_language("zz") is None
+
+
+def test_system_windows_prefers_windows_own_powershell(monkeypatch, tmp_path):
+    from destiny_bot.tts.system_engine import _WindowsBackend
+
+    own = tmp_path / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    own.parent.mkdir(parents=True)
+    own.write_bytes(b"MZ")
+    monkeypatch.setenv("SystemRoot", str(tmp_path))
+    monkeypatch.setattr(shutil, "which", lambda name: r".\powershell.EXE")  # a copy in the current folder
+    assert Path(_WindowsBackend()._powershell()) == own
+    monkeypatch.setenv("SystemRoot", str(tmp_path / "elsewhere"))
+    assert _WindowsBackend()._powershell() == r".\powershell.EXE"
 
 
 def test_system_windows_nothing_available(monkeypatch, tmp_path):
@@ -1328,10 +1383,10 @@ def test_voice_urls_match_piper_downloader():
 
 def test_installed_piper_voices(tmp_path):
     (tmp_path / "a-b-medium.onnx").write_bytes(b"x")
-    (tmp_path / "a-b-medium.onnx.json").write_text("{}")
+    (tmp_path / "a-b-medium.onnx.json").write_text("{}", encoding="utf-8")
     (tmp_path / "no-json-medium.onnx").write_bytes(b"x")
     (tmp_path / "empty-x-low.onnx").write_bytes(b"")
-    (tmp_path / "empty-x-low.onnx.json").write_text("{}")
+    (tmp_path / "empty-x-low.onnx.json").write_text("{}", encoding="utf-8")
     assert catalog.installed_piper_voices(tmp_path) == [tmp_path / "a-b-medium.onnx"]
 
 
@@ -1516,7 +1571,7 @@ def test_extra_voice_dirs_for_piper(tmp_path, monkeypatch):
         folder = bundle / "piper"
         folder.mkdir(parents=True, exist_ok=True)
         (folder / f"{vid}.onnx").write_bytes(b"bundled")
-        (folder / f"{vid}.onnx.json").write_text('{"language": {"code": "en_US"}}')
+        (folder / f"{vid}.onnx.json").write_text('{"language": {"code": "en_US"}}', encoding="utf-8")
     monkeypatch.setenv(catalog.EXTRA_DIRS_ENV, os.pathsep.join([str(bundle_a), "", str(tmp_path / "missing"), str(bundle_b)]))
     assert catalog.extra_voice_dirs() == [bundle_a, tmp_path / "missing", bundle_b]
     downloaded = install_fake_voice("en_US-amy-medium")  # same id as a bundled voice: the download wins
@@ -1723,7 +1778,7 @@ def test_cache_clear_and_errors(tmp_path):
     cache = AudioCache(tmp_path)
     cache.get_or_create(("a",), _clip)
     cache.get_or_create(("b",), lambda: AudioClip(_mp3_bytes(), "audio/mpeg"))
-    (tmp_path / "keep-me.txt").write_text("not ours")
+    (tmp_path / "keep-me.txt").write_text("not ours", encoding="utf-8")
     cache.clear()
     assert [p.name for p in tmp_path.iterdir()] == ["keep-me.txt"]
     with pytest.raises(TTSError):

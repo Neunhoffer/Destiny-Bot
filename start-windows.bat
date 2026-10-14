@@ -1,12 +1,12 @@
 @echo off
 rem Athena launcher for Windows: double-click to start.
 rem First run: creates a private Python environment in this folder (.venv),
-rem installs Athena, downloads a natural offline voice (~60 MB) and puts an
+rem installs Athena, downloads natural offline voices (~180 MB) and puts an
 rem Athena icon on the desktop and in the Start menu.
-rem All books, settings and audio stay in the "data" folder next to this file.
+rem Books, settings and audio are kept privately in your own user folder
+rem (%LOCALAPPDATA%\Athena); "Erase all my data" in Settings removes them.
 setlocal
 cd /d "%~dp0"
-set "DESTINY_HOME=%~dp0data"
 set "VENV=%~dp0.venv"
 
 if exist "%VENV%\destiny-installed.txt" goto installed
@@ -40,10 +40,11 @@ rem The app window is optional too: without it Athena opens in a Microsoft Edge 
 echo installed> "%VENV%\destiny-installed.txt"
 
 :installed
-if not exist "%DESTINY_HOME%\voices\piper\*.onnx" (
+if not exist "%VENV%\destiny-voices.txt" (
   echo.
-  echo  Downloading a natural-sounding offline voice, about 60 MB, one time only...
-  "%VENV%\Scripts\python.exe" -m destiny_bot voices download en_US-lessac-medium
+  echo  Downloading natural-sounding offline voices, about 180 MB, one time only...
+  "%VENV%\Scripts\python.exe" -m destiny_bot voices download en_US-lessac-medium && echo done> "%VENV%\destiny-voices.txt"
+  "%VENV%\Scripts\python.exe" -m destiny_bot voices download kokoro-v1.0
 )
 if not exist "%VENV%\destiny-shortcut.txt" (
   echo.

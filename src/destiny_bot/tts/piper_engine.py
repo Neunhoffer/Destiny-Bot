@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import clamp_rate, disable_onnx_telemetry, espeak_data_path, espeak_path_reason
+from . import clamp_rate, disable_onnx_telemetry, engine_start_problem, espeak_data_path, espeak_path_reason
 from .base import AudioClip, EngineUnavailable, TTSEngine, TTSError, Voice
 from .catalog import CATALOG, RECOMMENDED_VOICE, catalog_voice, installed_piper_voices, piper_voices_dir
 
@@ -154,13 +154,13 @@ class PiperEngine(TTSEngine):
         if not self._imported:
             try:
                 import piper  # noqa: F401
-            except ImportError:
+            except ModuleNotFoundError:
                 self._import_error = (
                     "Natural voices need the piper-tts package, which isn't installed. "
                     "Reinstall Destiny Bot with natural voices included."
                 )
-            except Exception as exc:  # e.g. onnxruntime failing to load its DLLs
-                self._import_error = f"The natural voice engine couldn't start: {exc}"
+            except Exception as exc:  # e.g. onnxruntime failing to load its DLLs (an ImportError too)
+                self._import_error = engine_start_problem("The natural voice engine", exc)
             else:
                 self._import_error = self._check_espeak_dir()
             self._imported = True

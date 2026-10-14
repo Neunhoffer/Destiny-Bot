@@ -1,10 +1,10 @@
 #!/bin/bash
 # Athena launcher for Linux: run ./start-linux.sh
 # First run: creates a private Python environment in this folder (.venv), installs
-# Athena, downloads a natural offline voice (~60 MB) and adds an Athena shortcut
-# (once). All books, settings and audio stay in the "data" folder next to this file.
+# Athena, downloads natural offline voices (~180 MB) and adds an Athena shortcut
+# (once). Books, settings and audio are kept privately in your own user folder;
+# "Erase all my data" in Settings removes them.
 cd "$(dirname "$0")" || exit 1
-export DESTINY_HOME="$PWD/data"
 VENV="$PWD/.venv"
 
 find_python() {
@@ -50,9 +50,11 @@ if [ ! -f "$VENV/destiny-installed.txt" ]; then
   echo installed > "$VENV/destiny-installed.txt"
 fi
 
-if ! ls "$DESTINY_HOME"/voices/piper/*.onnx >/dev/null 2>&1; then
-  echo "  Downloading a natural-sounding offline voice, about 60 MB, one time only..."
-  "$VENV/bin/python" -m destiny_bot voices download en_US-lessac-medium
+if [ ! -f "$VENV/destiny-voices.txt" ]; then
+  echo "  Downloading natural-sounding offline voices, about 180 MB, one time only..."
+  "$VENV/bin/python" -m destiny_bot voices download en_US-lessac-medium &&
+    echo done > "$VENV/destiny-voices.txt"
+  "$VENV/bin/python" -m destiny_bot voices download kokoro-v1.0
 fi
 
 if [ ! -f "$VENV/destiny-shortcut.txt" ]; then

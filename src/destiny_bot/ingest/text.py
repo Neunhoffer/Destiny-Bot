@@ -356,7 +356,7 @@ _MD_ATX_ANY = re.compile(r"^ {0,3}#{1,6}[ \t]+\S", re.M)
 _MD_FENCE = re.compile(r"^( {0,3})(`{3,}|~{3,})(.*)$")
 _MD_FENCE_ANY = re.compile(r"^ {0,3}(?:```|~~~)", re.M)
 _MD_SETEXT = re.compile(r"^ {0,3}(=+|-+)[ \t]*$")
-_MD_SETEXT_ANY = re.compile(r"^[^\n]*\w[^\n]*\n {0,3}={3,}[ \t]*$", re.M)
+_MD_SETEXT_ANY = re.compile(r"^(?=[^\n]*\w)[^\n]*\n {0,3}={3,}[ \t]*$", re.M)  # (lookahead: linear time)
 _MD_HR = re.compile(r"^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$")
 _MD_QUOTE = re.compile(r"^ {0,3}>[ \t]?")
 _MD_LIST = re.compile(r"^(?P<indent>[ \t]*)(?P<marker>[-*+]|\d{1,9}[.)])(?:[ \t]+(?P<text>.*))?$")
@@ -381,7 +381,7 @@ _MD_AUTOLINK = re.compile(r"<((?:https?|ftp|mailto):[^<>\s]+|[^<>\s@]+@[^<>\s@]+
 _MD_HTML_TAG = re.compile(r"</?[A-Za-z][A-Za-z0-9-]*(?:\s+[^<>]*)?/?>")
 _MD_BR = re.compile(r"<br\s*/?>", re.I)
 _MD_FOOTREF = re.compile(r"\[\^[^\]\s]+\]")
-_MD_CODE_SPAN = re.compile(r"(`+)(?!`)(.+?)(?<!`)\1(?!`)", re.S)
+_MD_CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)", re.S)  # (whole backtick runs: linear time)
 _MD_ESCAPE = re.compile(r"\\([!-/:-@\[-`{-~])")
 _MD_EMPHASIS = (
     re.compile(r"(\*\*\*|___)(?=\S)(.+?)(?<=\S)\1"),

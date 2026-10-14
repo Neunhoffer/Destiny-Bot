@@ -14,7 +14,7 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-from . import clamp_rate, disable_onnx_telemetry, espeak_data_path, espeak_path_reason
+from . import clamp_rate, disable_onnx_telemetry, engine_start_problem, espeak_data_path, espeak_path_reason
 from .base import AudioClip, EngineUnavailable, TTSEngine, TTSError, Voice
 from .catalog import find_kokoro_model
 
@@ -243,10 +243,10 @@ class KokoroEngine(TTSEngine):
             try:
                 import kokoro_onnx  # noqa: F401
                 import onnxruntime  # noqa: F401
-            except ImportError:
+            except ModuleNotFoundError:
                 self._package_problem = NO_PACKAGE_REASON
-            except Exception as exc:  # e.g. onnxruntime failing to load its DLLs
-                self._package_problem = f"The Kokoro voice engine couldn't start: {exc}"
+            except Exception as exc:  # e.g. onnxruntime failing to load its DLLs (an ImportError too)
+                self._package_problem = engine_start_problem("The Kokoro voice engine", exc)
             else:
                 self._package_problem = _check_espeak_data()
             self._package_checked = True

@@ -522,6 +522,21 @@ def test_doctor(tmp_path, capsys, fakes):
     assert "sk-ant-never-print-me" not in out
 
 
+def test_output_survives_a_windows_code_page_console(monkeypatch):
+    # Output piped from a Windows console uses the ANSI code page (cp1252), which can't show every title.
+    import io
+
+    raw = io.BytesIO()
+    stdout = io.TextIOWrapper(raw, encoding="cp1252", errors="strict", write_through=True)
+    monkeypatch.setattr(sys, "stdout", stdout)
+    monkeypatch.setattr(sys, "stderr", io.TextIOWrapper(io.BytesIO(), encoding="cp1252", errors="strict"))
+    with pytest.raises(UnicodeEncodeError):
+        print("线性代数 – Zoë")
+    cli._make_output_safe()
+    print("线性代数 – Zoë")
+    assert raw.getvalue().decode("cp1252").endswith("???? – Zoë\n")
+
+
 def test_read_waits_in_short_steps_so_ctrl_c_works():
     # On Windows a wait with no time limit can't be interrupted by Ctrl+C until the voice finishes.
     from concurrent.futures import TimeoutError as FutureTimeout

@@ -17,12 +17,16 @@ from .segment import chunk_span, split_sentences
 __all__ = ["plan_section", "section_plain_text"]
 
 # The pause after an utterance is the only gap between them (the server trims the
-# silence a voice adds at the start and end of each clip), so every one is non-zero.
-PAUSE_CHUNK_MS = 60  # after a piece of one long sentence split at , ; : or a space
-PAUSE_SENTENCE_MS = 220  # between sentences (and code lines) inside a block
-PAUSE_BLOCK_MS = 450  # after a paragraph, quote, caption, footnote, figure, equation, code or table
-PAUSE_ROW_MS = 300  # after a list item, a table announcement and each table row but the last
-PAUSE_HEADING_MS = 750  # after a heading or the section-title announcement
+# silence a voice adds at the start and end of each clip, keeping about 25 ms at each
+# end), so every one is non-zero. Read straight through, Kokoro leaves 300-520 ms
+# between sentences and about 300 ms at a semicolon; narrated audiobooks pause roughly
+# twice as long between paragraphs and longer again after headings.
+PAUSE_CHUNK_MS = 60  # after a piece of one long sentence split at a comma, dash or space
+PAUSE_CLAUSE_MS = 180  # after a piece of one long sentence that ends with ; or :
+PAUSE_SENTENCE_MS = 300  # between sentences (and code lines) inside a block
+PAUSE_BLOCK_MS = 600  # after a paragraph, quote, caption, footnote, figure, equation, code or table
+PAUSE_ROW_MS = 350  # after a list item, a table announcement and each table row but the last
+PAUSE_HEADING_MS = 900  # after a heading or the section-title announcement
 
 SPEAKER_NOTES_PREFIX = "Speaker notes: "
 FOOTNOTE_PREFIX = "Footnote: "
@@ -171,22 +175,27 @@ def _speak_span(text: str, start: int, end: int, budget: int, normalize: Normali
     Long spans are cut at display level (so each piece still highlights exactly what
     it says) using a target length scaled by how much normalization expands the
     text. A single word whose speech is still too long is split in the speech only.
-    All pieces get the short chunk pause; callers set the pause after the last one.
+    Pieces get the chunk pause (the clause pause after ``;`` or ``:``); callers set the
+    pause after the last one.
     """
     speech = normalize(text[start:end])
     if not speech:
         return []
     if len(speech) <= budget:
-        return [(start, end, speech, PAUSE_CHUNK_MS)]
+        return [(start, end, speech, _chunk_pause(speech))]
     length = end - start
     target = max(1, min(length - 1, int(budget * length / len(speech) * 0.95)))
     spans = chunk_span(text, start, end, target, split_words=False) if length > 1 else [(start, end)]
     if len(spans) <= 1:
-        return [(start, end, part, PAUSE_CHUNK_MS) for part in _split_speech(speech, budget)]
+        return [(start, end, part, _chunk_pause(part)) for part in _split_speech(speech, budget)]
     pieces: list[_Piece] = []
     for s, e in spans:
         pieces.extend(_speak_span(text, s, e, budget, normalize))
     return pieces
+
+
+def _chunk_pause(speech: str) -> int:
+    return PAUSE_CLAUSE_MS if speech.rstrip()[-1:] in (";", ":") else PAUSE_CHUNK_MS
 
 
 def _split_speech(speech: str, max_chars: int) -> list[str]:

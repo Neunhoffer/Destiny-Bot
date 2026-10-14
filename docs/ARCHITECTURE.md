@@ -15,8 +15,10 @@ summarize and quiz.
    (text goes to Microsoft) and Claude AI helpers (text goes to Anthropic). Both are
    gated by switches in `Settings` that default to off. The UI marks them with a
    cloud badge.
-3. **One data folder.** Everything is stored under `config.data_dir()` (or `DESTINY_HOME`).
-   Deleting it, or running `destiny wipe`, removes all traces.
+3. **One private data folder.** Everything is stored under `config.data_dir()`, which is
+   `%LOCALAPPDATA%\Athena` on Windows, or `DESTINY_HOME` if set. On POSIX the folder is created
+   with owner-only (0700) permissions.
+   "Erase all my data", or `destiny wipe`, removes all traces.
 4. **Faithful text.** Display text stays faithful to the book. Speech-only changes
    live in the speech layer: expanding "e.g.", dropping citation brackets, and so on.
    AI never silently rewrites the book.
@@ -113,6 +115,9 @@ Rules for every loader:
   with `common.finalize_sections`, which assigns ids `s0..sN`.
 - The section's own heading is the first block of that section, when one exists.
 - `Block.page` is set for PDF (page number) and PPTX (slide number).
+- `Library.import_file` reports `(1.0, "Saving to your library")` to the progress callback just
+  before it stores the book. That callback is the import job's last cancel checkpoint, so an
+  "Erase all my data" that happens during a slow import can't bring the book back.
 - Recoverable problems are added to `Document.warnings`. Examples: "Pages 3, 9 had
   no text layer and were read with OCR" and "Pages 12-14 are scanned images; install
   Tesseract to read them".

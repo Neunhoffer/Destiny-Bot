@@ -102,3 +102,6 @@ Section context sent to Claude is `section_plain_text(section, max_chars=150_000
 - `PUT /api/settings` returns `422` for an unknown `tts_engine`.
 - Every response carries `X-Frame-Options: DENY` and `Cross-Origin-Resource-Policy: same-origin`. `/static` responses use `Cache-Control: no-cache`, and JS/CSS media types are set explicitly, because Windows registries often map `.js` to `text/plain`.
 - A job waiting for a free worker reports `"status": "running"` with a "Waiting…" message.
+- `POST /api/wipe` also empties the log files and deletes the reader window's browser profiles (`webview/`, `browser-profile/`). Files that the open app window still locks are marked and erased at the next start, before the window opens. The wipe never fails because of them.
+- `PUT /api/settings` returns `422` for an API key containing spaces, control or invisible characters. The message never repeats the key.
+- When the disk is full, job errors say so in plain words ("Your computer's disk is full…").
