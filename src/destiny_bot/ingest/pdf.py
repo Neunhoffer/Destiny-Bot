@@ -417,7 +417,7 @@ def _load(doc: pymupdf.Document, path: Path, source_name: str, ocr: bool, progre
     sections = _sections_from_outline(doc, blocks, positions, title)
     if sections is None:
         if any(b.kind == BlockKind.HEADING for b in blocks):
-            sections = sections_from_blocks(blocks, title, split_level=2)
+            sections = _fold_lone_headings(sections_from_blocks(blocks, title, split_level=2))
         elif n > _PAGES_PER_PART + 2:
             sections = _page_range_sections(blocks)
         else:
@@ -2188,6 +2188,20 @@ def _find_outline_block(
             if positions[i][1] >= to_y - 6:
                 return i
     return on_page[0]
+
+
+def _fold_lone_headings(sections: list[Section]) -> list[Section]:
+    """A section that is only a heading, followed by a sibling rather than a child (the author
+    line and date under a title, say), joins the section before it."""
+    out: list[Section] = []
+    for k, sec in enumerate(sections):
+        nxt = sections[k + 1] if k + 1 < len(sections) else None
+        if out and len(sec.blocks) == 1 and (nxt is None or nxt.level <= sec.level):
+            prev = out[-1]
+            out[-1] = make_section(prev.title, prev.level, prev.blocks + sec.blocks)
+            continue
+        out.append(sec)
+    return out
 
 
 def _page_range_sections(blocks: list[Block]) -> list[Section]:

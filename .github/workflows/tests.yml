@@ -23,7 +23,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     env:
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
-      TEST_VOICES: ${{ github.workspace }}/../test-voices
+      TEST_VOICES: ${{ github.workspace }}/packaging/build/test-voices
     steps:
       - uses: actions/checkout@v4
 

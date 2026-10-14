@@ -150,6 +150,11 @@ excludes = [
 ]
 if not IS_WIN:
     excludes += ["pythonnet", "clr", "clr_loader", "comtypes", "win32com", "pythoncom"]
+# pywebview backends for other platforms (they are imported by name only when chosen).
+_backends = {"win32": ["winforms", "edgechromium", "win32", "mshtml"], "darwin": ["cocoa"], "linux": ["gtk", "qt"]}
+_mine = _backends["win32" if IS_WIN else "darwin" if IS_MAC else "linux"]
+excludes += [f"webview.platforms.{name}" for names in _backends.values() for name in names if name not in _mine]
+excludes += ["webview.platforms.android", "webview.platforms.cef"]
 
 a = Analysis(
     [str(HERE / "destiny_app.py")],
