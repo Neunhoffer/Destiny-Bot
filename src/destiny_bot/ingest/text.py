@@ -107,7 +107,7 @@ def text_block(kind: BlockKind, text: str, **fields) -> Block | None:
 
 def rows_to_text(rows: list[list[str]]) -> str:
     """One-line rendering of a table: cells joined by " | ", rows by "; "."""
-    return clean_display_text("; ".join(" | ".join(row) for row in rows))
+    return clean_display_text("; ".join(" | ".join(cell for cell in row if cell) for row in rows))
 
 
 def table_block(rows: list[list[str]], *, page: int | None = None, **meta) -> Block | None:
@@ -131,6 +131,27 @@ def code_text(text: str) -> str:
     while lines and not lines[-1].strip():
         lines.pop()
     return fix_characters("\n".join(lines))
+
+
+_SUPERSCRIPT = str.maketrans("0123456789+-−=()ni", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁻⁼⁽⁾ⁿⁱ")
+_SUPERSCRIPTABLE = re.compile(r"[0-9+\-−=()ni]{1,6}")
+
+
+def wrap_math(value: str) -> str:
+    """Parenthesise a math sub-expression unless it is a single token (``x``, ``2``, ``ab``)."""
+    return value if re.fullmatch(r"[\w.′']+", value) else f"({value})"
+
+
+def superscript_text(text: str) -> str:
+    """Display form of superscript text: ``2`` -> ``²``; ordinals and words stay; other exponents get ``^``."""
+    value = text.strip()
+    if not value:
+        return ""
+    if _SUPERSCRIPTABLE.fullmatch(value):
+        return value.translate(_SUPERSCRIPT)
+    if value.isalpha() or " " in value or len(value) > 12:
+        return value
+    return "^" + wrap_math(value)
 
 
 # --------------------------------------------------------------------------- plain text

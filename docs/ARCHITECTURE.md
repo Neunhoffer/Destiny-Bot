@@ -174,6 +174,7 @@ def read_wav(data: bytes) -> tuple[bytes, int, int, int]      # pcm, sample_rate
 def silence_pcm(ms: int, sample_rate: int, channels: int = 1, sampwidth: int = 2) -> bytes
 def concat_clips(clips: list[tuple[AudioClip, int]]) -> AudioClip   # (clip, pause_after_ms); wav+wav -> wav, mp3 -> mp3
 def encode_mp3(wav: bytes, *, bitrate_kbps: int = 64) -> bytes  # lameenc, mono
+def trim_silence(clip: AudioClip, *, threshold_db: float = -45.0, keep_ms: int = 25) -> AudioClip  # WAV only
 def play_clip(clip: AudioClip) -> None                         # blocking playback for the CLI
 
 # export.py

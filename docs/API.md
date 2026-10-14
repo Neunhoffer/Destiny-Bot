@@ -75,7 +75,7 @@ the only intended client. All JSON. Errors use FastAPI's shape, `{"detail": "<me
 | `GET /api/voices` | `?engine=piper` | `{"voices": [Voice]}`, installed voices only |
 | `GET /api/voices/catalog` | | `{"voices": [CatalogVoice + {"installed": bool}]}` (Piper downloads) |
 | `POST /api/voices/download` | `{"voice_id"}` | `{"job_id"}`; the job result is `{"voice_id"}` |
-| `POST /api/tts` | `{"text", "engine"?, "voice"?}` | audio bytes, `Content-Type: audio/wav` or `audio/mpeg`. Cached. `400` for an empty text or the browser engine, `403` for an online engine while `online_tts_allowed` is false, `503` if the engine is unavailable. `engine` defaults to the resolved engine and `voice` to `settings.voices[engine]` |
+| `POST /api/tts` | `{"text", "engine"?, "voice"?, "rate"?}`. `rate` is 0.5–3.0 (default 1.0). The voice engine itself produces the speed, which sounds more natural than speeding up in the browser | audio bytes, `Content-Type: audio/wav` or `audio/mpeg`. Cached. `400` for an empty text or the browser engine, `403` for an online engine while `online_tts_allowed` is false, `503` if the engine is unavailable. `engine` defaults to the resolved engine and `voice` to `settings.voices[engine]`. Leading and trailing silence is trimmed from WAV output, so the UI controls the pauses through `pause_after_ms` |
 | `POST /api/ai/explain` | `{"book_id", "section_id", "passage"}` | `{"text"}` |
 | `POST /api/ai/ask` | `{"book_id", "section_id", "question", "history": [{"role": "user" or "assistant", "content"}]}` | `{"text"}` |
 | `POST /api/ai/summarize` | `{"book_id", "section_id", "length": "short" or "detailed"}` | `{"text"}` |
