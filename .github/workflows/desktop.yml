@@ -125,7 +125,7 @@ jobs:
         run: |
           $setup = Get-ChildItem dist -Filter 'Athena-Setup-*.exe' | Select-Object -First 1
           $dir = Join-Path $env:RUNNER_TEMP 'Zoë Tést\Athena'
-          $p = Start-Process $setup.FullName -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=$dir" -Wait -PassThru
+          $p = Start-Process $setup.FullName -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=`"$dir`"" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "Installing into '$dir' failed ($($p.ExitCode))" }
           $env:ATHENA_HOME = Join-Path $env:RUNNER_TEMP 'Zoë data'
           $t = Start-Process (Join-Path $dir 'Athena.exe') -ArgumentList '--self-test-quick' -Wait -PassThru
