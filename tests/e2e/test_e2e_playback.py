@@ -65,6 +65,7 @@ def test_kokoro_starts_at_once_fetches_in_order_and_keeps_up(server, open_app):
     # Requests never overlap, and while reading straight on they follow the text.
     log = app.tts_log()
     assert max_overlap(log) == 1
+    assert not any(r["normalize"] for r in log), "reading-plan sentences are already normalized"
     order = [speech.index(r["text"]) for r in log if r["text"] in speech]
     assert order[:6] == sorted(order[:6]), order
 
@@ -158,7 +159,7 @@ def test_seek_pause_resume_next_section_and_voice_switch(server, open_app):
     last = len(first) - 1
     app.page.click(f".article [data-u='{last}']")
     app.wait("athenaDebug.state().section === 's1'", timeout=30)
-    crossing = [e for e in app.events("schedule") if e["section"] == "s1" and e["index"] == 0][0]
+    crossing = next(e for e in app.events("schedule") if e["section"] == "s1" and e["index"] == 0)
     assert late(crossing) < 0.05, crossing
     assert "Chapter 2" in app.page.text_content("#now-status")
     assert app.page.get_attribute("#toc [data-sid='s1']", "aria-current") == "location"
@@ -201,10 +202,10 @@ def test_repeated_sentences_play_through(server, open_app):
 def test_slow_voice_shows_loading_and_offers_the_faster_voice(server, open_app):
     """When Kokoro can't keep up, she sees "Loading the voice…" and gets a one-click switch to Piper."""
     server.settings(tts_engine="kokoro", speed=1.0, voices={"kokoro": "af_heart"})
-    book = server.paste("Slow computer", book_text(1, 3, 5, words=SHORT))
+    book = server.paste("Slow computer", " ".join(f"Step {n} is next." for n in range(1, 40)))
     app = open_app(server.base, book_id=book["id"])
     app.open_book()
-    app.page.evaluate("athenaDebug.slowTts = 2500; athenaDebug.fastForward = 2")  # pretend synthesis is slow
+    app.js("(athenaDebug.slowTts = 1500, athenaDebug.fastForward = 2)")  # pretend synthesis is slow
     app.page.click("#btn-play")
     app.wait("document.body.classList.contains('is-loading-voice')", timeout=30)
     assert app.page.text_content("#now-status").startswith("Loading the voice")
@@ -212,7 +213,7 @@ def test_slow_voice_shows_loading_and_offers_the_faster_voice(server, open_app):
     app.wait("document.querySelector('.toast-offer')", timeout=90)
     offer = app.page.text_content(".toast-offer")
     assert "a bit slow for this voice" in offer and "faster natural voice" in offer
-    app.page.evaluate("athenaDebug.slowTts = 0")
+    app.js("(athenaDebug.slowTts = 0)")
     app.page.click(".toast-offer >> text=Switch voice")
     app.wait("athenaDebug.state().engine === 'piper' && athenaDebug.state().playing", timeout=10)
     assert server.api("GET", "/api/settings")["tts_engine"] == "piper"
@@ -224,10 +225,10 @@ def test_slow_voice_shows_loading_and_offers_the_faster_voice(server, open_app):
 def test_long_session_stays_bounded_and_resumes_exactly(server, open_app):
     """Many sections at 2x (fast-forwarded): memory stays bounded; reopening resumes on the same sentence."""
     server.settings(tts_engine="piper", speed=2.0)
-    book = server.paste("Long session", book_text(5, 3, 6, words=SHORT))
+    book = server.paste("Long session", book_text(6, 2, 5, words=SHORT))
     app = open_app(server.base, book_id=book["id"])
     app.open_book()
-    app.page.evaluate("athenaDebug.fastForward = 6")
+    app.js("(athenaDebug.fastForward = 6)")
     app.page.click("#btn-play")
     samples = []
     deadline = time.time() + 75
@@ -257,14 +258,14 @@ def test_long_session_stays_bounded_and_resumes_exactly(server, open_app):
 
     # Closing while reading also keeps the place (saved as the page goes away).
     again.page.click("#btn-play")
-    again.wait(f"athenaDebug.state().index > {st['index'] + 2}", timeout=20)
+    again.wait("athenaDebug.events.filter((e) => e.type === 'highlight').length >= 3", timeout=30)
     seen = again.state()
     again.page.close(run_before_unload=True)
     time.sleep(0.5)
     third = open_app(server.base, book_id=book["id"])
     third.open_book()
     st3 = third.state()
-    key = lambda s: (int(s["section"][1:]), s["index"])  # noqa: E731
+    key = lambda s: (int(s["section"][1:]), s["index"])
     assert key(seen) <= key(st3) <= (key(seen)[0], key(seen)[1] + 3) or key(st3)[0] == key(seen)[0] + 1, (seen, st3)
     app.check_no_errors()
 

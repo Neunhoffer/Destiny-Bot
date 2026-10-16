@@ -25,22 +25,22 @@ AUTOPLAY = "--autoplay-policy=no-user-gesture-required"
 
 
 def chromium_executable() -> str | None:
-    """A Chromium executable: $DESTINY_E2E_CHROMIUM, a preinstalled build, or Playwright's own."""
+    """A Chromium executable: $DESTINY_E2E_CHROMIUM, Playwright's own, or a preinstalled build."""
     wanted = os.environ.get("DESTINY_E2E_CHROMIUM")
     if wanted:
         return wanted if Path(wanted).is_file() else None
-    for pattern in ("/opt/pw-browsers/chromium-*/chrome-linux/chrome",):
-        found = sorted(glob.glob(pattern))
-        if found:
-            return found[-1]
+    path = ""
     try:
         from playwright.sync_api import sync_playwright
 
         with sync_playwright() as p:
             path = p.chromium.executable_path
-        return path if path and Path(path).is_file() else None
-    except Exception:
-        return None
+    except Exception:  # noqa: BLE001 - any Playwright problem means "look elsewhere"
+        path = ""
+    if path and Path(path).is_file():
+        return path
+    found = sorted(glob.glob("/opt/pw-browsers/chromium-*/chrome-linux/chrome"))
+    return found[-1] if found else None
 
 
 def _kokoro_files() -> tuple[Path, Path] | None:
@@ -175,7 +175,8 @@ class App:
           window.fetch = function (input, init) {
             const url = typeof input === 'string' ? input : input.url;
             if (!url.includes('/api/tts')) return original.call(this, input, init);
-            const rec = { text: JSON.parse(init.body).text, t0: performance.now(), t1: null };
+            const body = JSON.parse(init.body);
+            const rec = { text: body.text, normalize: !!body.normalize, t0: performance.now(), t1: null };
             log.push(rec);
             // The server answers once the clip is made, so the response time is the synthesis time.
             const done = () => { rec.t1 = performance.now(); };

@@ -22,7 +22,7 @@ SIZES = {
     "fullhd-125": {"viewport": {"width": 1536, "height": 864}, "device_scale_factor": 1.25},
     "phone-390": {"viewport": {"width": 390, "height": 844}, "device_scale_factor": 2, "is_mobile": True, "has_touch": True},
 }
-TECHNICAL = re.compile(r"Traceback|Exception|Errno|errno|\bat 0x|\.py\b|NoneType|KeyError|ValueError|stack", re.I)
+TECHNICAL = re.compile(r"Traceback|Exception|Errno|errno|\bat 0x|\.py\b|NoneType|KeyError|ValueError|stack", re.IGNORECASE)
 
 
 @pytest.fixture(scope="module")
@@ -97,6 +97,11 @@ def test_empty_library_says_what_to_do_and_kokoro_is_preselected(fresh, open_app
     assert app.page.is_checked("#engine-auto")
     assert "best voice available" in auto.text_content() and "Kokoro" in auto.text_content()
     assert app.page.eval_on_selector("#set-voice", "s => s.selectedOptions[0].textContent") == "Heart (US English, female)"
+    # The voice sample isn't from a reading plan, so the server cleans it up for speech first.
+    app.page.click("#btn-test-voice")
+    sample = app.wait("window.__ttsLog[0]", timeout=10)
+    assert sample["text"].startswith("Hello!") and sample["normalize"] is True
+    app.page.click("#btn-test-voice")  # stop
     app.page.keyboard.press("Escape")
     app.check_no_errors()
 

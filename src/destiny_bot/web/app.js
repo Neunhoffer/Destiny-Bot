@@ -382,6 +382,7 @@ const state = {
 };
 
 const ENGINE_BLURBS = {
+  kokoro: 'The most natural-sounding voices. They run entirely on this computer.',
   piper: 'Natural-sounding voices that run entirely on this computer.',
   system: 'The voices built into your computer. Works offline.',
   edge: 'Very natural Microsoft voices. Needs the internet.',
@@ -629,13 +630,14 @@ const clips = {
   synth: new Map(), // engine -> {busy, heard}: recent seconds spent synthesizing, and of audio made
   charsPerSecond: 14, // speaking speed at 1×, learned from real clips
 
-  key(text, engine, voice, rate) {
-    return [engine, voice || '', rate.toFixed(2), text].join('␟');
+  /** `normalize`: ad-hoc text (AI answers, voice samples) that still needs the server's speech cleanup. */
+  key(text, engine, voice, rate, normalize = false) {
+    return [engine, voice || '', rate.toFixed(2), normalize ? 'n' : '', text].join('␟');
   },
 
-  create(key, text, engine, voice, rate) {
+  create(key, text, engine, voice, rate, normalize = false) {
     const entry = {
-      key, text, engine, voice, rate, urgent: false, prefetched: false, started: false, pinned: 0,
+      key, text, engine, voice, rate, normalize, urgent: false, prefetched: false, started: false, pinned: 0,
       controller: new AbortController(), blob: null, url: null, duration: 0, learned: false,
     };
     entry.promise = new Promise((resolve, reject) => {
@@ -656,11 +658,11 @@ const clips = {
     return entry;
   },
 
-  get(text, engine, voice, rate, { urgent = false } = {}) {
-    const key = this.key(text, engine, voice, rate);
+  get(text, engine, voice, rate, { urgent = false, normalize = false } = {}) {
+    const key = this.key(text, engine, voice, rate, normalize);
     let entry = this.touch(key);
     if (!entry) {
-      entry = this.create(key, text, engine, voice, rate);
+      entry = this.create(key, text, engine, voice, rate, normalize);
       this.waiting.push(entry);
     }
     if (urgent && !entry.started) {
@@ -708,7 +710,10 @@ const clips = {
       + 1000 * this.rtf(entry.engine) * this.estimate(entry.text, entry.engine, entry.voice, entry.rate);
     api('/api/tts', {
       method: 'POST',
-      body: { text: entry.text, engine: entry.engine, voice: entry.voice || undefined, rate: entry.rate },
+      body: {
+        text: entry.text, engine: entry.engine, voice: entry.voice || undefined, rate: entry.rate,
+        normalize: entry.normalize || undefined,
+      },
       signal: entry.controller.signal,
       raw: true,
     })
@@ -742,6 +747,7 @@ const clips = {
     entry.duration = duration;
     if (entry.learned || !(duration > 0.3) || !entry.fetchSeconds) return;
     entry.learned = true;
+    if (entry.fetchSeconds < 0.02 * duration) return; // came from the server's cache: says nothing about speed
     // Weighted by audio length (short clips carry a fixed overhead), starting from a guess.
     const guess = this.rtf(entry.engine);
     const s = this.synth.get(entry.engine) || { busy: 5 * guess, heard: 5 };
@@ -1078,7 +1084,7 @@ const speaker = {
       } else {
         for (const chunk of chunks) {
           if (!live()) return;
-          const result = await playClipElement(chunk, engine, voice, rate, live);
+          const result = await playClipElement(chunk, engine, voice, rate, live, { normalize: true });
           if (result === 'cancelled') return;
         }
       }
@@ -1099,7 +1105,7 @@ const speaker = {
   async playWebAudio(chunks, engine, voice, rate, live) {
     const ctx = webAudio.ctx;
     await webAudio.resume();
-    const entries = chunks.map((chunk, i) => clips.get(chunk, engine, voice, rate, { urgent: i === 0 }));
+    const entries = chunks.map((chunk, i) => clips.get(chunk, engine, voice, rate, { urgent: i === 0, normalize: true }));
     let at = ctx.currentTime + 0.05;
     let lastEnded = Promise.resolve();
     for (const entry of entries) {
@@ -1155,8 +1161,8 @@ const speaker = {
 };
 
 /** Fallback path: play one clip through the <audio> element. */
-async function playClipElement(text, engine, voice, rate, live) {
-  const entry = clips.get(text, engine, voice, rate, { urgent: true });
+async function playClipElement(text, engine, voice, rate, live, { normalize = false } = {}) {
+  const entry = clips.get(text, engine, voice, rate, { urgent: true, normalize });
   entry.pinned += 1;
   try {
     await entry.promise;

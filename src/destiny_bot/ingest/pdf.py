@@ -598,6 +598,7 @@ def _extract_page(page: pymupdf.Page, index: int, size_weights: Counter, pitch_s
     pg.image_rects = _image_rects(page)
     if rot is None:
         _find_tables_and_boxes(page, pg)
+        pg.tables.extend(_borderless_tables(pg))
     else:  # sideways page: bring picture positions into reading coordinates (tables are skipped)
         rects = []
         for x0, y0, x1, y1 in pg.image_rects:
@@ -787,17 +788,21 @@ def _find_tables_and_boxes(page: pymupdf.Page, pg: _Page) -> None:
             tables = list(found.tables)
         except Exception:
             tables = []
+        words = page.get_text("words", flags=_TEXT_FLAGS) if tables else []
         for tab in tables:
             try:
-                rows = tab.extract()
+                rows = _cell_texts([row.cells for row in tab.rows], words) or tab.extract()
                 header = getattr(tab, "header", None)
                 bbox = tuple(tab.bbox)
                 if header is not None and getattr(header, "external", False):
                     # PyMuPDF may take the line above a table as its header row; keep it
-                    # unless it is really a caption ("Table 4. ...") or a sliced text line.
-                    names = [n or "" for n in header.names]
+                    # unless it is really a caption ("Table 4. ..."), a heading above the
+                    # table (one cell of text) or a sliced text line.
+                    names = (_cell_texts([header.cells], words) or [[n or "" for n in header.names]])[0]
                     hb = tuple(header.bbox)
-                    if not _is_caption_text(" ".join(names).strip()) and not _cuts_through_text(hb, pg.lines):
+                    one_cell = len(names) > 1 and sum(1 for n in names if n.strip()) <= 1
+                    caption = _is_caption_text(" ".join(names).strip())
+                    if not one_cell and not caption and not _cuts_through_text(hb, pg.lines):
                         rows = [names] + rows
                         bbox = (min(bbox[0], hb[0]), min(bbox[1], hb[1]), max(bbox[2], hb[2]), max(bbox[3], hb[3]))
             except Exception:
@@ -817,6 +822,31 @@ def _find_tables_and_boxes(page: pymupdf.Page, pg: _Page) -> None:
             pg.boxes.append(b)
     if len(paths) <= _MAX_TABLE_DRAWINGS:
         pg.figures = _vector_figures(paths, pg, [t.bbox for t in pg.tables] + pg.boxes)
+
+
+def _cell_texts(rows: list[list], words: list[tuple]) -> list[list[str]] | None:
+    """Cell text from the page's words in reading order. (PyMuPDF's own extract() sorts
+    letters by position, which scrambles kerned words: "Active" became "Actvi e".)"""
+    if not words:
+        return None
+    out: list[list[str]] = []
+    for cells in rows:
+        texts: list[str] = []
+        for cell in cells:
+            if cell is None:
+                texts.append("")
+                continue
+            x0, y0, x1, y1 = cell
+            inside = sorted(
+                (w for w in words if x0 - 1 <= (w[0] + w[2]) / 2 <= x1 + 1 and y0 - 1 <= (w[1] + w[3]) / 2 <= y1 + 1),
+                key=lambda w: (w[5], w[6], w[7]),
+            )
+            lines: dict[tuple[int, int], list[str]] = {}
+            for w in inside:
+                lines.setdefault((w[5], w[6]), []).append(w[4])
+            texts.append("\n".join(" ".join(ws) for ws in lines.values()))
+        out.append(texts)
+    return out
 
 
 def _vector_figures(paths: list[dict], pg: _Page, exclude: list[tuple]) -> list[tuple[float, float, float, float]]:
@@ -922,6 +952,165 @@ def _rule_tables(pg: _Page, h_rules: list[tuple[float, float, float]]) -> list[_
     return tables
 
 
+_EQ_NUMBER_RE = re.compile(r"^\(\d{1,3}(?:\.\d{1,3})*[a-z]?\)$")  # "(5.20)"
+_INDEX_ENTRY_RE = re.compile(r",\s*(?:\d{1,4}|[ivxlc]{1,6})(?:\s*[-–]\s*\d{1,4})?(?:,\s*\d{1,4}(?:\s*[-–]\s*\d{1,4})?)*$")
+_CELL_MARKER_RE = re.compile(r"^(?:[•●○◦▪■□◆►‣⁃∙·*\-–—]|\(?(?:\d{1,3}|[a-zA-Z]|[ivx]{1,4})[.)])$")
+
+
+def _borderless_tables(pg: _Page) -> list[_Table]:
+    """Tables drawn without lines (a Word table with no borders, a class schedule): rows of
+    short cells starting at the same few x positions, inside single-column text."""
+    pictures = pg.image_rects + pg.figures
+    lines = [
+        ln
+        for ln in pg.lines
+        if not ln.mono
+        and not any(_inside(ln, t.bbox) for t in pg.tables)
+        and not any(_inside(ln, r, tol=0) for r in pictures)
+    ]
+    if len(lines) < 8:
+        return []
+    rows = [sorted((e.line for e in row), key=lambda ln: ln.x0) for row in _rows_of(
+        [_Elem("line", ln.x0, ln.y0, ln.x1, ln.y1, line=ln) for ln in lines]
+    )]
+
+    def tabular(row: list[_Line]) -> bool:
+        size = max(ln.size for ln in row)
+        return (
+            len(row) >= 2
+            and all(b.x0 - a.x1 >= 1.2 * size for a, b in zip(row, row[1:]))
+            and not row[0].symbol_lead
+            and not _CELL_MARKER_RE.match(row[0].text)  # "4." + its text: a list item
+        )
+
+    tables: list[_Table] = []
+    k = 0
+    while k < len(rows):
+        if not tabular(rows[k]):
+            k += 1
+            continue
+        size = rows[k][0].size
+        starts = sorted(ln.x0 for ln in rows[k])
+        run = [rows[k]]
+        if k and not tabular(rows[k - 1]) and _wrapped_cell_row(rows[k - 1], rows[k], starts, size):
+            run.insert(0, rows[k - 1])  # the end of a cell from the previous page
+        j = k + 1
+        while j < len(rows):
+            row = rows[j]
+            prev_bottom = max(ln.y1 for ln in run[-1])
+            if any(abs(ln.size - size) > 0.6 for ln in row) or row[0].y0 - prev_bottom > 2.5 * size:
+                break
+            cols = [_column_index(ln, starts, size) for ln in row]
+            if any(c is None for c in cols):
+                break
+            if not tabular(row) and (0 in cols and row[0].y0 - prev_bottom > 0.6 * size):
+                break  # a line at the left edge after a gap: text after the table
+            run.append(row)
+            j += 1
+        table = _grid_table(run, starts, size, tabular, lines)
+        if table is not None:
+            tables.append(table)
+            k = j
+        else:
+            k += 1
+    return tables
+
+
+def _wrapped_cell_row(row: list[_Line], below: list[_Line], starts: list[float], size: float) -> bool:
+    """Is ``row`` the rest of a table cell, right above the table's first full row?"""
+    if any(abs(ln.size - size) > 0.6 for ln in row) or below[0].y0 - max(ln.y1 for ln in row) > 2.5 * size:
+        return False
+    cols = [_column_index(ln, starts, size) for ln in row]
+    return all(c is not None and c > 0 for c in cols)
+
+
+def _column_index(ln: _Line, starts: list[float], size: float) -> int | None:
+    """The column a cell line starts in (None if it doesn't start at a column or overflows it)."""
+    for c, x in enumerate(starts):
+        if abs(ln.x0 - x) <= size:
+            limit = starts[c + 1] - 2 if c + 1 < len(starts) else math.inf
+            return c if ln.x1 <= limit else None
+    return None
+
+
+def _grid_table(
+    run: list[list[_Line]], starts: list[float], size: float, tabular: Callable, lines: list[_Line]
+) -> _Table | None:
+    """Cells of a borderless table candidate, or None when it looks like columns of prose."""
+    if sum(1 for row in run if tabular(row)) < 3:
+        return None
+    grid: list[list[str]] = []
+    widths: list[list[float]] = [[] for _ in starts]
+    for row in run:
+        if tabular(row) or not grid:
+            grid.append([""] * len(starts))
+        for ln in row:
+            c = _column_index(ln, starts, size)
+            assert c is not None
+            grid[-1][c] = f"{grid[-1][c]}\n{ln.text}".strip()
+            widths[c].append(ln.x1 - ln.x0)
+    bands = [b - a for a, b in zip(starts, starts[1:])]
+    bands.append(max(ln.x1 for row in run for ln in row) - starts[-1])
+    filled = [sorted(w)[len(w) // 2] >= 0.8 * band for w, band in zip(widths, bands) if w]
+    if all(filled):
+        return None  # every column full of text: a multi-column page, not a table
+    x0, x1 = starts[0], max(ln.x1 for row in run for ln in row)
+    y0, y1 = min(ln.y0 for ln in run[0]), max(ln.y1 for ln in run[-1])
+    members = {id(ln) for row in run for ln in row}
+    if not any(id(ln) not in members and ln.x0 < starts[1] - 2 and ln.x1 > starts[1] + 2 for ln in lines):
+        return None  # nothing on the page crosses the columns: a column layout, not a table in the text
+    rows = _clean_table(grid)
+    if rows is None or len(rows) < 3 or _not_a_table(rows):
+        return None
+    return _Table(bbox=(x0 - 1, y0 - 1, x1 + 1, y1 + 1), rows=rows)
+
+
+def _not_a_table(rows: list[list[str]]) -> bool:
+    """Aligned text that isn't a table: numbered equations, an index, a chart's axis labels."""
+    cells = [c for row in rows for c in row if c]
+    lasts = [next((c for c in reversed(row) if c), "") for row in rows]
+    if sum(1 for c in lasts if _EQ_NUMBER_RE.match(c)) >= 0.5 * len(rows):
+        return True  # "f(x) = ...   (5.20)"
+    if sum(1 for c in cells if _INDEX_ENTRY_RE.search(c)) >= 0.6 * len(cells):
+        return True  # "gradient, 141, 150" in columns: a book's index
+    if not any(re.search(r"[^\W\d_]{3,}", c) for c in cells):
+        return True  # no words at all: tick labels and numbers around a chart
+    flows = 0
+    for col in zip(*rows):
+        for a, b in zip(col, col[1:]):
+            if len(a) >= 25 and len(b) >= 25 and a[-1].isalpha() and b[0].islower():
+                flows += 1  # a sentence running on into the next row: text beside a figure
+    if flows >= 2:
+        return True
+    for col in zip(*rows):  # a y axis: 0.20, 0.15, 0.10, ... down the page
+        step = _constant_step(col)
+        if step is not None and step < 0:
+            return True
+    for row in rows:  # an x axis: -4, -2, 0, 2, 4 (but not a header of years)
+        step = _constant_step(row)
+        values = [v for v in map(_number, row) if v is not None]
+        if step is not None and step > 0 and (min(values) < 0 or any(not v.is_integer() for v in values)):
+            return True
+    return False
+
+
+def _constant_step(cells: tuple[str, ...] | list[str]) -> float | None:
+    """The common difference when the filled cells are mostly numbers in arithmetic sequence."""
+    filled = [c for c in cells if c]
+    values = [v for v in map(_number, filled) if v is not None]
+    if len(values) < 3 or len(values) < 0.6 * len(filled):
+        return None
+    steps = {round(b - a, 6) for a, b in zip(values, values[1:])}
+    return steps.pop() if len(steps) == 1 else None
+
+
+def _number(text: str) -> float | None:
+    try:
+        return float(text.replace("−", "-").replace(",", ""))
+    except ValueError:
+        return None
+
+
 def _cuts_through_text(bbox: tuple, lines: list[_Line]) -> bool:
     """A "table" whose border slices through lines of text is a chart grid or a frame, not a table."""
     for ln in lines:
@@ -935,7 +1124,7 @@ def _cuts_through_text(bbox: tuple, lines: list[_Line]) -> bool:
 
 def _clean_table(rows: list[list[str | None]]) -> list[list[str]] | None:
     """Clean cell text, drop empty rows/columns; None if it isn't really a table."""
-    grid = [[clean_display_text(c or "") for c in row] for row in rows if row]
+    grid = [[clean_display_text(_CONTROL_RE.sub("", c or "")) for c in row] for row in rows if row]
     grid = [row for row in grid if any(row)]
     if not grid:
         return None
@@ -2252,6 +2441,33 @@ def _assemble(chunks: list[_Chunk], evidence: HyphenationEvidence | None = None)
         out.append(ch)
         open_para = ch if ch.kind in (BlockKind.PARAGRAPH, BlockKind.LIST_ITEM) else None
     out.extend(pending)
+    return _join_split_tables(out)
+
+
+def _join_split_tables(chunks: list[_Chunk]) -> list[_Chunk]:
+    """A table that runs onto the next page is one table: rejoin its parts (dropping a
+    repeated header row, and finishing a cell that was split by the page break)."""
+    out: list[_Chunk] = []
+    for ch in chunks:
+        prev = out[-1] if out else None
+        if (
+            prev is not None
+            and ch.kind == prev.kind == BlockKind.TABLE
+            and ch.rows
+            and prev.rows
+            and ch.page == prev.page + 1
+            and len(ch.rows[0]) == len(prev.rows[0])
+        ):
+            rows = [list(r) for r in ch.rows]
+            if rows[0] == prev.rows[0]:
+                rows.pop(0)  # header row repeated on the new page
+            if rows and not rows[0][0] and prev.rows[-1][0]:
+                last = prev.rows[-1]
+                prev.rows[-1] = [f"{a} {b}".strip() for a, b in zip(last, rows.pop(0))]
+            prev.rows.extend(rows)
+            prev.text = clean_display_text(" / ".join(" | ".join(row) for row in prev.rows))
+            continue
+        out.append(ch)
     return out
 
 

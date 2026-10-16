@@ -21,7 +21,6 @@ import pytest
 
 from .harness import AUTOPLAY, App, Server, chromium_executable
 
-
 # --------------------------------------------------------------------------- fixtures
 
 
