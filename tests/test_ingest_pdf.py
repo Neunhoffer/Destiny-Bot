@@ -1222,7 +1222,8 @@ def test_margin_notes_do_not_split_sentences(tmp_path):
             main = next(t for t in ts if t.startswith(f"M{page}{k} "))
             assert ts[ts.index(main) + 1] == f"key term {page}{k} in the margin"
             assert "key term" not in main and main.endswith(".")
-    assert [t.split()[0] for t in ts if t[:1] in "PM"] == [f"{c}{p}{k}" for p in range(2) for k in range(3) for c in "PM"]
+    expected = [f"{c}{p}{k}" for p in range(2) for k in range(3) for c in "PM"]
+    assert [t.split()[0] for t in ts if t[:1] in "PM"] == expected
 
 
 def test_long_chapter_splits_at_its_outline_sections(tmp_path):
@@ -1276,7 +1277,7 @@ def _schedule_pdf(path: Path, *, weeks: int = 14) -> Path:
     b.paragraph("The schedule may change; check the course page every week. " + para(rng, 2))
     cols = (72, 160, 380)
     for cells in [("Week", "Topic", "Reading")] + [
-        (str(w), f"Topic {w}: membranes, transport|and signaling part {w}", f"Chapter {w}, pages {w * 20}-{w * 20 + 18}")
+        (str(w), f"Topic {w}: membranes, transport|and signaling part {w}", f"Chapter {w}, pages {20 * w}-{20 * w + 18}")
         for w in range(1, weeks + 1)
     ]:
         lines = [c.split("|") for c in cells]
@@ -1308,7 +1309,7 @@ def test_table_without_borders_is_read_row_by_row(tmp_path):
     rows = tables[0].rows
     assert rows[0] == ["Week", "Topic", "Reading"]
     assert rows[1:] == [
-        [str(w), f"Topic {w}: membranes, transport and signaling part {w}", f"Chapter {w}, pages {w * 20}-{w * 20 + 18}"]
+        [str(w), f"Topic {w}: membranes, transport and signaling part {w}", f"Chapter {w}, pages {20 * w}-{20 * w + 18}"]
         for w in range(1, 15)
     ]
     ts = texts(doc)

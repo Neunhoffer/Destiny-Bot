@@ -35,6 +35,30 @@ _WS = re.compile(r"\s+")
 _HAS_DIGIT = re.compile(r"\d")
 
 
+# "a 3x speedup", "2.20x faster" -> "3 times", "2.20 times"; "a 3x3 matrix" -> "3 by 3".
+# Algebra ("3x + 2 = 11") is left alone: a bare "3x" only counts as a multiplier when a
+# comparison word follows, or when it has decimals and ends the clause ("is 2.20x.").
+_MULTIPLIER_WORDS = (
+    "faster|slower|quicker|more|less|fewer|larger|smaller|higher|lower|bigger|greater|"
+    "better|worse|longer|shorter|cheaper|stronger|weaker|speedups?|zoom|magnification|"
+    "increases?|decreases?|improvements?|reductions?|the|as|over|that|than|baseline"
+)
+# Only the letter x with no spaces: "3 × 4" is arithmetic and stays "3 times 4".
+_DIMENSIONS_RE = re.compile(r"(?<![\w.])(\d{1,5})x(\d{1,5})(?![\w.])")
+_MULTIPLIER_RE = re.compile(
+    rf"(?<![\w.])(\d+(?:\.\d+)?)\s?[x\u00d7](?=\s+(?:{_MULTIPLIER_WORDS})\b)", re.IGNORECASE
+)
+_DECIMAL_MULTIPLIER_RE = re.compile(r"(?<![\w.])(\d+\.\d+)[x\u00d7](?=[.,;:)]|\s*$)")
+
+
+def _multipliers(text: str) -> str:
+    if "x" not in text and "\u00d7" not in text:
+        return text
+    text = _DIMENSIONS_RE.sub(r"\1 by \2", text)
+    text = _MULTIPLIER_RE.sub(r"\1 times", text)
+    return _DECIMAL_MULTIPLIER_RE.sub(r"\1 times", text)
+
+
 def normalize_for_speech(text: str, options: ReadingOptions | None = None) -> str:
     """Return the text a voice should say for ``text`` ("" if nothing speakable remains)."""
     if not text or text.isspace():
@@ -50,6 +74,7 @@ def normalize_for_speech(text: str, options: ReadingOptions | None = None) -> st
         t = _expand_abbreviations(t)
     t = _phone_numbers(t, vault)
     t = _money(t, vault)
+    t = _multipliers(t)
     t = _number_ranges(t)
     t = _roman_numerals(t)
     t = _dates(t)

@@ -556,3 +556,17 @@ def test_delete_while_the_book_is_being_read(tmp_path, loader):
     with pytest.raises(KeyError):
         lib.add_bookmark(doc.id, "s0", 1, "x")
     assert lib.list() == []
+
+
+def test_mislabeled_pdf_is_stored_as_a_pdf(tmp_path):
+    import pymupdf
+
+    pdf = pymupdf.open()
+    pdf.new_page().insert_text((72, 72), "Chapter 1. Cells are the basic unit of life.", fontsize=12)
+    path = tmp_path / "notes.docx"  # really a PDF
+    pdf.save(path)
+    pdf.close()
+    lib = Library()
+    doc = lib.import_file(path)
+    assert doc.source_type == "pdf"
+    assert lib.source_file(doc.id).suffix == ".pdf"

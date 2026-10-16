@@ -23,9 +23,15 @@ _LIGATURES = {
     "ﬆ": "st",
 }
 _INVISIBLE = dict.fromkeys(map(ord, "­​‌‍⁠﻿"), None)  # soft hyphen, zero-widths, BOM
-# Control codes (except tab, line breaks and other whitespace): never text. PDFs with math
-# fonts and badly decoded files leave them behind.
-_INVISIBLE.update(dict.fromkeys([*range(0x00, 0x09), *range(0x0E, 0x1C), 0x7F, *range(0x80, 0x85), *range(0x86, 0xA0)]))
+# Control codes (except tab, line breaks and other whitespace) are never text: PDFs with math
+# fonts leave them behind. U+0080-U+009F are Windows-1252 punctuation decoded the wrong way
+# ("STORIES\x97MODERN" is "STORIES—MODERN"), so they get their intended characters back.
+_INVISIBLE.update(dict.fromkeys([*range(0x00, 0x09), *range(0x0E, 0x1C), 0x7F]))
+for _code in [*range(0x80, 0x85), *range(0x86, 0xA0)]:
+    try:
+        _INVISIBLE[_code] = bytes([_code]).decode("cp1252")
+    except UnicodeDecodeError:
+        _INVISIBLE[_code] = None
 # A word hyphenated at a line break: "infor-\nmation", "self-\nesteem", "pre-\nColumbian".
 _HYPHEN_BREAK = re.compile(r"(?<!\w)(\w+)[-\u2010\u2011][ \t]*\n\s*(\w+)")
 _SOFT_HYPHEN_BREAK = re.compile(r"\u00ad[ \t]*\n\s*")  # a discretionary hyphen: always rejoin

@@ -1716,3 +1716,26 @@ def test_section_plain_text_truncation():
     assert full.startswith(cut[: -len("\n[...the rest of this section was cut for length]")])
     body = cut[: -len("\n[...the rest of this section was cut for length]")]
     assert not body.endswith(" ") and body.split()[-1] in {"words", "Paragraph"} | {str(i) for i in range(50)}
+
+
+# -- multipliers and dimensions ("3x faster", "a 3x3 matrix")
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Our JIT is 2.20x faster.", "Our JIT is 2 point 2 0 times faster."),
+        ("The speedup is 2.20x.", "The speedup is 2 point 2 0 times."),
+        ("a 3x speedup", "a 3 times speedup"),
+        ("10x more data", "10 times more data"),
+        ("a 5x5 grid", "a 5 by 5 grid"),
+        ("1920x1080 pixels", "1920 by 1080 pixels"),
+    ],
+)
+def test_multipliers_and_dimensions(text, expected):
+    assert normalize_for_speech(text) == expected
+
+
+@pytest.mark.parametrize("text", ["Solve 3x + 2 = 11.", "Let 2x = 6.", "the x2 key"])
+def test_algebra_is_not_read_as_a_multiplier(text):
+    assert "times" not in normalize_for_speech(text) and " by " not in normalize_for_speech(text)

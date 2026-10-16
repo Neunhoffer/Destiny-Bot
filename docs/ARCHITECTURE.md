@@ -109,7 +109,9 @@ def ocr_image_bytes(data: bytes, *, lang: str = "eng") -> str   # raises IngestE
 Rules for every loader:
 - `Document.id` = `common.doc_id_for_file(path)`, the hash of the source bytes.
   The same file always gets the same id.
-- Every `Block.text` goes through `common.clean_display_text`, except CODE blocks,
+- Every `Block.text` goes through `common.clean_display_text` (pass `evidence=`, the
+  document's other text, so a hyphen at a line break is kept when the same hyphenated word
+  appears elsewhere, e.g. "self-esteem"), except CODE blocks,
   which keep their line breaks but get `fix_characters`.
 - Headings are kept as `HEADING` blocks with `level`. Sections are built with
   `common.sections_from_blocks` or from the file's own table of contents. Finish

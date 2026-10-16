@@ -848,7 +848,11 @@ def _cell_texts(extracted: list[list], cells: list[list], words: list[tuple]) ->
             if box is not None and text.strip():
                 x0, y0, x1, y1 = box
                 inside = sorted(
-                    (w for w in words if x0 - 1 <= (w[0] + w[2]) / 2 <= x1 + 1 and y0 - 1 <= (w[1] + w[3]) / 2 <= y1 + 1),
+                    (
+                        w
+                        for w in words
+                        if x0 - 1 <= (w[0] + w[2]) / 2 <= x1 + 1 and y0 - 1 <= (w[1] + w[3]) / 2 <= y1 + 1
+                    ),
                     key=lambda w: (w[5], w[6], w[7]),
                 )
                 lines: dict[tuple[int, int], list[str]] = {}
@@ -966,7 +970,8 @@ def _rule_tables(pg: _Page, h_rules: list[tuple[float, float, float]]) -> list[_
 
 
 _EQ_NUMBER_RE = re.compile(r"^\(\d{1,3}(?:\.\d{1,3})*[a-z]?\)$")  # "(5.20)"
-_INDEX_ENTRY_RE = re.compile(r",\s*(?:\d{1,4}|[ivxlc]{1,6})(?:\s*[-–]\s*\d{1,4})?(?:,\s*\d{1,4}(?:\s*[-–]\s*\d{1,4})?)*$")
+_PAGE_REF = r"(?:\d{1,4}|[ivxlc]{1,6})(?:\s*[-–]\s*\d{1,4})?"
+_INDEX_ENTRY_RE = re.compile(rf",\s*{_PAGE_REF}(?:,\s*{_PAGE_REF})*$")  # "gradient, 141, 150-152"
 _CELL_MARKER_RE = re.compile(r"^(?:[•●○◦▪■□◆►‣⁃∙·*\-–—]|\(?(?:\d{1,3}|[a-zA-Z]|[ivx]{1,4})[.)])$")
 
 
@@ -1041,7 +1046,9 @@ def _borderless_tables(pg: _Page, follows: tuple = ()) -> list[_Table]:
 
 def _header_cells(row: list[_Line], run: list[list[_Line]], starts: list[float], size: float) -> list[str] | None:
     """The cells of ``row`` as the header of the table ``run``, or None if it isn't one."""
-    if len(row) < 2 or any(abs(ln.size - size) > 0.6 for ln in row) or run[0][0].y0 - max(ln.y1 for ln in row) > 1.5 * size:
+    if len(row) < 2 or any(abs(ln.size - size) > 0.6 for ln in row):
+        return None
+    if run[0][0].y0 - max(ln.y1 for ln in row) > 1.5 * size:
         return None
     extents = [[math.inf, -math.inf] for _ in starts]
     for r in run:
@@ -1132,7 +1139,7 @@ def _not_a_table(rows: list[list[str]]) -> bool:
     lasts = [next((c for c in reversed(row) if c), "") for row in rows]
     if sum(1 for c in lasts if _EQ_NUMBER_RE.match(c)) >= 0.5 * len(rows):
         return True  # "f(x) = ...   (5.20)"
-    if sum(1 for c in cells if _INDEX_ENTRY_RE.search(c)) >= 0.6 * len(cells):
+    if sum(1 for c in cells if _INDEX_ENTRY_RE.search(c[-80:])) >= 0.6 * len(cells):
         return True  # "gradient, 141, 150" in columns: a book's index
     if not any(re.search(r"[^\W\d_]{3,}", c) for c in cells):
         return True  # no words at all: tick labels and numbers around a chart

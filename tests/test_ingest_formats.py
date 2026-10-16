@@ -1415,6 +1415,10 @@ def test_control_characters_never_reach_the_text():
     assert clean_display_text("log\x00 φ \x01 1−φ\x02") == "log φ 1−φ"
     assert clean_display_text("a\fb\x0bc\x1fd\x85e") == "a b c d e"
     assert fix_characters("def f():\n\tpass\x03") == "def f():\n\tpass"
+    # Windows-1252 punctuation decoded as control codes is repaired, not dropped
+    assert clean_display_text("FAIRY STORIES\x97MODERN TALES \x93quoted\x94 \x80 5\x81") == (
+        "FAIRY STORIES\u2014MODERN TALES \u201cquoted\u201d \u20ac 5"
+    )
 
 
 @pytest.mark.parametrize("filler", [" ", "\xa0", "\t", "　", " \n"])

@@ -153,7 +153,8 @@ class Library:
             # Also the job's last chance to stop: the user may have cancelled, or erased
             # all their data, while a slow file was being read.
             progress(1.0, "Saving to your library")
-        self._store(doc, lambda dest_dir: _store_source_copy(path, dest_dir, _source_extension(name, path)))
+        ext = _source_extension(name, path, doc.source_type)
+        self._store(doc, lambda dest_dir: _store_source_copy(path, dest_dir, ext))
         return doc
 
     def import_text(self, title: str, text: str) -> Document:
@@ -501,11 +502,18 @@ def _check_position(doc: Document, section_id: str, utterance: int) -> None:
         raise ValueError("The reading position can't be negative.")
 
 
-def _source_extension(name: str, path: Path) -> str:
+# The extension to store a source under when its name doesn't match what it really is
+# (a PDF named ".docx" must still be found as a PDF, e.g. for page pictures).
+_REAL_EXTENSIONS = {"pdf": ".pdf", "epub": ".epub", "docx": ".docx", "pptx": ".pptx", "html": ".html"}
+
+
+def _source_extension(name: str, path: Path, source_type: str | None = None) -> str:
     for candidate in (Path(name).suffix.lower(), path.suffix.lower()):
         if candidate in ingest.SUPPORTED_EXTENSIONS:
+            if source_type in _REAL_EXTENSIONS and ingest.SUPPORTED_EXTENSIONS[candidate] != source_type:
+                return _REAL_EXTENSIONS[source_type]
             return candidate
-    return ""
+    return _REAL_EXTENSIONS.get(source_type or "", "")
 
 
 def _store_source_copy(src: Path, book_dir: Path, ext: str) -> None:
