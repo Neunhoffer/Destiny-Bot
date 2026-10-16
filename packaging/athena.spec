@@ -210,6 +210,30 @@ if IS_WIN:
 
 icon = str(HERE / "icons" / ("icon.ico" if IS_WIN else "icon.icns" if IS_MAC else "icon-512.png"))
 
+# Windows manifest: PyInstaller's default plus a UTF-8 process code page (Windows 10 1903+).
+# espeak-ng, which both natural voices use for pronunciation, opens its data files through
+# narrow-character C calls; with a UTF-8 code page those read the UTF-8 paths Piper and
+# Kokoro pass, so an install folder under C:\Users\Zoë\... works.
+WINDOWS_MANIFEST = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{e2011457-1546-43c5-a5fe-008deee3d3f0}"></supportedOS>
+      <supportedOS Id="{35138b9a-5d96-4fbd-8e2d-a2440225f93a}"></supportedOS>
+      <supportedOS Id="{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}"></supportedOS>
+      <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6d0da78}"></supportedOS>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"></supportedOS>
+    </application>
+  </compatibility>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+    </windowsSettings>
+  </application>
+</assembly>
+"""
+
 exe = EXE(
     pyz,
     a.scripts,
@@ -228,6 +252,7 @@ exe = EXE(
     entitlements_file=None,
     icon=icon,
     version=version_file,
+    manifest=WINDOWS_MANIFEST if IS_WIN else None,
 )
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name=APP_NAME)
 

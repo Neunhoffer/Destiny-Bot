@@ -78,13 +78,27 @@ def espeak_data_path(path: Path | str) -> str | None:
     windows = sys.platform == "win32"
     limit = 229 if windows else 159
 
+    # The packaged Windows app runs with a UTF-8 code page (see packaging/athena.spec), so
+    # espeak-ng reads non-ASCII paths there; elsewhere on Windows they need the 8.3 name.
+    readable_non_ascii = not windows or _ansi_code_page() == 65001
+
     def usable(candidate: str) -> bool:
-        return len(candidate.encode("utf-8")) <= limit and (candidate.isascii() or not windows)
+        return len(candidate.encode("utf-8")) <= limit and (candidate.isascii() or readable_non_ascii)
 
     if usable(text):
         return text
     short = _short_path_name(text) if windows else None
     return short if short and usable(short) else None
+
+
+def _ansi_code_page() -> int | None:
+    """This process's ANSI code page on Windows (65001 means UTF-8), else None."""
+    try:
+        import ctypes
+
+        return int(ctypes.windll.kernel32.GetACP())  # type: ignore[attr-defined]
+    except (AttributeError, OSError, ValueError):
+        return None
 
 
 def _short_path_name(path: str) -> str | None:

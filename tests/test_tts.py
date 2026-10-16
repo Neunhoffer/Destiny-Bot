@@ -663,7 +663,17 @@ def _windows_short_names(monkeypatch, short: str | None) -> list[str]:
     asked: list[str] = []
     monkeypatch.setattr(registry, "sys", SimpleNamespace(platform="win32"))
     monkeypatch.setattr(registry, "_short_path_name", lambda path: asked.append(path) or short)
+    monkeypatch.setattr(registry, "_ansi_code_page", lambda: 1252)  # a typical Windows code page
     return asked
+
+
+def test_espeak_data_path_with_a_utf8_code_page(monkeypatch):
+    # The packaged app's manifest makes the process code page UTF-8, so espeak-ng reads the path as is.
+    asked = _windows_short_names(monkeypatch, None)
+    monkeypatch.setattr(registry, "_ansi_code_page", lambda: 65001)
+    assert registry.espeak_data_path(ZOE_DATA) == ZOE_DATA and asked == []
+    long_ascii = "C:\\" + "Study folder\\" * 18 + "espeak-ng-data"
+    assert registry.espeak_data_path(long_ascii) is None  # the buffer limit still applies
 
 
 def test_espeak_data_path_uses_windows_short_names(monkeypatch):
