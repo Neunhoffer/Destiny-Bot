@@ -1,4 +1,4 @@
-"""``python -m destiny_bot``: the same as the ``destiny`` command."""
+"""``python -m athena``: the same as the ``athena`` command."""
 
 from __future__ import annotations
 

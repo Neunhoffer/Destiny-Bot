@@ -1,6 +1,6 @@
-# Destiny Bot local JSON API
+# Athena local JSON API
 
-`destiny serve` starts the server at `http://127.0.0.1:8765/`. The browser UI is
+`athena serve` starts the server at `http://127.0.0.1:8765/`. The browser UI is
 the only intended client. All JSON. Errors use FastAPI's shape, `{"detail": "<message the UI can show as is>"}`.
 
 ## Security (local-only server)
@@ -8,8 +8,8 @@ the only intended client. All JSON. Errors use FastAPI's shape, `{"detail": "<me
 - The server binds to `127.0.0.1`. Requests whose `Host` header isn't
   `127.0.0.1:<port>` or `localhost:<port>` get `403`. This blocks DNS rebinding.
 - `GET /` serves `index.html` with a per-process random token in
-  `<meta name="destiny-token" content="...">`.
-- Every `/api/*` request must send the header `X-Destiny-Token: <token>`.
+  `<meta name="athena-token" content="...">`.
+- Every `/api/*` request must send the header `X-Athena-Token: <token>`.
   Otherwise the server returns `401`. The one exception is
   `GET /api/jobs/{id}/files/{name}`, which may pass `?token=` so a plain `<a href>`
   download works.
@@ -56,7 +56,7 @@ the only intended client. All JSON. Errors use FastAPI's shape, `{"detail": "<me
 | Method & path | Body / query | Response |
 |---|---|---|
 | `GET /` | | the UI (`index.html` with token) |
-| `GET /static/{file}` | | UI assets from `destiny_bot/web/` |
+| `GET /static/{file}` | | UI assets from `athena/web/` |
 | `GET /api/status` | | `{"version", "engines": [Engine], "resolved_engine": "piper", "ai": {"enabled", "configured", "model"}, "ocr": {"available", "reason"}, "data_dir": "/path"}` |
 | `GET /api/settings` | | `Settings.public_dict()` |
 | `PUT /api/settings` | any subset of settings fields. `reading` and `voices` may be partial. `anthropic_api_key: "sk-..."` sets the key and `""` clears it | `Settings.public_dict()`; `422` on invalid values |

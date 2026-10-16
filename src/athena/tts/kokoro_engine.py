@@ -27,7 +27,7 @@ NATIVE_MAX_SPEED = 2.0
 NO_MODEL_REASON = "Download the Kokoro voice pack in Settings → Voices (about 115 MB)."
 NO_PACKAGE_REASON = (
     "Kokoro voices need the kokoro-onnx package, which isn't installed. "
-    "Reinstall Destiny Bot with natural voices included."
+    "Reinstall Athena with natural voices included."
 )
 
 # Best English voices, best first: (id, display name, gender).

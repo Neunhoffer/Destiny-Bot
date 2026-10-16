@@ -219,7 +219,7 @@ def test_slow_voice_shows_loading_and_offers_the_faster_voice(server, open_app):
     app.wait("athenaDebug.state().engine === 'piper' && athenaDebug.state().playing", timeout=10)
     assert server.api("GET", "/api/settings")["tts_engine"] == "piper"
     assert app.page.eval_on_selector("#voice-select", "s => s.value") == "piper::en_US-lessac-medium"
-    assert app.page.evaluate("localStorage.getItem('destiny.slowVoiceOffer')") == '"switched"'
+    assert app.page.evaluate("localStorage.getItem('athena.slowVoiceOffer')") == '"switched"'
     app.check_no_errors()
 
 

@@ -71,7 +71,7 @@ def page_ok(url: str) -> bool:
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
         with opener.open(url, timeout=5) as response:
-            return b"destiny-token" in response.read()
+            return b"athena-token" in response.read()
     except OSError:
         return False
 
@@ -131,7 +131,7 @@ def main() -> int:
         print("This check only runs on Windows.")
         return 0
     home = args.home or Path(tempfile.mkdtemp(prefix="athena-window-"))
-    env = {**os.environ, "DESTINY_HOME": str(home)}
+    env = {**os.environ, "ATHENA_HOME": str(home)}
     lock = home / "app.lock"
 
     first = subprocess.Popen([str(args.exe)], env=env, cwd=str(args.exe.parent))

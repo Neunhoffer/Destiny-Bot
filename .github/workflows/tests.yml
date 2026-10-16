@@ -39,7 +39,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends espeak-ng tesseract-ocr ffmpeg
 
-      - name: Install Destiny Bot with every extra
+      - name: Install Athena with every extra
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
@@ -56,32 +56,32 @@ jobs:
         run: |
           import os
           from pathlib import Path
-          from destiny_bot.tts.catalog import download_piper_voice
+          from athena.tts.catalog import download_piper_voice
           path = download_piper_voice("en_US-lessac-medium", voices_dir=Path(os.environ["TEST_VOICES"]) / "piper")
           print(path, path.stat().st_size)
 
       - name: Run the tests
         env:
-          DESTINY_TEST_PIPER_VOICE: ${{ env.TEST_VOICES }}/piper/en_US-lessac-medium.onnx
+          ATHENA_TEST_PIPER_VOICE: ${{ env.TEST_VOICES }}/piper/en_US-lessac-medium.onnx
         run: python -m pytest -m "not e2e" -ra --durations=20
 
       # Which voices does this machine have, and how fast is each engine? (SAPI on Windows)
       - name: Self-test
         if: always()
         env:
-          DESTINY_HOME: ${{ runner.temp }}/athena-self-test
-          DESTINY_EXTRA_VOICE_DIRS: ${{ env.TEST_VOICES }}
-        run: python -m destiny_bot self-test
+          ATHENA_HOME: ${{ runner.temp }}/athena-self-test
+          ATHENA_EXTRA_VOICE_DIRS: ${{ env.TEST_VOICES }}
+        run: python -m athena self-test
 
       - name: Show the voice timings and Windows voices
         if: always()
         shell: python
         env:
-          DESTINY_HOME: ${{ runner.temp }}/athena-self-test
+          ATHENA_HOME: ${{ runner.temp }}/athena-self-test
         run: |
           import json, os
           from pathlib import Path
-          path = Path(os.environ["DESTINY_HOME"]) / "logs" / "self-test.json"
+          path = Path(os.environ["ATHENA_HOME"]) / "logs" / "self-test.json"
           if path.is_file():
               report = json.loads(path.read_text(encoding="utf-8"))
               keys = ("synthesis", "windows_voices", "window")

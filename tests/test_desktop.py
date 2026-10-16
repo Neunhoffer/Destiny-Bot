@@ -1,4 +1,4 @@
-"""Tests for the desktop app wrapper (destiny_bot.desktop).
+"""Tests for the desktop app wrapper (athena.desktop).
 
 A native window can't be shown here, so pywebview, the browsers and the server are
 replaced with fakes; the real Windows/macOS behaviour is exercised by the CI builds.
@@ -20,14 +20,14 @@ from pathlib import Path
 
 import pytest
 
-import destiny_bot
-from destiny_bot import config, desktop
+import athena
+from athena import config, desktop
 
 # tests/test_cli.py swaps these modules out through sys.modules. A submodule imported here
-# would also become an attribute of the destiny_bot package, which `from . import desktop`
+# would also become an attribute of the athena package, which `from . import desktop`
 # prefers over sys.modules, so drop the attributes again.
 for _name in ("desktop", "selftest"):
-    vars(destiny_bot).pop(_name, None)
+    vars(athena).pop(_name, None)
 
 
 @pytest.fixture(autouse=True)
@@ -146,7 +146,7 @@ def test_frozen_app_redirects_output_to_a_log_file(monkeypatch):
     assert isinstance(sys.stdout, desktop._RotatingLog) and sys.stderr is sys.stdout
     print("hello from print")
     sys.stderr.write("an error line\n")
-    logging.getLogger("destiny_bot.test").warning("a warning record")
+    logging.getLogger("athena.test").warning("a warning record")
     assert not sys.stdout.isatty()
     text = path.read_text(encoding="utf-8")
     assert "hello from print" in text
@@ -165,7 +165,7 @@ def test_console_runs_keep_their_output(monkeypatch, capsys):
     before = sys.stdout
     path = desktop.setup_logging()
     assert sys.stdout is before
-    logging.getLogger("destiny_bot.test").info("info goes to the file")
+    logging.getLogger("athena.test").info("info goes to the file")
     assert "info goes to the file" in path.read_text(encoding="utf-8")
 
 
@@ -285,7 +285,7 @@ class _PageHandler(http.server.BaseHTTPRequestHandler):
 
 @pytest.mark.parametrize(
     ("body", "expected"),
-    [(b'<meta name="destiny-token" content="abc">', True), (b"<html>another program</html>", False)],
+    [(b'<meta name="athena-token" content="abc">', True), (b"<html>another program</html>", False)],
 )
 def test_url_answers_only_for_the_reader(body, expected):
     handler = type("Handler", (_PageHandler,), {"body": body})
@@ -638,13 +638,13 @@ def test_windows_shortcut_job(monkeypatch, tmp_path):
     python = _fake_venv(tmp_path, windows=True)
     monkeypatch.setattr(desktop, "_platform", lambda: "win32")
     monkeypatch.setattr(desktop.sys, "executable", str(python))
-    monkeypatch.delenv("DESTINY_HOME")
+    monkeypatch.delenv("ATHENA_HOME")
 
     command, env, script = desktop.windows_shortcut_job(desktop=True, start_menu=False)
 
     assert command[1:] == ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"]
     assert env["ATHENA_SC_TARGET"] == str(python.with_name("pythonw.exe"))
-    assert env["ATHENA_SC_ARGS"] == "-m destiny_bot app"
+    assert env["ATHENA_SC_ARGS"] == "-m athena app"
     assert env["ATHENA_SC_NAME"] == "Athena"
     assert env["ATHENA_SC_DESKTOP"] == "1" and env["ATHENA_SC_START"] == "0"
     assert env["ATHENA_SC_ICON"].endswith("icon.ico")
@@ -660,7 +660,7 @@ def test_windows_shortcut_keeps_the_launchers_data_folder(monkeypatch, tmp_path)
     monkeypatch.setattr(
         desktop,
         "_launch_target",
-        lambda: (python.with_name("pythonw.exe"), ["-m", "destiny_bot", "app"], {"DESTINY_HOME": home}),
+        lambda: (python.with_name("pythonw.exe"), ["-m", "athena", "app"], {"ATHENA_HOME": home}),
     )
 
     _, env, _ = desktop.windows_shortcut_job(desktop=True, start_menu=True)
@@ -677,7 +677,7 @@ def test_windows_shortcut_keeps_the_launchers_data_folder(monkeypatch, tmp_path)
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert "0." in result.stdout  # `destiny --version` ran with the given data folder
+    assert "0." in result.stdout  # `athena --version` ran with the given data folder
 
 
 def test_create_windows_shortcuts_runs_powershell_hidden(monkeypatch, tmp_path):
@@ -731,7 +731,7 @@ def test_macos_shortcuts(monkeypatch, tmp_path):
     monkeypatch.setattr(desktop, "_platform", lambda: "darwin")
     monkeypatch.setattr(desktop.sys, "executable", str(python))
     monkeypatch.setattr(desktop.Path, "home", lambda: home)
-    monkeypatch.setenv("DESTINY_HOME", str(tmp_path / "my data"))
+    monkeypatch.setenv("ATHENA_HOME", str(tmp_path / "my data"))
 
     paths = desktop.create_shortcuts()
 
@@ -746,8 +746,8 @@ def test_macos_shortcuts(monkeypatch, tmp_path):
     assert os.access(launcher, os.X_OK)
     script = launcher.read_text()
     assert script.startswith("#!/bin/bash")
-    assert f"export DESTINY_HOME='{tmp_path / 'my data'}'" in script
-    assert f"exec {python} -m destiny_bot app" in script
+    assert f"export ATHENA_HOME='{tmp_path / 'my data'}'" in script
+    assert f"exec {python} -m athena app" in script
 
     assert desktop.create_shortcuts() == paths  # running it again replaces them
 
@@ -776,7 +776,7 @@ def test_linux_shortcuts(monkeypatch, tmp_path):
     monkeypatch.setattr(desktop, "_platform", lambda: "linux")
     monkeypatch.setattr(desktop.sys, "executable", str(python))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "share"))
-    monkeypatch.setenv("DESTINY_HOME", str(tmp_path / "my data"))
+    monkeypatch.setenv("ATHENA_HOME", str(tmp_path / "my data"))
     monkeypatch.setattr(desktop, "_linux_desktop_dir", lambda: desktop_dir)
     monkeypatch.setattr(desktop.shutil, "which", lambda name: None)
 
@@ -786,7 +786,7 @@ def test_linux_shortcuts(monkeypatch, tmp_path):
     text = paths[0].read_text()
     assert "Name=Athena" in text and "Terminal=false" in text
     exec_line = next(line for line in text.splitlines() if line.startswith("Exec="))
-    assert exec_line == f'Exec=env "DESTINY_HOME={tmp_path / "my data"}" {python} -m destiny_bot app'
+    assert exec_line == f'Exec=env "ATHENA_HOME={tmp_path / "my data"}" {python} -m athena app'
     assert os.access(paths[1], os.X_OK)
     assert desktop.create_shortcuts(desktop=False) == paths[:1]
 
@@ -810,7 +810,7 @@ def test_shortcut_os_errors_are_friendly(monkeypatch):
 
 
 def test_cli_wires_to_these_functions():
-    from destiny_bot import cli
+    from athena import cli
 
     parser = cli.build_parser()
     assert parser.parse_args(["app", "--port", "9000"]).port == 9000

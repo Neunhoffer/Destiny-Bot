@@ -1,4 +1,4 @@
-"""Tests for the local library (destiny_bot.library)."""
+"""Tests for the local library (athena.library)."""
 
 from __future__ import annotations
 
@@ -12,11 +12,11 @@ from pathlib import Path
 
 import pytest
 
-from destiny_bot import config, ingest, library as library_module
-from destiny_bot.ingest import IngestError
-from destiny_bot.ingest.common import doc_id_for_bytes, doc_id_for_file
-from destiny_bot.library import Library, is_valid_doc_id, utc_now, wipe_user_data
-from destiny_bot.models import Block, BlockKind, Document, Section
+from athena import config, ingest, library as library_module
+from athena.ingest import IngestError
+from athena.ingest.common import doc_id_for_bytes, doc_id_for_file
+from athena.library import Library, is_valid_doc_id, utc_now, wipe_user_data
+from athena.models import Block, BlockKind, Document, Section
 
 ISO_Z = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z")
 
@@ -59,7 +59,7 @@ class FakeLoader:
         path = Path(path)
         name = source_name or path.name
         if ingest.source_type_for(name) is None:
-            raise IngestError(f"Destiny Bot can't open '{Path(name).suffix}' files yet.")
+            raise IngestError(f"Athena can't open '{Path(name).suffix}' files yet.")
         self.calls.append((path, name))
         if progress:
             progress(0.5, "Reading")
@@ -446,13 +446,13 @@ def test_utc_now_format():
 
 def _real_text_loader_works() -> bool:
     try:
-        from destiny_bot.ingest import text  # noqa: F401
+        from athena.ingest import text  # noqa: F401
     except ImportError:
         return False
     return True
 
 
-@pytest.mark.skipif(not _real_text_loader_works(), reason="destiny_bot.ingest.text isn't available yet")
+@pytest.mark.skipif(not _real_text_loader_works(), reason="athena.ingest.text isn't available yet")
 def test_real_markdown_import(tmp_path):
     lib = Library()
     src = write(tmp_path, "biology.md", "# Cells\n\nCells are small.\n\n## Membranes\n\nMembranes are lipid bilayers.\n")

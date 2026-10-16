@@ -9,7 +9,7 @@ setlocal
 cd /d "%~dp0"
 set "VENV=%~dp0.venv"
 
-if exist "%VENV%\destiny-installed.txt" goto installed
+if exist "%VENV%\athena-installed.txt" goto installed
 
 echo.
 echo  Setting up Athena for the first time. This takes a few minutes...
@@ -37,24 +37,24 @@ if errorlevel 1 echo  Note: natural offline voices aren't available on this comp
 if errorlevel 1 echo  Note: the Kokoro voices aren't available on this computer.
 rem The app window is optional too: without it Athena opens in a Microsoft Edge window.
 "%VENV%\Scripts\python.exe" -m pip install "pywebview>=5.0"
-echo installed> "%VENV%\destiny-installed.txt"
+echo installed> "%VENV%\athena-installed.txt"
 
 :installed
-if not exist "%VENV%\destiny-voices.txt" (
+if not exist "%VENV%\athena-voices.txt" (
   echo.
   echo  Downloading natural-sounding offline voices, about 180 MB, one time only...
-  "%VENV%\Scripts\python.exe" -m destiny_bot voices download en_US-lessac-medium && echo done> "%VENV%\destiny-voices.txt"
-  "%VENV%\Scripts\python.exe" -m destiny_bot voices download kokoro-v1.0
+  "%VENV%\Scripts\python.exe" -m athena voices download en_US-lessac-medium && echo done> "%VENV%\athena-voices.txt"
+  "%VENV%\Scripts\python.exe" -m athena voices download kokoro-v1.0
 )
-if not exist "%VENV%\destiny-shortcut.txt" (
+if not exist "%VENV%\athena-shortcut.txt" (
   echo.
   echo  Adding an Athena icon to your desktop and Start menu...
-  "%VENV%\Scripts\python.exe" -m destiny_bot shortcut && echo created> "%VENV%\destiny-shortcut.txt"
+  "%VENV%\Scripts\python.exe" -m athena shortcut && echo created> "%VENV%\athena-shortcut.txt"
 )
 rem pythonw has no console window, so this window can close while Athena runs.
 set "PYW=%VENV%\Scripts\pythonw.exe"
 if not exist "%PYW%" set "PYW=%VENV%\Scripts\python.exe"
-start "" "%PYW%" -m destiny_bot app
+start "" "%PYW%" -m athena app
 goto end
 
 :nopython

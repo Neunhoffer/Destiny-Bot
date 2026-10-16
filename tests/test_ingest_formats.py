@@ -16,18 +16,18 @@ from pathlib import Path
 
 import pytest
 
-from destiny_bot.ingest import IngestError, load_document
-from destiny_bot.ingest import document_from_text as dispatch_document_from_text
-from destiny_bot.ingest import ocr as ocr_module
-from destiny_bot.ingest.html import html_to_blocks, load_html, parse_html
-from destiny_bot.ingest.text import (
+from athena.ingest import IngestError, load_document
+from athena.ingest import document_from_text as dispatch_document_from_text
+from athena.ingest import ocr as ocr_module
+from athena.ingest.html import html_to_blocks, load_html, parse_html
+from athena.ingest.text import (
     decode_text_bytes,
     document_from_text,
     looks_like_markdown,
     markdown_blocks,
     plain_text_blocks,
 )
-from destiny_bot.models import Block, BlockKind, Document
+from athena.models import Block, BlockKind, Document
 
 K = BlockKind
 _MARKUP = re.compile(r"</?[A-Za-z][A-Za-z0-9:-]*(?:\s[^<>]*)?/?>")
@@ -129,7 +129,7 @@ Inline math <math alttext="x^2"><msup><mi>x</mi><mn>2</mn></msup></math> stays i
 <tbody><tr><td>Nucleus</td><td>Stores <i>DNA</i></td></tr><tr><td>Ribosome</td><td>Makes proteins</td></tr></tbody></table>
 <pre><code>def double(x):
     return x * 2</code></pre>
-<p><code>pip install destiny</code></p>
+<p><code>pip install athena</code></p>
 <div class="eq"><math display="block"><semantics><mrow><mi>a</mi><mo>=</mo><mfrac><mi>b</mi><mi>c</mi></mfrac></mrow>
 <annotation encoding="application/x-tex">a = \\frac{b}{c}</annotation></semantics></math></div>
 <math display="block"><mrow><mi>y</mi><mo>=</mo><msqrt><mi>x</mi></msqrt><mo>+</mo><mn>1</mn></mrow></math>
@@ -162,7 +162,7 @@ def test_html_to_blocks_maps_structure():
         (K.CAPTION, "Table 1.1 Organelles"),
         (K.TABLE, "Organelle | Function; Nucleus | Stores DNA; Ribosome | Makes proteins"),
         (K.CODE, "def double(x):\n    return x * 2"),
-        (K.CODE, "pip install destiny"),
+        (K.CODE, "pip install athena"),
         (K.EQUATION, "a = \\frac{b}{c}"),
         (K.EQUATION, "y = sqrt(x) + 1"),
         (K.PARAGRAPH, "Page break marker removed."),
@@ -342,7 +342,7 @@ def build_epub(path: Path, *, with_nav: bool = True, with_toc: bool = True) -> P
     from ebooklib import epub
 
     book = epub.EpubBook()
-    book.set_identifier("urn:uuid:destiny-test")
+    book.set_identifier("urn:uuid:athena-test")
     book.set_title("Introductory Biology")
     book.set_language("en")
     book.add_author("Jane Smith")
@@ -1379,13 +1379,13 @@ def test_image_through_load_document(tmp_path, fresh_ocr_cache):
     ],
 )
 def test_line_break_hyphens(raw, expected):
-    from destiny_bot.ingest.common import clean_display_text
+    from athena.ingest.common import clean_display_text
 
     assert clean_display_text(raw) == expected
 
 
 def test_line_break_hyphens_follow_the_documents_own_spelling():
-    from destiny_bot.ingest.common import HyphenationEvidence, clean_display_text
+    from athena.ingest.common import HyphenationEvidence, clean_display_text
 
     evidence = HyphenationEvidence(["Every co-op member votes.", "A cooperative store and a well-being plan."])
     assert clean_display_text("the co-\nop", evidence=evidence) == "the co-op"  # default would join
@@ -1409,7 +1409,7 @@ def test_plain_text_line_break_hyphens_use_the_whole_text():
 
 
 def test_control_characters_never_reach_the_text():
-    from destiny_bot.ingest.common import clean_display_text, fix_characters
+    from athena.ingest.common import clean_display_text, fix_characters
 
     # (math fonts in PDFs map big parentheses to control codes; NUL breaks voices)
     assert clean_display_text("log\x00 φ \x01 1−φ\x02") == "log φ 1−φ"
@@ -1425,7 +1425,7 @@ def test_control_characters_never_reach_the_text():
 def test_long_runs_of_whitespace_are_cleaned_in_linear_time(filler):
     import time
 
-    from destiny_bot.ingest.common import clean_display_text
+    from athena.ingest.common import clean_display_text
 
     text = "start" + filler * 100_000 + "end"
     started = time.perf_counter()
@@ -1436,7 +1436,7 @@ def test_long_runs_of_whitespace_are_cleaned_in_linear_time(filler):
 def test_line_break_hyphen_rules_stay_linear_time():
     import time
 
-    from destiny_bot.ingest.common import HyphenationEvidence, clean_display_text
+    from athena.ingest.common import HyphenationEvidence, clean_display_text
 
     started = time.perf_counter()
     clean_display_text("a-\n" * 50_000)
@@ -1548,7 +1548,7 @@ def test_picture_descriptions_that_are_file_names_are_not_read(tmp_path, alt, ex
     from docx.shared import Inches
     from pptx.util import Inches as PptxInches
 
-    from destiny_bot.ingest.common import clean_alt_text
+    from athena.ingest.common import clean_alt_text
 
     assert clean_alt_text(alt) == expected
     figures = [expected] if expected else []
@@ -1613,7 +1613,7 @@ def test_ocr_reading_quality_measure():
     [("# Lab steps\n\nMix it. Wait.", "Lab steps"), ("Intro.\n\n# Results\n\nDone.", "Results")],
 )
 def test_pasted_text_with_a_single_heading(text, heading):
-    from destiny_bot.ingest import document_from_text
+    from athena.ingest import document_from_text
 
     doc = document_from_text(text, "Other")
     blocks = [b for s in doc.sections for b in s.blocks]
@@ -1622,7 +1622,7 @@ def test_pasted_text_with_a_single_heading(text, heading):
 
 
 def test_pasted_hashtags_are_not_headings():
-    from destiny_bot.ingest import document_from_text
+    from athena.ingest import document_from_text
 
     doc = document_from_text("Our #1 goal is reading.\n\nThen #2.", "Notes")
     assert all(b.kind != BlockKind.HEADING for s in doc.sections for b in s.blocks)

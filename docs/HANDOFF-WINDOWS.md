@@ -13,7 +13,7 @@ steps in order and fix what you find.
 - Use test material only: the generated samples below, or public-domain text. Never
   open the owner's own books or files unless the person at the keyboard hands you a
   specific file for testing.
-- Keep all test data inside the repo by setting `DESTINY_HOME` (step 1). Don't touch
+- Keep all test data inside the repo by setting `ATHENA_HOME` (step 1). Don't touch
   the real Athena data folder (`%LOCALAPPDATA%\Athena`).
 - Ask before installing anything outside this folder, and before any download over
   about 50 MB. The voices in step 1 are about 180 MB, so ask first.
@@ -30,10 +30,10 @@ Run these in PowerShell, in the repository folder:
 ```powershell
 py -3 -m venv .venv            # Python 3.10+; if `py` is missing, ask the person to install Python
 .venv\Scripts\python -m pip install -e ".[all,dev]"
-$env:DESTINY_HOME = "$PWD\.athena-test-data"   # set it again in every new terminal
-.venv\Scripts\python -m destiny_bot voices download en_US-lessac-medium
-.venv\Scripts\python -m destiny_bot voices download kokoro-v1.0
-.venv\Scripts\python -m destiny_bot doctor
+$env:ATHENA_HOME = "$PWD\.athena-test-data"   # set it again in every new terminal
+.venv\Scripts\python -m athena voices download en_US-lessac-medium
+.venv\Scripts\python -m athena voices download kokoro-v1.0
+.venv\Scripts\python -m athena doctor
 ```
 
 `.athena-test-data` is already in `.gitignore`, so test books and settings never get committed.
@@ -41,7 +41,7 @@ $env:DESTINY_HOME = "$PWD\.athena-test-data"   # set it again in every new termi
 ## 2. Measure this computer
 
 ```powershell
-.venv\Scripts\python -m destiny_bot self-test
+.venv\Scripts\python -m athena self-test
 Get-CimInstance Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors
 Get-CimInstance Win32_ComputerSystem | Select-Object TotalPhysicalMemory
 powercfg /getactivescheme
@@ -82,7 +82,7 @@ the suite only supports a downloaded Chromium, ask before running
 The point of this step is how it sounds, which no automated test can judge.
 
 ```powershell
-.venv\Scripts\python -m destiny_bot app
+.venv\Scripts\python -m athena app
 ```
 
 1. Make a realistic sample. `tests/pdf_factory.py` builds textbook-like PDFs, and
@@ -97,7 +97,7 @@ The point of this step is how it sounds, which no automated test can judge.
    - mispronounced words (write down the exact text);
    - whether the highlighted sentence matches what is being spoken.
 3. The reader has a timing/debug hook for measuring gaps, stalls and highlight drift.
-   Read the top of `src/destiny_bot/web/app.js` and `tests/e2e/harness.py` to see how to
+   Read the top of `src/athena/web/app.js` and `tests/e2e/harness.py` to see how to
    switch it on. Capture its numbers alongside what the person hears.
 4. Try the real-world disturbances:
    - Bluetooth headphones: connect and disconnect them mid-sentence.
@@ -111,15 +111,15 @@ The point of this step is how it sounds, which no automated test can judge.
 
 Where things live:
 
-- **Kokoro and Piper engines:** `src/destiny_bot/tts/kokoro_engine.py` and `piper_engine.py`. Threads,
+- **Kokoro and Piper engines:** `src/athena/tts/kokoro_engine.py` and `piper_engine.py`. Threads,
   model loading and speed are handled here.
-- **Windows system voice:** `src/destiny_bot/tts/system_engine.py`. It uses SAPI 5 through
+- **Windows system voice:** `src/athena/tts/system_engine.py`. It uses SAPI 5 through
   comtypes, with PowerShell System.Speech as the fallback.
-- **Playback scheduling and highlighting:** the Web Audio scheduler in `src/destiny_bot/web/app.js`.
+- **Playback scheduling and highlighting:** the Web Audio scheduler in `src/athena/web/app.js`.
   This covers prefetch depth, pauses and stall handling.
-- **What gets said:** `src/destiny_bot/speech/normalize.py` (pronunciation) and `speech/plan.py`
+- **What gets said:** `src/athena/speech/normalize.py` (pronunciation) and `speech/plan.py`
   (pauses and sentence chunks).
-- **Window, shortcuts and single-instance:** `src/destiny_bot/desktop.py`.
+- **Window, shortcuts and single-instance:** `src/athena/desktop.py`.
 
 For every fix, write a regression test, run both suites, then commit with a clear
 message and push to the branch `claude/ai-textbook-tts-bot-7m0t72`.

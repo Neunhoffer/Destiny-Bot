@@ -23,17 +23,17 @@ from types import SimpleNamespace
 
 import pytest
 
-from destiny_bot import audio, config
-from destiny_bot import tts as registry
-from destiny_bot.tts import catalog
-from destiny_bot.tts.base import AudioClip, EngineUnavailable, TTSError
-from destiny_bot.tts.browser_engine import BrowserEngine
-from destiny_bot.tts.cache import AudioCache
-from destiny_bot.tts.edge_engine import NETWORK_ERROR, EdgeEngine
-from destiny_bot.tts import kokoro_engine
-from destiny_bot.tts.kokoro_engine import NO_MODEL_REASON, NO_PACKAGE_REASON, KokoroEngine
-from destiny_bot.tts.piper_engine import NO_VOICE_REASON, PiperEngine
-from destiny_bot.tts.system_engine import SystemEngine
+from athena import audio, config
+from athena import tts as registry
+from athena.tts import catalog
+from athena.tts.base import AudioClip, EngineUnavailable, TTSError
+from athena.tts.browser_engine import BrowserEngine
+from athena.tts.cache import AudioCache
+from athena.tts.edge_engine import NETWORK_ERROR, EdgeEngine
+from athena.tts import kokoro_engine
+from athena.tts.kokoro_engine import NO_MODEL_REASON, NO_PACKAGE_REASON, KokoroEngine
+from athena.tts.piper_engine import NO_VOICE_REASON, PiperEngine
+from athena.tts.system_engine import SystemEngine
 
 HAS_ESPEAK = bool(shutil.which("espeak-ng") or shutil.which("espeak"))
 
@@ -60,11 +60,11 @@ def espeak_folder_ok(request, monkeypatch):
 def kokoro_model_dir() -> Path:
     """A folder with a real Kokoro model + voices-v1.0.bin, or skip.
 
-    Set DESTINY_TEST_KOKORO_DIR to run the real Kokoro tests.
+    Set ATHENA_TEST_KOKORO_DIR to run the real Kokoro tests.
     """
-    value = os.environ.get("DESTINY_TEST_KOKORO_DIR")
+    value = os.environ.get("ATHENA_TEST_KOKORO_DIR")
     if not value or catalog.find_kokoro_model(Path(value)) is None:
-        pytest.skip("set DESTINY_TEST_KOKORO_DIR to a folder with a Kokoro model to run this test")
+        pytest.skip("set ATHENA_TEST_KOKORO_DIR to a folder with a Kokoro model to run this test")
     return Path(value)
 
 
@@ -291,7 +291,7 @@ def test_clamp_rate():
 
 
 def test_piper_speed_plan():
-    from destiny_bot.tts.piper_engine import MAX_LENGTH_SCALE, speed_plan
+    from athena.tts.piper_engine import MAX_LENGTH_SCALE, speed_plan
 
     def voice(scale):
         return SimpleNamespace(config=SimpleNamespace(length_scale=scale))
@@ -608,7 +608,7 @@ def test_kokoro_reloads_when_files_change(fake_kokoro):
 def test_kokoro_session_settings(monkeypatch):
     import onnxruntime
 
-    from destiny_bot.tts import kokoro_engine
+    from athena.tts import kokoro_engine
 
     write_fake_kokoro(config.voices_dir() / "kokoro")
     seen = {}
@@ -753,7 +753,7 @@ def test_kokoro_damaged_model_is_friendly():
 
 
 def test_physical_cores(monkeypatch):
-    from destiny_bot.tts import kokoro_engine
+    from athena.tts import kokoro_engine
 
     cores = kokoro_engine.physical_cores()
     assert 1 <= cores <= (os.cpu_count() or 1)
@@ -770,7 +770,7 @@ def test_physical_cores_windows_layout(monkeypatch):
     # on 64-bit Windows: ProcessorMask (8), Relationship (4), padding (4), a 16-byte union.
     import ctypes
 
-    from destiny_bot.tts import kokoro_engine
+    from athena.tts import kokoro_engine
 
     relationships = [3, 0, 2, 2, 0, 2, 0, 1, 0, 2]  # package, 4 cores, caches, a NUMA node
     records = b"".join(struct.pack("<QI4xQQ", 0b11 << (2 * i), rel, 0x0040000801010000, 0) for i, rel in enumerate(relationships))
@@ -1000,10 +1000,10 @@ def test_system_windows_powershell(monkeypatch):
             listing = "Microsoft Zira Desktop\ten-US\tFemale\r\nMicrosoft David Desktop\ten-US\tMale\r\nMicrosoft Hélène\tfr-FR\tFemale\r\n"
             return 0, listing.encode("utf-8")
         env = kwargs["env"]
-        assert "SelectVoice($env:DESTINY_TTS_VOICE)" in script and "SetOutputToWaveFile" in script
-        assert "ReadAllText($env:DESTINY_TTS_TEXT" in script
-        seen.append({**{k: env[k] for k in env if k.startswith("DESTINY_TTS_")}, "text": Path(env["DESTINY_TTS_TEXT"]).read_text("utf-8")})
-        Path(env["DESTINY_TTS_OUT"]).write_bytes(sine_wav(0.3, 22050))
+        assert "SelectVoice($env:ATHENA_TTS_VOICE)" in script and "SetOutputToWaveFile" in script
+        assert "ReadAllText($env:ATHENA_TTS_TEXT" in script
+        seen.append({**{k: env[k] for k in env if k.startswith("ATHENA_TTS_")}, "text": Path(env["ATHENA_TTS_TEXT"]).read_text("utf-8")})
+        Path(env["ATHENA_TTS_OUT"]).write_bytes(sine_wav(0.3, 22050))
         return 0, b""
 
     fake = FakeRun(handler)
@@ -1021,14 +1021,14 @@ def test_system_windows_powershell(monkeypatch):
     assert text not in " ".join(cmd)
     assert kwargs["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
     assert seen[-1]["text"] == text
-    assert seen[-1]["DESTINY_TTS_VOICE"] == "Microsoft David Desktop"
-    assert seen[-1]["DESTINY_TTS_RATE"] == "7"  # 350 wpm
-    assert not Path(seen[-1]["DESTINY_TTS_TEXT"]).exists()  # temp files cleaned up
+    assert seen[-1]["ATHENA_TTS_VOICE"] == "Microsoft David Desktop"
+    assert seen[-1]["ATHENA_TTS_RATE"] == "7"  # 350 wpm
+    assert not Path(seen[-1]["ATHENA_TTS_TEXT"]).exists()  # temp files cleaned up
     assert clip.mime == "audio/wav" and wav_seconds(clip.data) == pytest.approx(0.3, abs=0.01)
     engine.synthesize("Hi", rate=1.0)
-    assert seen[-1]["DESTINY_TTS_RATE"] == "1" and seen[-1]["DESTINY_TTS_VOICE"] == "Microsoft Zira Desktop"
+    assert seen[-1]["ATHENA_TTS_RATE"] == "1" and seen[-1]["ATHENA_TTS_VOICE"] == "Microsoft Zira Desktop"
     engine.synthesize("Hi", rate=0.25)
-    assert seen[-1]["DESTINY_TTS_RATE"] == "-10"
+    assert seen[-1]["ATHENA_TTS_RATE"] == "-10"
 
 
 class FakeToken:
@@ -1125,7 +1125,7 @@ def _powershell_speaks(monkeypatch, seconds: float = 0.2) -> FakeRun:
         if "GetInstalledVoices" in _decode_ps(cmd):
             return 0, "Microsoft Zira Desktop\ten-US\tFemale\r\n".encode()
         assert "Speak($text)" in _decode_ps(cmd)
-        out = Path(kwargs["env"]["DESTINY_TTS_OUT"])
+        out = Path(kwargs["env"]["ATHENA_TTS_OUT"])
         out.write_bytes(sine_wav(seconds, 22050) if seconds else audio.wav_bytes(b"", 22050))
         return 0, b""
 
@@ -1197,7 +1197,7 @@ def test_system_windows_unspeakable_text_keeps_sapi(monkeypatch):
 
 
 def test_system_windows_sapi_hang_falls_back(monkeypatch):
-    from destiny_bot.tts import system_engine
+    from athena.tts import system_engine
 
     monkeypatch.setattr(sys, "platform", "win32")
     release = threading.Event()
@@ -1211,7 +1211,7 @@ def test_system_windows_sapi_hang_falls_back(monkeypatch):
         release.set()
     assert wav_seconds(clip.data) == pytest.approx(0.2, abs=0.01) and len(fake.calls) == 1
     # The hung SAPI call may still hold its file open (Windows locks it): PowerShell writes elsewhere.
-    assert fake.calls[0][1]["env"]["DESTINY_TTS_OUT"] != sapi.paths[0]
+    assert fake.calls[0][1]["env"]["ATHENA_TTS_OUT"] != sapi.paths[0]
 
 
 def test_system_windows_sapi_failure_falls_back(monkeypatch):
@@ -1224,14 +1224,14 @@ def test_system_windows_sapi_failure_falls_back(monkeypatch):
 
 
 def test_system_windows_language_codes():
-    from destiny_bot.tts.system_engine import _lcid_language
+    from athena.tts.system_engine import _lcid_language
 
     assert _lcid_language("409") == "en-US" and _lcid_language("809;9") == "en-GB"
     assert _lcid_language("c0a") == "es-ES" and _lcid_language("") is None and _lcid_language("zz") is None
 
 
 def test_system_windows_prefers_windows_own_powershell(monkeypatch, tmp_path):
-    from destiny_bot.tts.system_engine import _WindowsBackend
+    from athena.tts.system_engine import _WindowsBackend
 
     own = tmp_path / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
     own.parent.mkdir(parents=True)

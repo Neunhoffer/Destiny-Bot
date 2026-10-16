@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "destiny-bot"
+name = "athena-reader"
 version = "0.1.0"
 description = "A private, offline-first study reader that reads textbooks and class materials aloud."
 readme = "README.md"
@@ -35,21 +35,21 @@ ai = ["anthropic>=1.0"]
 ocr = ["pytesseract>=0.3.10", "pillow>=10"]
 # Kokoro: the most natural offline voices (the voice pack is a separate ~120 MB download).
 kokoro = ["kokoro-onnx>=0.6"]
-# Open the reader in its own window instead of a browser tab (`destiny app`).
+# Open the reader in its own window instead of a browser tab (`athena app`).
 app = ["pywebview>=5.0"]
-all = ["destiny-bot[piper,kokoro,system,edge,ai,ocr,app]"]
-dev = ["destiny-bot[all]", "pytest>=8", "pytest-asyncio>=0.23", "httpx>=0.27", "playwright>=1.44"]
+all = ["athena-reader[piper,kokoro,system,edge,ai,ocr,app]"]
+dev = ["athena-reader[all]", "pytest>=8", "pytest-asyncio>=0.23", "httpx>=0.27", "playwright>=1.44"]
 # Build the desktop app and its installer (see packaging/README.md).
-build = ["destiny-bot[all]", "pyinstaller>=6.6", "pillow>=10"]
+build = ["athena-reader[all]", "pyinstaller>=6.6", "pillow>=10"]
 
 [project.scripts]
-destiny = "destiny_bot.cli:main"
+athena = "athena.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-destiny_bot = ["web/*", "web/**/*"]
+athena = ["web/*", "web/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

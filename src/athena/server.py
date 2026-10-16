@@ -5,7 +5,7 @@ programs reaching it:
 
 - A ``Host`` header allowlist blocks DNS-rebinding attacks.
 - Every ``/api`` request must carry the per-process token that is embedded in
-  ``index.html`` (header ``X-Destiny-Token``).
+  ``index.html`` (header ``X-Athena-Token``).
 - Requests that carry an ``Origin`` header must come from the server's own origin.
 - Uploads are capped while they stream in, never trusting ``Content-Length`` alone.
 - Strict security headers (CSP, nosniff, no referrer) go on every response.
@@ -62,7 +62,7 @@ PAGE_DPI = 110
 DESCRIBE_DPI = 150
 MAX_RENDER_SIDE_PX = 4000  # keeps a giant PDF page (posters, maps) from eating memory
 WEB_DIR = Path(__file__).parent / "web"
-TOKEN_PLACEHOLDER = "__DESTINY_TOKEN__"
+TOKEN_PLACEHOLDER = "__ATHENA_TOKEN__"
 
 CSP = (
     "default-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; style-src 'self'; "
@@ -407,7 +407,7 @@ class SecurityMiddleware:
             await _send_json(send_with_headers, 500, friendly_error(exc))
 
     def _token_ok(self, scope: Scope, headers: Headers, path: str) -> bool:
-        supplied = headers.get("x-destiny-token")
+        supplied = headers.get("x-athena-token")
         if supplied is None and scope.get("method") in ("GET", "HEAD") and _FILE_DOWNLOAD_RE.fullmatch(path):
             # Plain <a href> downloads can't send headers.
             supplied = QueryParams(scope.get("query_string", b"")).get("token")
@@ -1517,7 +1517,7 @@ def start_server_in_thread(
         jobs.shutdown(wait=False)
         sock.close()
         raise
-    thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, name="destiny-server", daemon=True)
+    thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, name="athena-server", daemon=True)
     lock = threading.Lock()
     stopped = False
 

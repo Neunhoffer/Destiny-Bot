@@ -16,9 +16,9 @@ from pathlib import Path
 
 import pytest
 
-from destiny_bot import audio, export
-from destiny_bot.models import Block, BlockKind, Document, ReadingOptions, Section, Utterance
-from destiny_bot.tts.base import AudioClip, EngineUnavailable, TTSEngine, TTSError, Voice
+from athena import audio, export
+from athena.models import Block, BlockKind, Document, ReadingOptions, Section, Utterance
+from athena.tts.base import AudioClip, EngineUnavailable, TTSEngine, TTSError, Voice
 
 FFPROBE = shutil.which("ffprobe")
 needs_ffprobe = pytest.mark.skipif(FFPROBE is None, reason="ffprobe not installed")
@@ -624,7 +624,7 @@ def test_export_engine_failure_cleans_up(planner, tmp_path):
     engine.on_call = fail
     with pytest.raises(EngineUnavailable):
         export.export_audiobook(make_doc(), engine=engine, voice=None, options=ReadingOptions(), out_dir=tmp_path)
-    assert [p.name for p in tmp_path.iterdir()] == ["destiny-home"]
+    assert [p.name for p in tmp_path.iterdir()] == ["athena-home"]
 
 
 def test_export_retries_once(planner, tmp_path):
@@ -727,12 +727,12 @@ def test_export_real_piper_end_to_end(piper_voice_path, tmp_path, monkeypatch):
     if not FFPROBE:
         pytest.skip("ffprobe not installed")
     try:
-        from destiny_bot.speech import plan_section  # noqa: F401
+        from athena.speech import plan_section  # noqa: F401
     except ImportError:
         monkeypatch.setattr(export, "_plan", fake_plan)
-    from destiny_bot.tts.piper_engine import PiperEngine
+    from athena.tts.piper_engine import PiperEngine
 
-    folder = Path(__import__("destiny_bot.config", fromlist=["voices_dir"]).voices_dir()) / "piper"
+    folder = Path(__import__("athena.config", fromlist=["voices_dir"]).voices_dir()) / "piper"
     folder.mkdir(parents=True, exist_ok=True)
     for src in (piper_voice_path, piper_voice_path.with_name(piper_voice_path.name + ".json")):
         try:
@@ -793,14 +793,14 @@ def test_export_real_kokoro_pacing(tmp_path, monkeypatch):
     np = pytest.importorskip("numpy")
     import os
 
-    from destiny_bot.tts import catalog
-    from destiny_bot.tts.kokoro_engine import KokoroEngine
+    from athena.tts import catalog
+    from athena.tts.kokoro_engine import KokoroEngine
 
-    folder = os.environ.get("DESTINY_TEST_KOKORO_DIR")
+    folder = os.environ.get("ATHENA_TEST_KOKORO_DIR")
     if not folder or catalog.find_kokoro_model(Path(folder)) is None:
-        pytest.skip("set DESTINY_TEST_KOKORO_DIR to a folder with a Kokoro model to run this test")
+        pytest.skip("set ATHENA_TEST_KOKORO_DIR to a folder with a Kokoro model to run this test")
     try:
-        from destiny_bot.speech import plan_section
+        from athena.speech import plan_section
     except ImportError:
         pytest.skip("the speech planner isn't available yet")
     doc = Document(

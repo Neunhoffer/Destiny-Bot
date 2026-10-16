@@ -13,8 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from destiny_bot import config
-from destiny_bot.library import wipe_user_data
+from athena import config
+from athena.library import wipe_user_data
 
 SRC = Path(__file__).resolve().parents[1] / "src"
 
@@ -50,17 +50,17 @@ def test_onnxruntime_telemetry_is_off_before_any_voice_loads(tmp_path):
     soon as it is imported, and keeps a device id under ~/.cache/Microsoft/DeveloperTools
     (%LOCALAPPDATA%\\Microsoft\\DeveloperTools on Windows). ``disable_telemetry_events()`` is
     too late for that; only ``ORT_DISABLE_TELEMETRY=1`` set before the import (done in
-    ``destiny_bot/__init__.py``) stops it."""
+    ``athena/__init__.py``) stops it."""
     pytest.importorskip("onnxruntime")
     home = tmp_path / "user"
     home.mkdir()
     started = time.time() - 1.0  # coarse file-time resolution
     env = {k: v for k, v in os.environ.items() if k != "ORT_DISABLE_TELEMETRY"}
     env.update(HOME=str(home), XDG_CACHE_HOME=str(home / ".cache"), LOCALAPPDATA=str(home / "AppData" / "Local"),
-               APPDATA=str(home / "AppData" / "Roaming"), USERPROFILE=str(home), DESTINY_HOME=str(tmp_path / "data"))
+               APPDATA=str(home / "AppData" / "Roaming"), USERPROFILE=str(home), ATHENA_HOME=str(tmp_path / "data"))
     code = """
         import time
-        import destiny_bot.tts.kokoro_engine, onnxruntime
+        import athena.tts.kokoro_engine, onnxruntime
         time.sleep(2)  # the uploader starts in the background right after the import
         """
     strace = shutil.which("strace") if sys.platform.startswith("linux") else None
@@ -91,13 +91,13 @@ def test_data_folder_is_private_to_the_user(tmp_path, monkeypatch):
     old_umask = os.umask(0o022)
     try:
         fresh = tmp_path / "fresh" / "Athena"
-        monkeypatch.setenv("DESTINY_HOME", str(fresh))
+        monkeypatch.setenv("ATHENA_HOME", str(fresh))
         assert stat.S_IMODE(config.data_dir().stat().st_mode) == 0o700
 
         existing = tmp_path / "existing"
         existing.mkdir(mode=0o755)
         existing.chmod(0o755)
-        monkeypatch.setenv("DESTINY_HOME", str(existing))
+        monkeypatch.setenv("ATHENA_HOME", str(existing))
         config.data_dir()
         assert stat.S_IMODE(existing.stat().st_mode) == 0o700
     finally:
@@ -144,7 +144,7 @@ def test_wipe_also_empties_the_log_files():
 def _browser_storage(name: str) -> Path:
     storage = config.data_dir() / name / "EBWebView" / "Default" / "Local Storage" / "leveldb"
     storage.mkdir(parents=True)
-    (storage / "000003.log").write_bytes(b"destiny.lastBook=3fa2")
+    (storage / "000003.log").write_bytes(b"athena.lastBook=3fa2")
     (storage / "LOCK").write_bytes(b"")
     return storage
 
@@ -159,7 +159,7 @@ def test_wipe_erases_the_reader_window_browser_data():
 
 def test_browser_data_the_open_window_holds_is_erased_at_next_start(monkeypatch):
     """On Windows the open window locks some of its files; the wipe must still succeed."""
-    from destiny_bot import library
+    from athena import library
 
     storage = _browser_storage("webview")
     real_unlink = os.unlink

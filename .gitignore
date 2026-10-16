@@ -13,9 +13,9 @@ venv/
 .coverage
 htmlcov/
 
-# Destiny Bot local data (books, audio cache, settings, API key) - never commit
+# Athena local data (books, audio cache, settings, API key) - never commit
 data/
-.destiny/
+.athena/
 *.onnx
 *.onnx.json
 

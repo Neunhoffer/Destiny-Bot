@@ -1,4 +1,4 @@
-"""Core data model shared by every part of Destiny Bot.
+"""Core data model shared by every part of Athena.
 
 A loaded file becomes a :class:`Document`: an ordered list of :class:`Section`
 objects (chapters / sub-chapters / slides), each holding :class:`Block` objects

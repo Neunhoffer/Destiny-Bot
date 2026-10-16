@@ -1,20 +1,20 @@
-"""The ``destiny`` command.
+"""The ``athena`` command.
 
-    destiny                        open the reader in your browser (same as ``destiny serve``)
-    destiny serve [--port N] [--no-browser] [--host H]
-    destiny app [--port N]         open the reader in its own window
-    destiny shortcut [--no-start-menu]
-    destiny self-test [--quick]
-    destiny import FILE...
-    destiny list
-    destiny toc BOOK
-    destiny text BOOK|FILE [--section ID] [--speech]
-    destiny read BOOK|FILE [--section ID] [--engine E] [--voice V] [--rate R]
-    destiny export BOOK [--section ID ...] [--format mp3|wav] [--out DIR] [--engine E] [--voice V] [--rate R]
-    destiny voices [--engine E] | destiny voices catalog | destiny voices download VOICE_ID
-    destiny ai-key [--remove]
-    destiny doctor
-    destiny wipe [--yes]
+    athena                        open the reader in your browser (same as ``athena serve``)
+    athena serve [--port N] [--no-browser] [--host H]
+    athena app [--port N]         open the reader in its own window
+    athena shortcut [--no-start-menu]
+    athena self-test [--quick]
+    athena import FILE...
+    athena list
+    athena toc BOOK
+    athena text BOOK|FILE [--section ID] [--speech]
+    athena read BOOK|FILE [--section ID] [--engine E] [--voice V] [--rate R]
+    athena export BOOK [--section ID ...] [--format mp3|wav] [--out DIR] [--engine E] [--voice V] [--rate R]
+    athena voices [--engine E] | athena voices catalog | athena voices download VOICE_ID
+    athena ai-key [--remove]
+    athena doctor
+    athena wipe [--yes]
 
 BOOK is a library id, the first few (4+) characters of one, or part of the title.
 A FILE that exists is imported into the library first.
@@ -238,7 +238,7 @@ def resolve_book(lib: Library, ref: str) -> Document:
 
     needle = ref.strip().lower()
     if not needle:
-        raise CLIError("Say which book: give its id or part of its title (see 'destiny list').")
+        raise CLIError("Say which book: give its id or part of its title (see 'athena list').")
     if is_valid_doc_id(needle):
         try:
             return lib.get(needle)
@@ -259,7 +259,7 @@ def resolve_book(lib: Library, ref: str) -> Document:
         raise CLIError(_ambiguous(ref, by_title))
     if path.suffix:
         raise CLIError(f"There's no file '{ref}' and no book in your library matches it.")
-    raise CLIError(f"No book in your library matches '{ref}'. See your books with: destiny list")
+    raise CLIError(f"No book in your library matches '{ref}'. See your books with: athena list")
 
 
 def _get(lib: Library, doc_id: str) -> Document:
@@ -281,7 +281,7 @@ def _section_index(doc: Document, section_id: str) -> int:
     for i, section in enumerate(doc.sections):
         if section.id == section_id:
             return i
-    raise CLIError(f"'{doc.title}' has no section '{section_id}'. See the sections with: destiny toc {doc.id}")
+    raise CLIError(f"'{doc.title}' has no section '{section_id}'. See the sections with: athena toc {doc.id}")
 
 
 # -- voices
@@ -306,7 +306,7 @@ def _choose_engine(name: str | None, settings: config.Settings) -> TTSEngine:
             if explicit
             else "No voice that works outside the browser is installed."
         )
-        raise CLIError(f"{prefix} Download a natural offline voice with:\n  destiny voices download {recommended}")
+        raise CLIError(f"{prefix} Download a natural offline voice with:\n  athena voices download {recommended}")
     if engine.online and not settings.online_tts_allowed:
         raise CLIError(ONLINE_TTS_OFF + " You can turn them on in the reader's Settings.")
     try:
@@ -328,7 +328,7 @@ def _pick_voice(engine: TTSEngine, requested: str | None, settings: config.Setti
         if requested in installed:
             return requested
         listing = f" Installed voices: {', '.join(installed[:12])}." if installed else ""
-        raise CLIError(f"The voice '{requested}' isn't installed for {engine.label}.{listing} See: destiny voices")
+        raise CLIError(f"The voice '{requested}' isn't installed for {engine.label}.{listing} See: athena voices")
     saved = settings.voices.get(engine.name)
     if saved and saved in installed:
         return saved
@@ -339,7 +339,7 @@ def _pick_voice(engine: TTSEngine, requested: str | None, settings: config.Setti
     if not default:
         recommended = getattr(_safe_catalog(), "RECOMMENDED_VOICE", DEFAULT_VOICE_ID)
         raise CLIError(
-            f"{engine.label} has no voices installed. Download one with:\n  destiny voices download {recommended}"
+            f"{engine.label} has no voices installed. Download one with:\n  athena voices download {recommended}"
         )
     return default
 
@@ -387,7 +387,7 @@ def _desktop() -> Any:
     except ImportError as exc:
         raise CLIError(
             f"The desktop app isn't available in this copy of Athena ({exc}). "
-            "Run 'destiny' to open the reader in your browser instead."
+            "Run 'athena' to open the reader in your browser instead."
         ) from None
     return desktop
 
@@ -397,7 +397,7 @@ def _cmd_app(args: argparse.Namespace) -> int:
     try:
         run_app = desktop.run_app
     except AttributeError:
-        raise CLIError("The desktop app isn't ready in this copy of Athena. Run 'destiny' instead.") from None
+        raise CLIError("The desktop app isn't ready in this copy of Athena. Run 'athena' instead.") from None
     return int(run_app(port=args.port) or 0)
 
 
@@ -443,7 +443,7 @@ def _cmd_import(args: argparse.Namespace) -> int:
 def _cmd_list(args: argparse.Namespace) -> int:
     books = Library().list()
     if not books:
-        print("Your library is empty. Add a file with: destiny import FILE")
+        print("Your library is empty. Add a file with: athena import FILE")
         return 0
     width = min(50, max(len(b.title) for b in books))
     for book in books:
@@ -542,7 +542,7 @@ def _cmd_read(args: argparse.Namespace) -> int:
     if resumed:
         print("Continuing where you left off.")
     # Synthesize the next sentence while the current one plays, so there are no gaps.
-    pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="destiny-read")
+    pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="athena-read")
     try:
         for index in range(start_section, len(doc.sections)):
             section = doc.sections[index]
@@ -669,19 +669,19 @@ def _voices_catalog() -> int:
         print(f"  {voice.id:<{width}}  {mark:>9}  {voice.name}{star}")
         if voice.description:
             print(f"  {'':<{width}}             {voice.description}")
-    print("\nDownload one with: destiny voices download VOICE_ID")
+    print("\nDownload one with: athena voices download VOICE_ID")
     return 0
 
 
 def _voices_download(voice_id: str | None) -> int:
     catalog = _catalog()
     if not voice_id:
-        raise CLIError("Say which voice to download, e.g.: destiny voices download " + DEFAULT_VOICE_ID)
+        raise CLIError("Say which voice to download, e.g.: athena voices download " + DEFAULT_VOICE_ID)
     check = getattr(catalog, "is_valid_voice_id", None)
     if voice_id not in {v.id for v in catalog.CATALOG} and not (check is not None and check(voice_id)):
         raise CLIError(
             f"'{voice_id}' isn't a voice you can download (expected something like {DEFAULT_VOICE_ID}). "
-            "See the list with: destiny voices catalog"
+            "See the list with: athena voices catalog"
         )
     print(f"Downloading {voice_id}...")
     cancel = threading.Event()
@@ -784,7 +784,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     ocr_state = "ready" if ocr_ok else "not available"
     print(f"\nScanned pages and photos (OCR): {ocr_state}" + (f" - {ocr_reason}" if ocr_reason else ""))
 
-    key_state = "set" if settings.resolved_api_key() else "not set (run: destiny ai-key)"
+    key_state = "set" if settings.resolved_api_key() else "not set (run: athena ai-key)"
     print(f"AI study helpers: {'on' if settings.ai_enabled else 'off'}; API key {key_state}; model {settings.ai_model}")
     return 0
 
@@ -792,7 +792,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
 def _cmd_wipe(args: argparse.Namespace) -> int:
     if not args.yes:
         if not _isatty(sys.stdin):
-            raise CLIError("To erase everything without being asked, run: destiny wipe --yes")
+            raise CLIError("To erase everything without being asked, run: athena wipe --yes")
         print(
             "This deletes your library, reading progress, bookmarks, saved audio, exports and settings\n"
             "(including your Claude API key). Downloaded voices are kept."
@@ -834,9 +834,9 @@ def _rate(value: str) -> float:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="destiny",
+        prog="athena",
         description="Athena: a private study reader that reads your textbooks aloud.",
-        epilog="Run 'destiny' with no command to open the reader in your browser.",
+        epilog="Run 'athena' with no command to open the reader in your browser.",
     )
     parser.add_argument("--version", action="version", version=f"Athena {__version__}")
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
@@ -872,7 +872,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("text", help="print a book's text")
     p.add_argument("book", metavar="BOOK|FILE")
-    p.add_argument("--section", metavar="ID", help="only this section (see 'destiny toc')")
+    p.add_argument("--section", metavar="ID", help="only this section (see 'athena toc')")
     p.add_argument("--speech", action="store_true", help="print what the voice will say instead")
     p.set_defaults(func=_cmd_text)
 
@@ -880,7 +880,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("book", metavar="BOOK|FILE")
     p.add_argument("--section", metavar="ID", help="start at this section instead of where you left off")
     p.add_argument("--engine", metavar="E", help="voice engine: auto, piper, system, edge")
-    p.add_argument("--voice", metavar="V", help="voice id (see 'destiny voices')")
+    p.add_argument("--voice", metavar="V", help="voice id (see 'athena voices')")
     p.add_argument("--rate", type=_rate, metavar="R", help="speed, e.g. 1.25 (default: your reader speed)")
     p.set_defaults(func=_cmd_read)
 
@@ -890,7 +890,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--format", choices=("mp3", "wav"), default="mp3")
     p.add_argument("--out", metavar="DIR", help="folder for the files (default: a new folder named after the book)")
     p.add_argument("--engine", metavar="E", help="voice engine: auto, piper, system, edge")
-    p.add_argument("--voice", metavar="V", help="voice id (see 'destiny voices')")
+    p.add_argument("--voice", metavar="V", help="voice id (see 'athena voices')")
     p.add_argument("--rate", type=_rate, default=1.0, metavar="R", help="speed, e.g. 1.25 (default 1.0)")
     p.set_defaults(func=_cmd_export)
 
@@ -916,7 +916,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run the ``destiny`` command; returns the exit code."""
+    """Run the ``athena`` command; returns the exit code."""
     _make_output_safe()
     parser = build_parser()
     try:

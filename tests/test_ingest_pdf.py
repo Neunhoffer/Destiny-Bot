@@ -10,11 +10,11 @@ import pymupdf
 import pytest
 from pdf_factory import BOLD, MONO, REGULAR, PdfBuilder, scanned_pdf, text_width
 
-from destiny_bot.ingest import IngestError, load_document
-from destiny_bot.ingest import pdf as pdf_mod
-from destiny_bot.ingest.common import doc_id_for_file
-from destiny_bot.ingest.pdf import load_pdf
-from destiny_bot.models import BlockKind, Document
+from athena.ingest import IngestError, load_document
+from athena.ingest import pdf as pdf_mod
+from athena.ingest.common import doc_id_for_file
+from athena.ingest.pdf import load_pdf
+from athena.models import BlockKind, Document
 
 WORDS = (
     "cell membrane protein lipid transport energy diffusion gradient water molecule channel pump "
@@ -488,13 +488,13 @@ def test_ruled_table_extracted_once(tmp_path):
 
 def _ocr_ready() -> bool:
     try:
-        from destiny_bot.ingest import ocr
+        from athena.ingest import ocr
     except ImportError:
         return False
     return ocr.ocr_available()[0]
 
 
-@pytest.mark.skipif(not _ocr_ready(), reason="Tesseract OCR (and destiny_bot.ingest.ocr) not available")
+@pytest.mark.skipif(not _ocr_ready(), reason="Tesseract OCR (and athena.ingest.ocr) not available")
 def test_scanned_page_read_with_real_ocr(tmp_path):
     rng = random.Random(17)
     b = PdfBuilder()

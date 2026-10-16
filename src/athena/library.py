@@ -2,7 +2,7 @@
 
 Every book lives in its own folder, ``library/<doc_id>/``:
 
-- ``document.json``: the parsed :class:`~destiny_bot.models.Document`, written once at import.
+- ``document.json``: the parsed :class:`~athena.models.Document`, written once at import.
 - ``meta.json``: added_at, last_opened, progress and bookmarks, plus a cached copy of the
   summary fields so listing the library never has to parse every book.
 - ``source<ext>``: a copy of the original file (used, for example, to draw PDF pages).
@@ -125,7 +125,7 @@ class Library:
         """Import a file (or return the existing copy if the same file was imported before).
 
         ``original_name`` is the name the user knows the file by (uploads arrive as temp
-        files). Raises :class:`~destiny_bot.ingest.IngestError` with a friendly message.
+        files). Raises :class:`~athena.ingest.IngestError` with a friendly message.
         """
         path = Path(path)
         name = original_name or path.name

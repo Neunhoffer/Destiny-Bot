@@ -1,4 +1,4 @@
-"""Tests for the local web server (destiny_bot.server) and background jobs (destiny_bot.jobs).
+"""Tests for the local web server (athena.server) and background jobs (athena.jobs).
 
 The voice engines, speech planner, AI helper, exporter and voice catalog are replaced
 with small fakes, so these tests only exercise the server's own behaviour. A few
@@ -22,17 +22,17 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
-from destiny_bot import config, ingest, server
-from destiny_bot.ingest import IngestError
-from destiny_bot.ingest.common import doc_id_for_file
-from destiny_bot.jobs import Job, JobCancelled, JobError, JobManager, friendly_error
-from destiny_bot.library import Library
-from destiny_bot.models import Block, BlockKind, Document, Section, Utterance
-from destiny_bot.server import CSP, ONLINE_TTS_OFF, content_disposition, create_app, host_policy
-from destiny_bot.tts.base import AudioClip, EngineUnavailable, TTSEngine, TTSError, Voice
+from athena import config, ingest, server
+from athena.ingest import IngestError
+from athena.ingest.common import doc_id_for_file
+from athena.jobs import Job, JobCancelled, JobError, JobManager, friendly_error
+from athena.library import Library
+from athena.models import Block, BlockKind, Document, Section, Utterance
+from athena.server import CSP, ONLINE_TTS_OFF, content_disposition, create_app, host_policy
+from athena.tts.base import AudioClip, EngineUnavailable, TTSEngine, TTSError, Voice
 
 TOKEN = "test-token-123"
-AUTH = {"X-Destiny-Token": TOKEN}
+AUTH = {"X-Athena-Token": TOKEN}
 
 
 # -- fakes
@@ -371,8 +371,8 @@ def web_dir(tmp_path) -> Path:
     web = tmp_path / "web"
     web.mkdir()
     (web / "index.html").write_text(
-        '<!doctype html><html><head><meta name="destiny-token" content="__DESTINY_TOKEN__">'
-        '<script src="/static/app.js"></script></head><body>Destiny</body></html>',
+        '<!doctype html><html><head><meta name="athena-token" content="__ATHENA_TOKEN__">'
+        '<script src="/static/app.js"></script></head><body>Athena</body></html>',
         encoding="utf-8",
     )
     (web / "app.js").write_text("console.log('hi');", encoding="utf-8")
@@ -443,9 +443,9 @@ def test_api_requires_the_token(app_factory):
         missing = c.get("/api/status")
         assert missing.status_code == 401
         assert "token" in missing.json()["detail"]
-        assert c.get("/api/status", headers={"X-Destiny-Token": "wrong"}).status_code == 401
-        assert c.get("/api/status", headers={"X-Destiny-Token": ""}).status_code == 401
-        assert c.get("/api/status", headers={"X-Destiny-Token": TOKEN + "x"}).status_code == 401
+        assert c.get("/api/status", headers={"X-Athena-Token": "wrong"}).status_code == 401
+        assert c.get("/api/status", headers={"X-Athena-Token": ""}).status_code == 401
+        assert c.get("/api/status", headers={"X-Athena-Token": TOKEN + "x"}).status_code == 401
         assert c.post("/api/wipe", json={"confirm": "DELETE"}).status_code == 401
         assert c.get("/api/status", headers=AUTH).status_code == 200
         # ?token= only works for job file downloads.
@@ -509,7 +509,7 @@ def test_security_headers_everywhere(client):
         "/static/app.js": client.get("/static/app.js"),
         "/missing": client.get("/missing"),
         "/api/nothing": client.get("/api/nothing"),
-        "401": client.get("/api/status", headers={"X-Destiny-Token": "nope"}),
+        "401": client.get("/api/status", headers={"X-Athena-Token": "nope"}),
     }
     for name, response in responses.items():
         headers = response.headers
@@ -600,11 +600,11 @@ def test_index_has_token(client):
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     assert f'content="{TOKEN}"' in response.text
-    assert "__DESTINY_TOKEN__" not in response.text
+    assert "__ATHENA_TOKEN__" not in response.text
 
 
 def test_index_token_is_escaped(app_factory):
-    with TestClient(app_factory(token='a"<b>'), headers={"X-Destiny-Token": 'a"<b>'}) as c:
+    with TestClient(app_factory(token='a"<b>'), headers={"X-Athena-Token": 'a"<b>'}) as c:
         assert 'content="a&quot;&lt;b&gt;"' in c.get("/").text
 
 
@@ -620,7 +620,7 @@ def test_real_index_html_gets_token(app_factory):
         pytest.skip("the real web UI isn't there yet")
     with TestClient(app_factory(web_dir=server.WEB_DIR)) as c:
         page = c.get("/").text
-        assert TOKEN in page and "__DESTINY_TOKEN__" not in page
+        assert TOKEN in page and "__ATHENA_TOKEN__" not in page
 
 
 def test_static_files(client):
@@ -1322,7 +1322,7 @@ def test_wipe_erases_the_reader_window_browser_data(client):
     for name in ("webview", "browser-profile"):
         storage = root / name / "Default" / "Local Storage" / "leveldb"
         storage.mkdir(parents=True)
-        (storage / "000003.log").write_bytes(b"destiny.lastBook")
+        (storage / "000003.log").write_bytes(b"athena.lastBook")
     assert client.post("/api/wipe", json={"confirm": "DELETE"}).json() == {"ok": True}
     assert not (root / "webview").exists() and not (root / "browser-profile").exists()
 
@@ -1464,15 +1464,15 @@ def test_start_server_in_thread(fakes):
         assert _get(actual, "/api/status")[0] == 401
         assert _get(actual, "/", {"Host": "evil.com"})[0] == 403
         if status == 200:
-            token = re.search(rb'name="destiny-token" content="([^"]+)"', body).group(1).decode()
-            ok, data = _get(actual, "/api/settings", {"X-Destiny-Token": token})
+            token = re.search(rb'name="athena-token" content="([^"]+)"', body).group(1).decode()
+            ok, data = _get(actual, "/api/settings", {"X-Athena-Token": token})
             assert ok == 200 and b"anthropic_api_key_set" in data
     finally:
         stop()
     stop()  # a second call does nothing
     with pytest.raises(OSError):  # stopped: nothing listens any more
         _get(actual, "/")
-    assert not [t for t in threading.enumerate() if t.name == "destiny-server"]
+    assert not [t for t in threading.enumerate() if t.name == "athena-server"]
     with pytest.raises(ValueError):
         server.start_server_in_thread(host="0.0.0.0", port=port)
 
@@ -1593,7 +1593,7 @@ def test_shutdown_cancels_running_jobs():
 
 
 def test_export_cancelled_exception_means_cancelled():
-    export = pytest.importorskip("destiny_bot.export")
+    export = pytest.importorskip("athena.export")
     jobs = JobManager()
     try:
         def work(job):
@@ -1612,7 +1612,7 @@ def test_export_cancelled_exception_means_cancelled():
 
 
 def test_friendly_error_for_ai_errors_when_loaded():
-    ai = pytest.importorskip("destiny_bot.ai")
+    ai = pytest.importorskip("athena.ai")
     assert friendly_error(ai.AIError("Claude is overloaded.")) == "Claude is overloaded."
 
 
@@ -1627,10 +1627,10 @@ def _module_ready(name: str, *attrs: str) -> bool:
     return all(hasattr(module, a) for a in attrs)
 
 
-@pytest.mark.skipif(not _module_ready("destiny_bot.speech", "plan_section", "section_plain_text"),
-                    reason="destiny_bot.speech isn't available yet")
-@pytest.mark.skipif(not _module_ready("destiny_bot.ingest.text", "load_text_file"),
-                    reason="destiny_bot.ingest.text isn't available yet")
+@pytest.mark.skipif(not _module_ready("athena.speech", "plan_section", "section_plain_text"),
+                    reason="athena.speech isn't available yet")
+@pytest.mark.skipif(not _module_ready("athena.ingest.text", "load_text_file"),
+                    reason="athena.ingest.text isn't available yet")
 def test_integration_import_and_read_section(web_dir):
     jobs = JobManager()
     try:
@@ -1652,10 +1652,10 @@ def test_integration_import_and_read_section(web_dir):
 
 
 def _system_voice_ready() -> bool:
-    if not _module_ready("destiny_bot.tts", "get_engine"):
+    if not _module_ready("athena.tts", "get_engine"):
         return False
     try:
-        from destiny_bot.tts import get_engine
+        from athena.tts import get_engine
 
         return bool(get_engine("system").is_available()[0])
     except Exception:
@@ -1667,11 +1667,11 @@ def test_integration_real_tts_with_cache(web_dir):
     jobs = JobManager()
     try:
         with TestClient(create_app(token=TOKEN, jobs=jobs, web_dir=web_dir), headers=AUTH) as c:
-            first = c.post("/api/tts", json={"text": "Hello from Destiny Bot.", "engine": "system"})
+            first = c.post("/api/tts", json={"text": "Hello from Athena.", "engine": "system"})
             assert first.status_code == 200, first.text
             assert first.headers["content-type"] in ("audio/wav", "audio/mpeg")
             assert len(first.content) > 1000
-            second = c.post("/api/tts", json={"text": "Hello from Destiny Bot.", "engine": "system"})
+            second = c.post("/api/tts", json={"text": "Hello from Athena.", "engine": "system"})
             assert second.content == first.content
             assert any(config.cache_dir().iterdir())
             status = c.get("/api/status").json()
@@ -1680,8 +1680,8 @@ def test_integration_real_tts_with_cache(web_dir):
         jobs.shutdown(wait=True)
 
 
-@pytest.mark.skipif(not _module_ready("destiny_bot.tts.catalog", "CATALOG", "installed_piper_voices"),
-                    reason="destiny_bot.tts.catalog isn't available yet")
+@pytest.mark.skipif(not _module_ready("athena.tts.catalog", "CATALOG", "installed_piper_voices"),
+                    reason="athena.tts.catalog isn't available yet")
 def test_integration_real_catalog(web_dir):
     jobs = JobManager()
     try:
@@ -1693,9 +1693,9 @@ def test_integration_real_catalog(web_dir):
         jobs.shutdown(wait=True)
 
 
-@pytest.mark.skipif(not (_module_ready("destiny_bot.ai", "Assistant", "AIUnavailable")
-                         and _module_ready("destiny_bot.speech", "section_plain_text")),
-                    reason="destiny_bot.ai or destiny_bot.speech isn't available yet")
+@pytest.mark.skipif(not (_module_ready("athena.ai", "Assistant", "AIUnavailable")
+                         and _module_ready("athena.speech", "section_plain_text")),
+                    reason="athena.ai or athena.speech isn't available yet")
 def test_integration_real_ai_without_key(web_dir, tmp_path, monkeypatch):
     set_settings(ai_enabled=True)
     monkeypatch.setattr(ingest, "load_document", fake_load_document)
@@ -1713,7 +1713,7 @@ def test_integration_real_ai_without_key(web_dir, tmp_path, monkeypatch):
         jobs.shutdown(wait=True)
 
 
-@pytest.mark.skipif(not _module_ready("destiny_bot.ingest.pdf", "load_pdf"), reason="the PDF loader isn't available yet")
+@pytest.mark.skipif(not _module_ready("athena.ingest.pdf", "load_pdf"), reason="the PDF loader isn't available yet")
 def test_integration_real_pdf_import_and_page_image(web_dir, tmp_path):
     pdf = make_pdf(tmp_path / "lecture.pdf", pages=2)
     jobs = JobManager()
@@ -1731,9 +1731,9 @@ def test_integration_real_pdf_import_and_page_image(web_dir, tmp_path):
         jobs.shutdown(wait=True)
 
 
-@pytest.mark.skipif(not _module_ready("destiny_bot.tts.cache", "AudioCache"), reason="the audio cache isn't available yet")
+@pytest.mark.skipif(not _module_ready("athena.tts.cache", "AudioCache"), reason="the audio cache isn't available yet")
 def test_integration_real_audio_cache(app_factory, fakes, monkeypatch):
-    from destiny_bot.tts.cache import AudioCache
+    from athena.tts.cache import AudioCache
 
     monkeypatch.setattr(server, "_audio_cache_class", lambda: AudioCache)
     with TestClient(app_factory(), headers=AUTH) as c:
@@ -1746,7 +1746,7 @@ def test_integration_real_audio_cache(app_factory, fakes, monkeypatch):
 
 
 @pytest.mark.skipif(
-    not (_module_ready("destiny_bot.export", "export_audiobook") and _module_ready("destiny_bot.speech", "plan_section")
+    not (_module_ready("athena.export", "export_audiobook") and _module_ready("athena.speech", "plan_section")
          and _system_voice_ready()),
     reason="the real exporter, speech planner or a system voice isn't available",
 )
@@ -1834,7 +1834,7 @@ def test_tts_with_nothing_speakable_after_normalizing(client, fakes, monkeypatch
 
 
 def test_tts_normalize_with_the_real_speech_layer(client, fakes, monkeypatch):
-    from destiny_bot import speech
+    from athena import speech
 
     monkeypatch.setattr(server, "_speech", lambda: speech)
     r = client.post("/api/tts", json={"text": "In 1990 it cost $3.50.", "engine": "piper", "normalize": True})

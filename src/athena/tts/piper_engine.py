@@ -157,7 +157,7 @@ class PiperEngine(TTSEngine):
             except ModuleNotFoundError:
                 self._import_error = (
                     "Natural voices need the piper-tts package, which isn't installed. "
-                    "Reinstall Destiny Bot with natural voices included."
+                    "Reinstall Athena with natural voices included."
                 )
             except Exception as exc:  # e.g. onnxruntime failing to load its DLLs (an ImportError too)
                 self._import_error = engine_start_problem("The natural voice engine", exc)

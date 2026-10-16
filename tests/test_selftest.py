@@ -1,4 +1,4 @@
-"""Tests for the self-test (destiny_bot.selftest)."""
+"""Tests for the self-test (athena.selftest)."""
 
 from __future__ import annotations
 
@@ -12,21 +12,21 @@ import wave
 
 import pytest
 
-import destiny_bot
-from destiny_bot import config, desktop, selftest
-from destiny_bot.tts.base import AudioClip, EngineUnavailable, TTSEngine, Voice
+import athena
+from athena import config, desktop, selftest
+from athena.tts.base import AudioClip, EngineUnavailable, TTSEngine, Voice
 
 # tests/test_cli.py swaps these modules out through sys.modules. A submodule imported here
-# would also become an attribute of the destiny_bot package, which `from . import desktop`
+# would also become an attribute of the athena package, which `from . import desktop`
 # prefers over sys.modules, so drop the attributes again.
 for _name in ("desktop", "selftest"):
-    vars(destiny_bot).pop(_name, None)
+    vars(athena).pop(_name, None)
 
 
 @pytest.fixture(autouse=True)
 def no_bundled_voices(monkeypatch):
     """Self-tests here run as from a source checkout without bundled voices."""
-    monkeypatch.setenv("DESTINY_EXTRA_VOICE_DIRS", "")
+    monkeypatch.setenv("ATHENA_EXTRA_VOICE_DIRS", "")
     monkeypatch.setattr(desktop, "bundled_voices_dir", lambda: None)
 
 
@@ -72,7 +72,7 @@ class FakeEngine(TTSEngine):
 
 
 def run_checks(monkeypatch, engines, quick=False):
-    from destiny_bot import tts
+    from athena import tts
 
     monkeypatch.setattr(tts, "all_engines", lambda: engines)
     report = selftest.Report(io.StringIO())
@@ -205,15 +205,15 @@ def _skip_slow_steps(monkeypatch):
 
 def test_missing_core_module_fails_the_self_test(monkeypatch):
     _skip_slow_steps(monkeypatch)
-    monkeypatch.setattr(selftest, "CORE_MODULES", ("destiny_bot.models", "destiny_bot.not_a_module"))
+    monkeypatch.setattr(selftest, "CORE_MODULES", ("athena.models", "athena.not_a_module"))
     out = io.StringIO()
     assert selftest.run_self_test(quick=True, out=out) == 1
     json_path, text_path = selftest.report_paths()
     report = json.loads(json_path.read_text(encoding="utf-8"))
     assert report["ok"] is False and report["summary"]["fail"] == 1
     failed = [c for c in report["checks"] if c["status"] == "fail"]
-    assert failed[0]["name"] == "destiny_bot.not_a_module"
-    assert "[FAIL] destiny_bot.not_a_module" in out.getvalue()
+    assert failed[0]["name"] == "athena.not_a_module"
+    assert "[FAIL] athena.not_a_module" in out.getvalue()
     assert "problem(s) found" in text_path.read_text(encoding="utf-8")
 
 
@@ -229,20 +229,20 @@ def test_a_crashing_check_is_a_failure_not_a_crash(monkeypatch):
 
 def test_missing_optional_module_is_a_warning(monkeypatch):
     _skip_slow_steps(monkeypatch)
-    monkeypatch.setattr(selftest, "CORE_MODULES", ("destiny_bot.models",))
+    monkeypatch.setattr(selftest, "CORE_MODULES", ("athena.models",))
     monkeypatch.setattr(
-        selftest, "OPTIONAL_MODULES", {"not_installed_extra": "something nice", "destiny_bot.gone": "x"}
+        selftest, "OPTIONAL_MODULES", {"not_installed_extra": "something nice", "athena.gone": "x"}
     )
     out = io.StringIO()
     assert selftest.run_self_test(out=out) == 0
     text = out.getvalue()
     assert "[WARN] not_installed_extra" in text and "needed for something nice" in text
-    assert "[SKIP] destiny_bot.gone" in text
+    assert "[SKIP] athena.gone" in text
 
 
 def test_output_survives_a_missing_console(monkeypatch):
     _skip_slow_steps(monkeypatch)
-    monkeypatch.setattr(selftest, "CORE_MODULES", ("destiny_bot.models",))
+    monkeypatch.setattr(selftest, "CORE_MODULES", ("athena.models",))
     monkeypatch.setattr(sys, "stdout", None)
     assert selftest.run_self_test(quick=True) == 0
     assert selftest.report_paths()[0].is_file()

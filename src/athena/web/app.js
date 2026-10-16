@@ -102,7 +102,7 @@ function textParagraphs(text, cls = '') {
 const local = {
   get(key, fallback) {
     try {
-      const raw = window.localStorage.getItem(`destiny.${key}`);
+      const raw = window.localStorage.getItem(`athena.${key}`);
       return raw === null ? fallback : JSON.parse(raw);
     } catch {
       return fallback;
@@ -110,7 +110,7 @@ const local = {
   },
   set(key, value) {
     try {
-      window.localStorage.setItem(`destiny.${key}`, JSON.stringify(value));
+      window.localStorage.setItem(`athena.${key}`, JSON.stringify(value));
     } catch {
       /* private browsing or storage full: preferences just won't stick */
     }
@@ -118,7 +118,7 @@ const local = {
   clearAll() {
     try {
       for (const key of Object.keys(window.localStorage)) {
-        if (key.startsWith('destiny.')) window.localStorage.removeItem(key);
+        if (key.startsWith('athena.')) window.localStorage.removeItem(key);
       }
     } catch {
       /* ignore */
@@ -250,7 +250,7 @@ function hydrateIcons(root = document) {
 // 2. Server API, toasts and announcements
 // =====================================================================
 
-const TOKEN = $('meta[name="destiny-token"]')?.getAttribute('content') || '';
+const TOKEN = $('meta[name="athena-token"]')?.getAttribute('content') || '';
 
 class ApiError extends Error {
   constructor(status, detail) {
@@ -280,7 +280,7 @@ function detailFrom(status, data) {
 }
 
 async function api(path, { method = 'GET', body, signal, keepalive = false, raw = false } = {}) {
-  const headers = { 'X-Destiny-Token': TOKEN };
+  const headers = { 'X-Athena-Token': TOKEN };
   const init = { method, headers, signal, keepalive, cache: 'no-store', credentials: 'same-origin' };
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json';
@@ -2917,7 +2917,7 @@ function uploadWithProgress(file, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/library/import');
-    xhr.setRequestHeader('X-Destiny-Token', TOKEN);
+    xhr.setRequestHeader('X-Athena-Token', TOKEN);
     xhr.responseType = 'json';
     xhr.upload.addEventListener('progress', (event) => {
       if (event.lengthComputable) onProgress(event.loaded / event.total);

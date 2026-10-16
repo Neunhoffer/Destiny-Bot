@@ -1,6 +1,6 @@
 """Draw Athena's app icon with Pillow and write it for every platform.
 
-The artwork matches ``src/destiny_bot/web/icon.svg`` (a blue tile with a gold laurel
+The artwork matches ``src/athena/web/icon.svg`` (a blue tile with a gold laurel
 wreath, an open book and sound waves rising from it). Sizes of 32 px and below use
 a simplified drawing without the laurel and with bolder strokes, so the icon stays
 legible in the taskbar and title bar.

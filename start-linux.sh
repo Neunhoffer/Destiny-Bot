@@ -18,7 +18,7 @@ find_python() {
   return 1
 }
 
-if [ ! -f "$VENV/destiny-installed.txt" ]; then
+if [ ! -f "$VENV/athena-installed.txt" ]; then
   echo
   echo "  Setting up Athena for the first time. This takes a few minutes..."
   echo
@@ -47,19 +47,19 @@ if [ ! -f "$VENV/destiny-installed.txt" ]; then
     echo "  Note: the Kokoro voices aren't available on this computer."
   # The app window is optional too: without it Athena opens in a browser window.
   "$VENV/bin/python" -m pip install "pywebview>=5.0" || true
-  echo installed > "$VENV/destiny-installed.txt"
+  echo installed > "$VENV/athena-installed.txt"
 fi
 
-if [ ! -f "$VENV/destiny-voices.txt" ]; then
+if [ ! -f "$VENV/athena-voices.txt" ]; then
   echo "  Downloading natural-sounding offline voices, about 180 MB, one time only..."
-  "$VENV/bin/python" -m destiny_bot voices download en_US-lessac-medium &&
-    echo done > "$VENV/destiny-voices.txt"
-  "$VENV/bin/python" -m destiny_bot voices download kokoro-v1.0
+  "$VENV/bin/python" -m athena voices download en_US-lessac-medium &&
+    echo done > "$VENV/athena-voices.txt"
+  "$VENV/bin/python" -m athena voices download kokoro-v1.0
 fi
 
-if [ ! -f "$VENV/destiny-shortcut.txt" ]; then
+if [ ! -f "$VENV/athena-shortcut.txt" ]; then
   echo "  Adding an Athena shortcut to your applications menu and desktop..."
-  "$VENV/bin/python" -m destiny_bot shortcut && echo created > "$VENV/destiny-shortcut.txt"
+  "$VENV/bin/python" -m athena shortcut && echo created > "$VENV/athena-shortcut.txt"
 fi
 
-exec "$VENV/bin/python" -m destiny_bot app
+exec "$VENV/bin/python" -m athena app

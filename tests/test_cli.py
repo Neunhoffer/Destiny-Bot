@@ -1,4 +1,4 @@
-"""Tests for the ``destiny`` command (destiny_bot.cli)."""
+"""Tests for the ``athena`` command (athena.cli)."""
 
 from __future__ import annotations
 
@@ -14,12 +14,12 @@ from types import SimpleNamespace
 import pytest
 from pydantic import BaseModel
 
-from destiny_bot import __version__, cli, config, ingest
-from destiny_bot.ingest import IngestError
-from destiny_bot.ingest.common import doc_id_for_file
-from destiny_bot.library import Library
-from destiny_bot.models import Block, BlockKind, Document, Section, Utterance
-from destiny_bot.tts.base import AudioClip, TTSEngine, Voice
+from athena import __version__, cli, config, ingest
+from athena.ingest import IngestError
+from athena.ingest.common import doc_id_for_file
+from athena.library import Library
+from athena.models import Block, BlockKind, Document, Section, Utterance
+from athena.tts.base import AudioClip, TTSEngine, Voice
 
 
 def tiny_wav() -> bytes:
@@ -146,7 +146,7 @@ def fake_load_document(path, *, source_name=None, ocr=True, progress=None):
     path = Path(path)
     name = source_name or path.name
     if ingest.source_type_for(name) is None:
-        raise IngestError(f"Destiny Bot can't open '{Path(name).suffix}' files yet.")
+        raise IngestError(f"Athena can't open '{Path(name).suffix}' files yet.")
     if path.read_bytes().startswith(b"BROKEN"):
         raise IngestError("This file is damaged.")
     if progress:
@@ -286,7 +286,7 @@ def test_text_unknown_section(tmp_path, capsys, fakes):
     doc = add_book(tmp_path, "biology.md")
     assert cli.main(["text", doc.id, "--section", "s9"]) == 1
     err = capsys.readouterr().err
-    assert "has no section 's9'" in err and "destiny toc" in err and "Traceback" not in err
+    assert "has no section 's9'" in err and "athena toc" in err and "Traceback" not in err
 
 
 def test_text_of_a_file_imports_it(tmp_path, capsys, fakes):
@@ -334,7 +334,7 @@ def test_ambiguous_book_exit_code(tmp_path, capsys, fakes):
 
 
 def test_ambiguous_id_prefix(tmp_path):
-    from destiny_bot.library import BookSummary
+    from athena.library import BookSummary
 
     def summary(book_id: str, title: str) -> BookSummary:
         return BookSummary(id=book_id, title=title, source_name="x.md", source_type="md",
@@ -423,7 +423,7 @@ def test_read_engine_errors(tmp_path, capsys, fakes):
     fakes.tts.engines["system"].available = False
     assert cli.main(["read", doc.id]) == 1
     err = capsys.readouterr().err
-    assert "destiny voices download en_US-lessac-medium" in err
+    assert "athena voices download en_US-lessac-medium" in err
 
     assert cli.main(["read", doc.id, "--engine", "edge"]) == 1
     assert "Online voices are turned off" in capsys.readouterr().err
@@ -616,7 +616,7 @@ def test_wipe_interactive(tmp_path, capsys, fakes, monkeypatch):
 
 
 def test_serve_defaults(monkeypatch):
-    from destiny_bot import server
+    from athena import server
 
     calls = []
     monkeypatch.setattr(server, "run", lambda **kwargs: calls.append(kwargs))
@@ -642,8 +642,8 @@ def _fake_module(name: str, **attrs):
 @pytest.mark.parametrize("real_modules_loaded", [False, True])
 def test_app_shortcut_and_self_test(monkeypatch, capsys, tmp_path, real_modules_loaded):
     if real_modules_loaded:  # as in a full test run: the fakes must still win over the real modules
-        import destiny_bot.desktop  # noqa: F401
-        import destiny_bot.selftest  # noqa: F401
+        import athena.desktop  # noqa: F401
+        import athena.selftest  # noqa: F401
     calls = []
 
     def run_app(*, port):
@@ -652,22 +652,22 @@ def test_app_shortcut_and_self_test(monkeypatch, capsys, tmp_path, real_modules_
 
     def create_shortcuts(*, desktop, start_menu):
         calls.append(("shortcut", desktop, start_menu))
-        return [tmp_path / "Destiny Bot.lnk"] + ([tmp_path / "Start Menu" / "Destiny Bot.lnk"] if start_menu else [])
+        return [tmp_path / "Athena.lnk"] + ([tmp_path / "Start Menu" / "Athena.lnk"] if start_menu else [])
 
     def run_self_test(*, quick):
         calls.append(("self-test", quick))
         return 3
 
-    monkeypatch.setitem(sys.modules, "destiny_bot.desktop",
-                        _fake_module("destiny_bot.desktop", run_app=run_app, create_shortcuts=create_shortcuts))
-    monkeypatch.setitem(sys.modules, "destiny_bot.selftest",
-                        _fake_module("destiny_bot.selftest", run_self_test=run_self_test))
+    monkeypatch.setitem(sys.modules, "athena.desktop",
+                        _fake_module("athena.desktop", run_app=run_app, create_shortcuts=create_shortcuts))
+    monkeypatch.setitem(sys.modules, "athena.selftest",
+                        _fake_module("athena.selftest", run_self_test=run_self_test))
 
     assert cli.main(["app"]) == 0
     assert cli.main(["app", "--port", "9100"]) == 0
     assert cli.main(["shortcut"]) == 0
     out = capsys.readouterr().out
-    assert f"Created {tmp_path / 'Destiny Bot.lnk'}" in out and "Start Menu" in out
+    assert f"Created {tmp_path / 'Athena.lnk'}" in out and "Start Menu" in out
     assert cli.main(["shortcut", "--no-start-menu"]) == 0
     assert "Start Menu" not in capsys.readouterr().out
     assert cli.main(["self-test"]) == 3
@@ -677,8 +677,8 @@ def test_app_shortcut_and_self_test(monkeypatch, capsys, tmp_path, real_modules_
 
 
 def test_app_commands_without_their_modules(monkeypatch, capsys):
-    monkeypatch.setitem(sys.modules, "destiny_bot.desktop", None)
-    monkeypatch.setitem(sys.modules, "destiny_bot.selftest", None)
+    monkeypatch.setitem(sys.modules, "athena.desktop", None)
+    monkeypatch.setitem(sys.modules, "athena.selftest", None)
     for argv in (["app"], ["shortcut"], ["self-test", "--quick"]):
         assert cli.main(argv) == 1, argv
         err = capsys.readouterr().err
@@ -686,7 +686,7 @@ def test_app_commands_without_their_modules(monkeypatch, capsys):
 
 
 def test_server_refuses_remote_without_permission():
-    from destiny_bot import server
+    from athena import server
 
     with pytest.raises(ValueError, match="Refusing"):
         server.run(host="0.0.0.0", open_browser=False)
@@ -709,7 +709,7 @@ def test_usage_errors(capsys):
 
 
 def test_python_dash_m():
-    result = subprocess.run([sys.executable, "-m", "destiny_bot", "--version"], capture_output=True, text=True,
+    result = subprocess.run([sys.executable, "-m", "athena", "--version"], capture_output=True, text=True,
                             timeout=60)
     assert result.returncode == 0
     assert result.stdout.strip() == f"Athena {__version__}"
@@ -726,7 +726,7 @@ def _ready(name: str, *attrs: str) -> bool:
     return all(hasattr(module, a) for a in attrs)
 
 
-@pytest.mark.skipif(not (_ready("destiny_bot.speech", "plan_section") and _ready("destiny_bot.ingest.text", "load_text_file")),
+@pytest.mark.skipif(not (_ready("athena.speech", "plan_section") and _ready("athena.ingest.text", "load_text_file")),
                     reason="the real speech planner or text loader isn't available yet")
 def test_integration_text_speech(tmp_path, capsys):
     path = write(tmp_path, "notes.md", "# Cells\n\nCells divide, e.g. by mitosis. See Fig. 2.\n")
@@ -736,7 +736,7 @@ def test_integration_text_speech(tmp_path, capsys):
     assert "Cells" in spoken and "for example" in spoken and "e.g." not in spoken
 
 
-@pytest.mark.skipif(not _ready("destiny_bot.tts", "all_engines"), reason="destiny_bot.tts isn't available yet")
+@pytest.mark.skipif(not _ready("athena.tts", "all_engines"), reason="athena.tts isn't available yet")
 def test_integration_doctor(capsys):
     assert cli.main(["doctor"]) == 0
     out = capsys.readouterr().out
@@ -744,20 +744,20 @@ def test_integration_doctor(capsys):
 
 
 def _system_voice_ready() -> bool:
-    if not _ready("destiny_bot.tts", "get_engine"):
+    if not _ready("athena.tts", "get_engine"):
         return False
     try:
-        from destiny_bot.tts import get_engine
+        from athena.tts import get_engine
 
         return bool(get_engine("system").is_available()[0])
     except Exception:
         return False
 
 
-@pytest.mark.skipif(not (_ready("destiny_bot.speech", "plan_section") and _system_voice_ready()),
+@pytest.mark.skipif(not (_ready("athena.speech", "plan_section") and _system_voice_ready()),
                     reason="the real speech planner or a system voice isn't available")
 def test_integration_read_with_real_voice(tmp_path, capsys, monkeypatch):
-    from destiny_bot import audio
+    from athena import audio
 
     played: list[AudioClip] = []
     monkeypatch.setattr(audio, "play_clip", played.append)

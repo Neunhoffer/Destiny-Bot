@@ -1,4 +1,4 @@
-"""Tests for the Claude study helper (destiny_bot.ai) using a fake Anthropic client."""
+"""Tests for the Claude study helper (athena.ai) using a fake Anthropic client."""
 
 from __future__ import annotations
 
@@ -17,16 +17,16 @@ import pytest
 anthropic = pytest.importorskip("anthropic")
 httpx2 = pytest.importorskip("httpx2")
 
-from destiny_bot.ai import AIError, AIUnavailable, Assistant, QuizQuestion
-from destiny_bot.ai import claude as claude_mod
-from destiny_bot.ai.prompts import (
+from athena.ai import AIError, AIUnavailable, Assistant, QuizQuestion
+from athena.ai import claude as claude_mod
+from athena.ai.prompts import (
     QUIZ_SCHEMA,
     SYSTEM_INSTRUCTIONS,
     clean_inline,
     to_speakable,
 )
-from destiny_bot.config import DEFAULT_AI_MODEL, Settings
-from destiny_bot.models import Block, BlockKind
+from athena.config import DEFAULT_AI_MODEL, Settings
+from athena.models import Block, BlockKind
 
 KEY = "sk-ant-api03-TESTSECRETabcdef1234567890"
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
@@ -679,9 +679,9 @@ def test_unavailable_when_sdk_missing(monkeypatch):
     assistant = Assistant(make_settings())
     with pytest.raises(AIUnavailable) as info:
         assistant.ask("q", context=SECTION, book_title="B")
-    assert 'pip install "destiny-bot[ai]"' in str(info.value)
+    assert 'pip install "athena-reader[ai]"' in str(info.value)
     usable, reason = assistant.availability()
-    assert not usable and "destiny-bot[ai]" in reason
+    assert not usable and "athena-reader[ai]" in reason
 
 
 def test_available_when_configured():
@@ -828,8 +828,8 @@ def test_non_sdk_exceptions_propagate():
 
 
 @pytest.mark.skipif(
-    os.environ.get("DESTINY_TEST_ANTHROPIC_LIVE") != "1",
-    reason="set DESTINY_TEST_ANTHROPIC_LIVE=1 to call api.anthropic.com with a dummy key",
+    os.environ.get("ATHENA_TEST_ANTHROPIC_LIVE") != "1",
+    reason="set ATHENA_TEST_ANTHROPIC_LIVE=1 to call api.anthropic.com with a dummy key",
 )
 def test_live_dummy_key_is_rejected_with_friendly_message():
     assistant = Assistant(make_settings(anthropic_api_key="sk-ant-api03-dummy-not-a-real-key"))

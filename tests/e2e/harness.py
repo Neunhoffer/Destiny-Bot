@@ -25,8 +25,8 @@ AUTOPLAY = "--autoplay-policy=no-user-gesture-required"
 
 
 def chromium_executable() -> str | None:
-    """A Chromium executable: $DESTINY_E2E_CHROMIUM, Playwright's own, or a preinstalled build."""
-    wanted = os.environ.get("DESTINY_E2E_CHROMIUM")
+    """A Chromium executable: $ATHENA_E2E_CHROMIUM, Playwright's own, or a preinstalled build."""
+    wanted = os.environ.get("ATHENA_E2E_CHROMIUM")
     if wanted:
         return wanted if Path(wanted).is_file() else None
     path = ""
@@ -44,16 +44,16 @@ def chromium_executable() -> str | None:
 
 
 def _kokoro_files() -> tuple[Path, Path] | None:
-    value = os.environ.get("DESTINY_TEST_KOKORO_DIR")
+    value = os.environ.get("ATHENA_TEST_KOKORO_DIR")
     if not value:
         return None
-    from destiny_bot.tts import catalog
+    from athena.tts import catalog
 
     return catalog.find_kokoro_model(Path(value))
 
 
 def _piper_voice() -> Path | None:
-    value = os.environ.get("DESTINY_TEST_PIPER_VOICE")
+    value = os.environ.get("ATHENA_TEST_PIPER_VOICE")
     if not value:
         return None
     model = Path(value)
@@ -77,31 +77,31 @@ def _free_port() -> int:
 
 
 class Server:
-    """A running ``destiny serve`` process and a tiny JSON client for it."""
+    """A running ``athena serve`` process and a tiny JSON client for it."""
 
     def __init__(self, home: Path, *, kokoro: bool = True) -> None:
         self.home = home
         piper = _piper_voice()
         kokoro_files = _kokoro_files()
         if piper is None:
-            pytest.skip("set DESTINY_TEST_PIPER_VOICE to a Piper .onnx voice to run the end-to-end tests")
+            pytest.skip("set ATHENA_TEST_PIPER_VOICE to a Piper .onnx voice to run the end-to-end tests")
         if kokoro and kokoro_files is None:
-            pytest.skip("set DESTINY_TEST_KOKORO_DIR to a Kokoro model folder to run the end-to-end tests")
+            pytest.skip("set ATHENA_TEST_KOKORO_DIR to a Kokoro model folder to run the end-to-end tests")
         for src in (piper, piper.with_name(piper.name + ".json")):
             _link_or_copy(src, home / "voices" / "piper" / src.name)
         if kokoro and kokoro_files:
             for src in kokoro_files:
                 _link_or_copy(src, home / "voices" / "kokoro" / src.name)
-        env = {k: v for k, v in os.environ.items() if k not in ("DESTINY_EXTRA_VOICE_DIRS", "ANTHROPIC_API_KEY")}
-        env.update(DESTINY_HOME=str(home), PYTHONUNBUFFERED="1")
+        env = {k: v for k, v in os.environ.items() if k not in ("ATHENA_EXTRA_VOICE_DIRS", "ANTHROPIC_API_KEY")}
+        env.update(ATHENA_HOME=str(home), PYTHONUNBUFFERED="1")
         self.log = open(home / "server.log", "w+", encoding="utf-8")  # noqa: SIM115 - closed in stop()
         self.proc = subprocess.Popen(
-            [sys.executable, "-m", "destiny_bot", "serve", "--no-browser", "--port", str(_free_port())],
+            [sys.executable, "-m", "athena", "serve", "--no-browser", "--port", str(_free_port())],
             stdout=self.log, stderr=subprocess.STDOUT, env=env,
         )
         self.base = self._wait_for_url()
         html = urllib.request.urlopen(self.base + "/", timeout=10).read().decode()
-        self.token = re.search(r'name="destiny-token" content="([^"]+)"', html).group(1)
+        self.token = re.search(r'name="athena-token" content="([^"]+)"', html).group(1)
 
     def _wait_for_url(self) -> str:
         deadline = time.time() + 60
@@ -123,7 +123,7 @@ class Server:
     def api(self, method: str, path: str, body: Any = None) -> Any:
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(self.base + path, data=data, method=method, headers={
-            "Content-Type": "application/json", "X-Destiny-Token": self.token,
+            "Content-Type": "application/json", "X-Athena-Token": self.token,
         })
         with urllib.request.urlopen(req, timeout=120) as resp:
             return json.loads(resp.read() or b"null")
@@ -137,7 +137,7 @@ class Server:
         body = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{path.name}"\r\n'
                 "Content-Type: application/octet-stream\r\n\r\n").encode() + path.read_bytes() + f"\r\n--{boundary}--\r\n".encode()
         req = urllib.request.Request(self.base + "/api/library/import", data=body, method="POST", headers={
-            "Content-Type": f"multipart/form-data; boundary={boundary}", "X-Destiny-Token": self.token,
+            "Content-Type": f"multipart/form-data; boundary={boundary}", "X-Athena-Token": self.token,
         })
         job_id = json.loads(urllib.request.urlopen(req, timeout=60).read())["job_id"]
         for _ in range(600):
@@ -167,7 +167,7 @@ class App:
         context.setdefault("viewport", {"width": 1366, "height": 768})
         self.ctx = browser.new_context(accept_downloads=True, **context)
         if book_id:
-            self.ctx.add_init_script(f"localStorage.setItem('destiny.lastBook', {json.dumps(json.dumps(book_id))})")
+            self.ctx.add_init_script(f"localStorage.setItem('athena.lastBook', {json.dumps(json.dumps(book_id))})")
         # Record every /api/tts request so tests can check their order and overlap.
         self.ctx.add_init_script("""(() => {
           const log = window.__ttsLog = [];
@@ -184,7 +184,7 @@ class App:
           };
         })();""")
         self.page = self.ctx.new_page()
-        override = os.environ.get("DESTINY_E2E_APP_JS")  # compare another build of app.js (A/B checks)
+        override = os.environ.get("ATHENA_E2E_APP_JS")  # compare another build of app.js (A/B checks)
         if override:
             body = Path(override).read_text(encoding="utf-8")
             self.page.route("**/static/app.js", lambda route: route.fulfill(

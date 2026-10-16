@@ -5,7 +5,7 @@ Steps:
        piper/ and the Kokoro int8 voice pack in kokoro/ (leave Kokoro out with
        --no-kokoro or ATHENA_BUNDLE_KOKORO=0)
     2. draw the icons (packaging/make_icons.py)
-    3. run PyInstaller (packaging/destiny.spec) -> dist/Athena (dist/Athena.app on macOS)
+    3. run PyInstaller (packaging/athena.spec) -> dist/Athena (dist/Athena.app on macOS)
     4. smoke test: run the built app with --self-test-quick; it must pass
     5. package it: Windows -> dist/Athena-Setup-<version>.exe (Inno Setup),
        macOS -> dist/Athena-<version>.dmg (hdiutil), Linux -> dist/Athena-<version>-linux-<arch>.tar.gz
@@ -43,10 +43,10 @@ sys.path.insert(0, str(HERE))
 
 
 def version() -> str:
-    text = (ROOT / "src" / "destiny_bot" / "__init__.py").read_text(encoding="utf-8")
+    text = (ROOT / "src" / "athena" / "__init__.py").read_text(encoding="utf-8")
     match = re.search(r'__version__\s*=\s*"([^"]+)"', text)
     if not match:
-        raise SystemExit("Couldn't find __version__ in src/destiny_bot/__init__.py")
+        raise SystemExit("Couldn't find __version__ in src/athena/__init__.py")
     return match.group(1)
 
 
@@ -68,7 +68,7 @@ def _progress(fraction: float, message: str) -> None:
 
 
 def fetch_voices(*, kokoro: bool, source: Path | None) -> None:
-    from destiny_bot.tts import catalog
+    from athena.tts import catalog
 
     piper_dir = VOICES / "piper"
     piper_dir.mkdir(parents=True, exist_ok=True)
@@ -131,7 +131,7 @@ def run_pyinstaller(*, kokoro: bool) -> Path:
         str(DIST),
         "--workpath",
         str(BUILD / "pyinstaller"),
-        str(HERE / "destiny.spec"),
+        str(HERE / "athena.spec"),
     ]
     subprocess.run(cmd, cwd=ROOT, env=env, check=True)
     if sys.platform == "darwin":
@@ -153,8 +153,8 @@ def smoke_test(app: Path) -> Path:
     """Run the built app's quick self-test in a throwaway data folder; exits on failure."""
     exe = app_executable(app)
     home = Path(tempfile.mkdtemp(prefix="athena-smoke-"))
-    env = {**os.environ, "DESTINY_HOME": str(home)}
-    env.pop("DESTINY_EXTRA_VOICE_DIRS", None)  # only the voices inside the app may count
+    env = {**os.environ, "ATHENA_HOME": str(home)}
+    env.pop("ATHENA_EXTRA_VOICE_DIRS", None)  # only the voices inside the app may count
     started = time.monotonic()
     proc = subprocess.run([str(exe), "--self-test-quick"], env=env, timeout=900, check=False)
     elapsed = time.monotonic() - started
@@ -218,7 +218,7 @@ def windows_installer(app: Path, ver: str) -> Path:
         small = ",".join(str(p) for p in sorted(wizard.glob("small-*.bmp")))
         large = ",".join(str(p) for p in sorted(wizard.glob("large-*.bmp")))
         cmd += [f"/DWizardSmall={small}", f"/DWizardLarge={large}"]
-    cmd.append(str(HERE / "windows" / "DestinyBot.iss"))
+    cmd.append(str(HERE / "windows" / "Athena.iss"))
     subprocess.run(cmd, check=True)
     return DIST / f"{APP_NAME}-Setup-{ver}.exe"
 

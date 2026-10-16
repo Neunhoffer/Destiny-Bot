@@ -95,10 +95,10 @@ jobs:
         shell: pwsh
         run: |
           $exe = Join-Path $env:LOCALAPPDATA 'Programs\Athena\Athena.exe'
-          $env:DESTINY_HOME = Join-Path $env:RUNNER_TEMP 'installed-self-test'
+          $env:ATHENA_HOME = Join-Path $env:RUNNER_TEMP 'installed-self-test'
           $t = Start-Process $exe -ArgumentList '--self-test' -Wait -PassThru
-          Get-Content (Join-Path $env:DESTINY_HOME 'logs\self-test.txt')
-          Copy-Item (Join-Path $env:DESTINY_HOME 'logs\self-test.json') dist\self-test-windows-installed.json
+          Get-Content (Join-Path $env:ATHENA_HOME 'logs\self-test.txt')
+          Copy-Item (Join-Path $env:ATHENA_HOME 'logs\self-test.json') dist\self-test-windows-installed.json
           python -c "import json, sys; r = json.load(open(sys.argv[1], encoding='utf-8')); print(json.dumps({k: r.get(k) for k in ('synthesis', 'window', 'environment')}, indent=1))" dist\self-test-windows-installed.json
           if ($t.ExitCode -ne 0) { throw "The installed app's self-test failed ($($t.ExitCode))" }
 
@@ -127,10 +127,10 @@ jobs:
           $dir = Join-Path $env:RUNNER_TEMP 'Zoë Tést\Athena'
           $p = Start-Process $setup.FullName -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=$dir" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "Installing into '$dir' failed ($($p.ExitCode))" }
-          $env:DESTINY_HOME = Join-Path $env:RUNNER_TEMP 'Zoë data'
+          $env:ATHENA_HOME = Join-Path $env:RUNNER_TEMP 'Zoë data'
           $t = Start-Process (Join-Path $dir 'Athena.exe') -ArgumentList '--self-test-quick' -Wait -PassThru
-          Get-Content (Join-Path $env:DESTINY_HOME 'logs\self-test.txt') -Encoding utf8
-          Copy-Item (Join-Path $env:DESTINY_HOME 'logs\self-test.json') dist\self-test-windows-accented-path.json
+          Get-Content (Join-Path $env:ATHENA_HOME 'logs\self-test.txt') -Encoding utf8
+          Copy-Item (Join-Path $env:ATHENA_HOME 'logs\self-test.json') dist\self-test-windows-accented-path.json
           $report = Get-Content dist\self-test-windows-accented-path.json -Raw -Encoding utf8 | ConvertFrom-Json
           foreach ($engine in 'kokoro', 'piper', 'system') {
             $result = $report.synthesis | Where-Object { $_.engine -eq $engine } | Select-Object -First 1

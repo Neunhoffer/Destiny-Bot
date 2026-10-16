@@ -176,7 +176,7 @@ class _MacBackend(_Backend):
         say = self._say()
         if not say:
             raise EngineUnavailable(self.is_available()[1])
-        with tempfile.TemporaryDirectory(prefix="destiny-say-", ignore_cleanup_errors=True) as tmp:
+        with tempfile.TemporaryDirectory(prefix="athena-say-", ignore_cleanup_errors=True) as tmp:
             text_path = Path(tmp) / "text.txt"
             text_path.write_text(text, encoding="utf-8")
             out = Path(tmp) / "speech.wav"
@@ -283,13 +283,13 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Speech
 $s = New-Object System.Speech.Synthesis.SpeechSynthesizer
 try {
-  if ($env:DESTINY_TTS_VOICE) { $s.SelectVoice($env:DESTINY_TTS_VOICE) }
-  $s.Rate = [int]$env:DESTINY_TTS_RATE
+  if ($env:ATHENA_TTS_VOICE) { $s.SelectVoice($env:ATHENA_TTS_VOICE) }
+  $s.Rate = [int]$env:ATHENA_TTS_RATE
   $bits = [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen
   $mono = [System.Speech.AudioFormat.AudioChannel]::Mono
   $fmt = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(22050, $bits, $mono)
-  $s.SetOutputToWaveFile($env:DESTINY_TTS_OUT, $fmt)
-  $text = [System.IO.File]::ReadAllText($env:DESTINY_TTS_TEXT, [System.Text.Encoding]::UTF8)
+  $s.SetOutputToWaveFile($env:ATHENA_TTS_OUT, $fmt)
+  $text = [System.IO.File]::ReadAllText($env:ATHENA_TTS_TEXT, [System.Text.Encoding]::UTF8)
   $s.Speak($text)
 } finally { $s.Dispose() }
 """
@@ -345,7 +345,7 @@ class _SapiWorker:
 
     def __init__(self) -> None:
         self._jobs: queue.Queue[tuple[Callable[..., Any], tuple[Any, ...], concurrent.futures.Future]] = queue.Queue()
-        self._thread = threading.Thread(target=self._loop, name="destiny-sapi", daemon=True)
+        self._thread = threading.Thread(target=self._loop, name="athena-sapi", daemon=True)
         self._thread.start()
 
     def call(self, fn: Callable[..., Any], *args: Any, timeout: float) -> Any:
@@ -505,7 +505,7 @@ class _WindowsBackend(_Backend):
         return candidates[0] if candidates else None
 
     def synthesize(self, text: str, voice: str | None, wpm: int, rate: float) -> AudioClip:
-        with tempfile.TemporaryDirectory(prefix="destiny-sapi-", ignore_cleanup_errors=True) as tmp_dir:
+        with tempfile.TemporaryDirectory(prefix="athena-sapi-", ignore_cleanup_errors=True) as tmp_dir:
             tmp = Path(tmp_dir)
             data: bytes | None = None
             worker = self._sapi()
@@ -539,10 +539,10 @@ class _WindowsBackend(_Backend):
         text_path.write_text(text, encoding="utf-8")
         env = dict(os.environ)
         env.update(
-            DESTINY_TTS_TEXT=str(text_path),
-            DESTINY_TTS_OUT=str(out),
-            DESTINY_TTS_VOICE=voice or "",
-            DESTINY_TTS_RATE=str(_sapi_rate(wpm)),
+            ATHENA_TTS_TEXT=str(text_path),
+            ATHENA_TTS_OUT=str(out),
+            ATHENA_TTS_VOICE=voice or "",
+            ATHENA_TTS_RATE=str(_sapi_rate(wpm)),
         )
         cmd = [exe, "-NoProfile", "-NonInteractive", "-EncodedCommand", _encoded(_PS_SPEAK)]
         proc = _run(cmd, env=env, timeout=_synth_timeout(text) + 30)

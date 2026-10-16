@@ -291,7 +291,7 @@ def _open_pdf(path: Path, display_name: str) -> pymupdf.Document:
     if doc.needs_pass and not doc.authenticate(""):
         doc.close()
         raise IngestError(
-            f"This PDF is password-protected, so Destiny Bot can't read '{display_name}'. Open it in a "
+            f"This PDF is password-protected, so Athena can't read '{display_name}'. Open it in a "
             "PDF reader with the password, save an unprotected copy (for example with Print > Save as PDF), "
             "and import that copy."
         )
@@ -355,7 +355,7 @@ def _load(doc: pymupdf.Document, path: Path, source_name: str, ocr: bool, progre
             sections = [make_section(title, 1, blocks)]
     warnings = _warnings(report, has_text=bool(blocks))
     if getattr(doc, "is_repaired", False):
-        warnings.insert(0, "This PDF looks damaged. Destiny Bot repaired it, but some text may be missing.")
+        warnings.insert(0, "This PDF looks damaged. Athena repaired it, but some text may be missing.")
     if progress:
         progress(1.0, f"Finished reading {n} page{'s' if n != 1 else ''}")
     return Document(

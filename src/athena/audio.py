@@ -454,7 +454,7 @@ class Mp3Encoder:
         try:
             import lameenc
         except ImportError as exc:  # it is a core dependency, but fail politely
-            raise TTSError("MP3 saving needs the 'lameenc' package. Reinstall Destiny Bot to fix this.") from exc
+            raise TTSError("MP3 saving needs the 'lameenc' package. Reinstall Athena to fix this.") from exc
         if channels not in (1, 2):
             raise ValueError("MP3 supports mono or stereo only")
         self.sample_rate, self.channels = sample_rate, channels
@@ -733,7 +733,7 @@ def _linux_player(is_mp3: bool) -> list[str] | None:
 @contextmanager
 def _temp_audio(clip: AudioClip) -> Iterator[Path]:
     """The clip written to a temp file that is removed afterwards."""
-    fd, name = tempfile.mkstemp(prefix="destiny-", suffix=clip.extension)
+    fd, name = tempfile.mkstemp(prefix="athena-", suffix=clip.extension)
     path = Path(name)
     try:
         with os.fdopen(fd, "wb") as fh:
@@ -789,7 +789,7 @@ def _play_winsound(data: bytes) -> None:
         except BaseException as exc:  # noqa: BLE001 - re-raised in the caller's thread
             errors.append(exc)
 
-    thread = threading.Thread(target=worker, name="destiny-play", daemon=True)
+    thread = threading.Thread(target=worker, name="athena-play", daemon=True)
     thread.start()
     try:
         while thread.is_alive():
@@ -805,7 +805,7 @@ def _play_mci(path: Path) -> None:
     import ctypes
 
     mci = ctypes.windll.winmm.mciSendStringW  # type: ignore[attr-defined]
-    alias = f"destiny{threading.get_ident()}"
+    alias = f"athena{threading.get_ident()}"
 
     def send(command: str) -> str:
         buf = ctypes.create_unicode_buffer(256)

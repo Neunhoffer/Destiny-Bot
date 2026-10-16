@@ -11,8 +11,8 @@ import time
 
 import pytest
 
-from destiny_bot.models import Block, BlockKind, ReadingOptions, Section
-from destiny_bot.speech import (
+from athena.models import Block, BlockKind, ReadingOptions, Section
+from athena.speech import (
     chunk_span,
     normalize_for_speech,
     plan_section,
@@ -20,7 +20,7 @@ from destiny_bot.speech import (
     split_sentences,
     verbalize_math,
 )
-from destiny_bot.speech import plan as plan_module
+from athena.speech import plan as plan_module
 
 K = BlockKind
 

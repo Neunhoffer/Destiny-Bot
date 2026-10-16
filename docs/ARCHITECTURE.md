@@ -1,6 +1,6 @@
-# Destiny Bot: architecture and module contracts
+# Athena: architecture and module contracts
 
-Destiny Bot is a private, offline-first study reader. It opens textbooks and
+Athena is a private, offline-first study reader. It opens textbooks and
 class materials (PDF, EPUB, Word, PowerPoint, HTML, text, photos of handouts),
 cleans them up for listening, and reads them aloud with a natural voice while
 highlighting the sentence being read. Optional Claude-powered helpers explain,
@@ -16,9 +16,9 @@ summarize and quiz.
    gated by switches in `Settings` that default to off. The UI marks them with a
    cloud badge.
 3. **One private data folder.** Everything is stored under `config.data_dir()`, which is
-   `%LOCALAPPDATA%\Athena` on Windows, or `DESTINY_HOME` if set. On POSIX the folder is created
+   `%LOCALAPPDATA%\Athena` on Windows, or `ATHENA_HOME` if set. On POSIX the folder is created
    with owner-only (0700) permissions.
-   "Erase all my data", or `destiny wipe`, removes all traces.
+   "Erase all my data", or `athena wipe`, removes all traces.
 4. **Faithful text.** Display text stays faithful to the book. Speech-only changes
    live in the speech layer: expanding "e.g.", dropping citation brackets, and so on.
    AI never silently rewrites the book.
@@ -28,7 +28,7 @@ summarize and quiz.
 ## Layout
 
 ```
-src/destiny_bot/
+src/athena/
   __init__.py          version
   models.py            Document / Section / Block / ReadingOptions / Utterance  (shared contract)
   config.py            data folder paths + Settings load/save                    (shared contract)
@@ -67,8 +67,8 @@ src/destiny_bot/
   library.py           local library: imported books, progress, bookmarks
   jobs.py              background jobs (import, export, voice download) with progress
   server.py            FastAPI app (local web UI + JSON API, see docs/API.md)
-  cli.py               `destiny` command
-  __main__.py          `python -m destiny_bot`
+  cli.py               `athena` command
+  __main__.py          `python -m athena`
   web/                 index.html, app.js, styles.css, icon.svg   (no build step, no CDN)
 tests/                 pytest suite (fixtures are generated in code; no binary fixtures committed)
   e2e/                 drives the real reader in Chromium with the real voices (`pytest -m e2e`);

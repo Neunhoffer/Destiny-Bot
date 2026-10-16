@@ -33,17 +33,17 @@ _ERROR_DETAIL_CHARS = 200
 # Exceptions defined in modules that may not be imported yet; their messages are written
 # for the user. They are looked up in sys.modules, so checking never imports anything.
 _FRIENDLY_ELSEWHERE = (
-    ("destiny_bot.ai", "AIUnavailable"),
-    ("destiny_bot.ai", "AIError"),
-    ("destiny_bot.tts.catalog", "VoiceDownloadError"),
-    ("destiny_bot.tts.catalog", "DownloadCancelled"),
-    ("destiny_bot.export", "ExportError"),
-    ("destiny_bot.export", "ExportCancelled"),
+    ("athena.ai", "AIUnavailable"),
+    ("athena.ai", "AIError"),
+    ("athena.tts.catalog", "VoiceDownloadError"),
+    ("athena.tts.catalog", "DownloadCancelled"),
+    ("athena.export", "ExportError"),
+    ("athena.export", "ExportCancelled"),
 )
 # Exceptions that mean "the user cancelled" (the job ends as "cancelled", not "error").
 _CANCELLED_ELSEWHERE = (
-    ("destiny_bot.tts.catalog", "DownloadCancelled"),
-    ("destiny_bot.export", "ExportCancelled"),
+    ("athena.tts.catalog", "DownloadCancelled"),
+    ("athena.export", "ExportCancelled"),
 )
 
 
@@ -198,7 +198,7 @@ class JobManager:
     """Runs jobs on a small thread pool and remembers them for an hour after they finish."""
 
     def __init__(self, *, max_workers: int = 2, retention_seconds: float = RETENTION_SECONDS) -> None:
-        self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="destiny-job")
+        self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="athena-job")
         self._retention = retention_seconds
         self._jobs: dict[str, Job] = {}
         self._lock = threading.Lock()

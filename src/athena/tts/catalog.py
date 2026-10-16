@@ -6,7 +6,7 @@ Face and are saved as ``<voice_id>.onnx`` + ``<voice_id>.onnx.json`` pairs in
 the kokoro-onnx GitHub release and go to ``config.voices_dir() / "kokoro"``.
 
 Voices can also be bundled read-only with the desktop installer: every folder in
-``DESTINY_EXTRA_VOICE_DIRS`` (separated by ``os.pathsep``) may hold ``piper/`` and
+``ATHENA_EXTRA_VOICE_DIRS`` (separated by ``os.pathsep``) may hold ``piper/`` and
 ``kokoro/`` subfolders. Downloaded voices win over bundled ones with the same id.
 
 Downloading is the only network access in this module and only happens when the
@@ -41,7 +41,7 @@ DEFAULT_BASE_URL = "https://huggingface.co/rhasspy/piper-voices/resolve/main"
 KOKORO_BASE_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
 RECOMMENDED_VOICE = "en_US-lessac-medium"
 KOKORO_CATALOG_ID = "kokoro-v1.0"
-EXTRA_DIRS_ENV = "DESTINY_EXTRA_VOICE_DIRS"
+EXTRA_DIRS_ENV = "ATHENA_EXTRA_VOICE_DIRS"
 
 # <lang>_<REGION>-<name>-<quality>, e.g. en_US-lessac-medium. Strict on purpose: the id
 # becomes part of a URL and a file name, so no dots, slashes or other surprises.
@@ -169,7 +169,7 @@ def is_valid_voice_id(voice_id: str) -> bool:
 
 
 def extra_voice_dirs() -> list[Path]:
-    """Read-only voice folders bundled with the app (``DESTINY_EXTRA_VOICE_DIRS``)."""
+    """Read-only voice folders bundled with the app (``ATHENA_EXTRA_VOICE_DIRS``)."""
     raw = os.environ.get(EXTRA_DIRS_ENV, "")
     return [Path(part.strip()).expanduser() for part in raw.split(os.pathsep) if part.strip()]
 
@@ -199,7 +199,7 @@ def installed_piper_voices(voices_dir: Path | None = None) -> list[Path]:
     """Installed voice models: non-empty ``*.onnx`` files with a matching ``.onnx.json``.
 
     With no ``voices_dir`` this is the downloaded voices followed by bundled ones
-    (``DESTINY_EXTRA_VOICE_DIRS``) whose id wasn't downloaded too.
+    (``ATHENA_EXTRA_VOICE_DIRS``) whose id wasn't downloaded too.
     """
     if voices_dir is not None:
         folders = [piper_voices_dir(voices_dir)]
@@ -437,7 +437,7 @@ def _fetch(
     fd, name = tempfile.mkstemp(dir=folder, prefix=".download-", suffix=".part")
     tmp = Path(name)
     temps.append(tmp)
-    request = urllib.request.Request(url, headers={"User-Agent": "DestinyBot voice downloader"})
+    request = urllib.request.Request(url, headers={"User-Agent": "Athena voice downloader"})
     with os.fdopen(fd, "wb") as out:
         try:
             response = urllib.request.urlopen(  # noqa: S310 (https / test URL only)

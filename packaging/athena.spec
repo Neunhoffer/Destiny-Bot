@@ -4,7 +4,7 @@
 Build with ``python packaging/build.py`` (which also fetches the bundled voice and
 runs a smoke test), or directly:
 
-    python -m PyInstaller --noconfirm --clean packaging/destiny.spec
+    python -m PyInstaller --noconfirm --clean packaging/athena.spec
 
 Output: dist/Athena/Athena.exe (Windows), dist/Athena.app (macOS), dist/Athena/Athena (Linux).
 
@@ -30,7 +30,7 @@ ROOT = HERE.parent
 SRC = ROOT / "src"
 APP_NAME = "Athena"
 BUNDLE_ID = "com.athena.reader"
-VERSION = re.search(r'__version__\s*=\s*"([^"]+)"', (SRC / "destiny_bot" / "__init__.py").read_text()).group(1)
+VERSION = re.search(r'__version__\s*=\s*"([^"]+)"', (SRC / "athena" / "__init__.py").read_text()).group(1)
 VOICES = Path(os.environ.get("ATHENA_VOICES_DIR") or HERE / "build" / "voices")
 BUNDLE_KOKORO = os.environ.get("ATHENA_BUNDLE_KOKORO", "1").strip().lower() not in ("0", "false", "no")
 IS_WIN = sys.platform == "win32"
@@ -63,8 +63,8 @@ def installed(package):
 
 
 # Athena itself: every module (some are imported lazily), the reader's web files, the icons.
-hiddenimports += collect_submodules("destiny_bot")
-datas += [(str(SRC / "destiny_bot" / "web"), "destiny_bot/web"), (str(HERE / "icons"), "icons")]
+hiddenimports += collect_submodules("athena")
+datas += [(str(SRC / "athena" / "web"), "athena/web"), (str(HERE / "icons"), "icons")]
 
 # The local web server. uvicorn loads its loop/protocol/logging classes by name.
 hiddenimports += collect_submodules("uvicorn")
@@ -108,7 +108,7 @@ if installed("webview"):
         add_all("pythonnet")
         hiddenimports += ["clr"]
 
-# Voices shipped inside the app (searched read-only through DESTINY_EXTRA_VOICE_DIRS).
+# Voices shipped inside the app (searched read-only through ATHENA_EXTRA_VOICE_DIRS).
 for kind in ("piper", "kokoro"):
     folder = VOICES / kind
     if kind == "kokoro" and not BUNDLE_KOKORO:
@@ -156,7 +156,7 @@ excludes += [f"webview.platforms.{name}" for names in _backends.values() for nam
 excludes += ["webview.platforms.android", "webview.platforms.cef"]
 
 a = Analysis(
-    [str(HERE / "destiny_app.py")],
+    [str(HERE / "athena_app.py")],
     pathex=[str(SRC)],
     binaries=binaries,
     datas=datas,

@@ -12,10 +12,10 @@ import pymupdf
 import pytest
 from pdf_factory import PdfBuilder
 
-from destiny_bot.ingest import IngestError, load_document
-from destiny_bot.ingest import common as common_mod
-from destiny_bot.ingest.html import parse_html
-from destiny_bot.models import Document
+from athena.ingest import IngestError, load_document
+from athena.ingest import common as common_mod
+from athena.ingest.html import parse_html
+from athena.models import Document
 
 
 def texts(doc: Document) -> list[str]:

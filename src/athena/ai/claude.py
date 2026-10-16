@@ -1,6 +1,6 @@
 """The Claude study helper: explain, answer questions, summarize, quiz, narrate, describe.
 
-Uses the official ``anthropic`` SDK (optional dependency: ``pip install "destiny-bot[ai]"``).
+Uses the official ``anthropic`` SDK (optional dependency: ``pip install "athena-reader[ai]"``).
 Nothing is sent anywhere unless the user has turned the helper on in Settings and
 added an API key. Every answer is plain text meant to be read aloud.
 """
@@ -42,7 +42,7 @@ OFF_MESSAGE = (
 NO_KEY_MESSAGE = "Add your Anthropic API key in Settings to use the study helper."
 NOT_INSTALLED_MESSAGE = (
     "The study helper needs the Anthropic package, which isn't installed. "
-    'Install it with: pip install "destiny-bot[ai]"'
+    'Install it with: pip install "athena-reader[ai]"'
 )
 REFUSAL_MESSAGE = "Claude declined to answer that one. Try rephrasing."
 MAX_TOKENS_NOTE = (

@@ -5,7 +5,7 @@
     Athena --self-test-quick    the same, skipping the slow parts (used as the build's smoke test)
 
 The app is built without a console window, so output goes to log files in the
-data folder (see destiny_bot.desktop.setup_logging).
+data folder (see athena.desktop.setup_logging).
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import multiprocessing
 import os
 import sys
 
-# Before anything can import onnxruntime: stop its telemetry to Microsoft (see destiny_bot/__init__.py).
+# Before anything can import onnxruntime: stop its telemetry to Microsoft (see athena/__init__.py).
 os.environ.setdefault("ORT_DISABLE_TELEMETRY", "1")
 
 
@@ -32,12 +32,12 @@ def main(argv: list[str] | None = None) -> int:
     multiprocessing.freeze_support()
     args = list(sys.argv[1:] if argv is None else argv)
 
-    from destiny_bot import desktop
+    from athena import desktop
 
     if "--self-test" in args or "--self-test-quick" in args:
         desktop.setup_logging(name="self-test.log")
         desktop.use_bundled_voices()
-        from destiny_bot.selftest import run_self_test
+        from athena.selftest import run_self_test
 
         return run_self_test(quick="--self-test-quick" in args or "--quick" in args)
     return desktop.run_app(port=_port(args))

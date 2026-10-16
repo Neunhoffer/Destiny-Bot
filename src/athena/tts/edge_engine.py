@@ -50,7 +50,7 @@ class EdgeEngine(TTSEngine):
         except ImportError:
             return False, (
                 "Microsoft online voices need the edge-tts package, which isn't installed. "
-                "Reinstall Destiny Bot with online voices included, or use an offline voice."
+                "Reinstall Athena with online voices included, or use an offline voice."
             )
         return True, ""
 
@@ -111,7 +111,7 @@ def _run_coroutine_blocking(make_coro: Any) -> Any:
         except BaseException as exc:  # noqa: BLE001 - re-raised below
             result["error"] = exc
 
-    thread = threading.Thread(target=worker, name="destiny-edge-tts", daemon=True)
+    thread = threading.Thread(target=worker, name="athena-edge-tts", daemon=True)
     thread.start()
     thread.join()
     if "error" in result:

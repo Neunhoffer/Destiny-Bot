@@ -1,4 +1,4 @@
-"""``destiny self-test``: check that everything Athena needs works on this computer.
+"""``athena self-test``: check that everything Athena needs works on this computer.
 
 The packaged app runs it with ``Athena.exe --self-test`` (``--self-test-quick``
 for the fast version) and CI runs it on every platform. It prints a readable
@@ -50,34 +50,34 @@ MIN_SPEECH_S = 0.3
 MIN_RMS_DBFS = -50.0
 
 CORE_MODULES = (
-    "destiny_bot.models",
-    "destiny_bot.config",
-    "destiny_bot.ingest",
-    "destiny_bot.ingest.common",
-    "destiny_bot.ingest.pdf",
-    "destiny_bot.ingest.epub",
-    "destiny_bot.ingest.html",
-    "destiny_bot.ingest.docx",
-    "destiny_bot.ingest.pptx",
-    "destiny_bot.ingest.text",
-    "destiny_bot.ingest.image",
-    "destiny_bot.ingest.ocr",
-    "destiny_bot.speech",
-    "destiny_bot.tts",
-    "destiny_bot.tts.catalog",
-    "destiny_bot.tts.cache",
-    "destiny_bot.tts.piper_engine",
-    "destiny_bot.tts.system_engine",
-    "destiny_bot.tts.edge_engine",
-    "destiny_bot.tts.browser_engine",
-    "destiny_bot.audio",
-    "destiny_bot.export",
-    "destiny_bot.library",
-    "destiny_bot.jobs",
-    "destiny_bot.ai",
-    "destiny_bot.server",
-    "destiny_bot.cli",
-    "destiny_bot.desktop",
+    "athena.models",
+    "athena.config",
+    "athena.ingest",
+    "athena.ingest.common",
+    "athena.ingest.pdf",
+    "athena.ingest.epub",
+    "athena.ingest.html",
+    "athena.ingest.docx",
+    "athena.ingest.pptx",
+    "athena.ingest.text",
+    "athena.ingest.image",
+    "athena.ingest.ocr",
+    "athena.speech",
+    "athena.tts",
+    "athena.tts.catalog",
+    "athena.tts.cache",
+    "athena.tts.piper_engine",
+    "athena.tts.system_engine",
+    "athena.tts.edge_engine",
+    "athena.tts.browser_engine",
+    "athena.audio",
+    "athena.export",
+    "athena.library",
+    "athena.jobs",
+    "athena.ai",
+    "athena.server",
+    "athena.cli",
+    "athena.desktop",
     "pydantic",
     "fastapi",
     "starlette",
@@ -96,7 +96,7 @@ CORE_MODULES = (
 )
 # module -> what it is needed for (missing ones are warnings)
 OPTIONAL_MODULES: dict[str, str] = {
-    "destiny_bot.tts.kokoro_engine": "Kokoro voices",
+    "athena.tts.kokoro_engine": "Kokoro voices",
     "piper": "natural offline voices (Piper)",
     "onnxruntime": "natural offline voices",
     "numpy": "natural offline voices",
@@ -258,7 +258,7 @@ def _environment() -> dict[str, Any]:
         "cpu_count": os.cpu_count(),
         "memory_gb": _memory_gb(),
         "data_dir": str(config.data_dir()),
-        "extra_voice_dirs": os.environ.get("DESTINY_EXTRA_VOICE_DIRS", ""),
+        "extra_voice_dirs": os.environ.get("ATHENA_EXTRA_VOICE_DIRS", ""),
     }
     if sys.platform == "win32":
         release, version, csd, _ptype = platform.win32_ver()
@@ -304,7 +304,7 @@ def _check_imports(report: Report) -> None:
         optional.update(WINDOWS_MODULES)
     for name, purpose in optional.items():
         try:
-            if name.startswith("destiny_bot.") and importlib.util.find_spec(name) is None:
+            if name.startswith("athena.") and importlib.util.find_spec(name) is None:
                 report.add("imports", name, SKIP, f"not part of this version ({purpose})")
                 continue
             begin = time.perf_counter()
@@ -697,12 +697,12 @@ def _check_server(report: Report) -> None:
         begin = time.perf_counter()
         status, body = _http_get(url)
         page = body.decode("utf-8", "replace")
-        match = re.search(r'<meta\s+name="destiny-token"\s+content="([^"]+)"', page)
+        match = re.search(r'<meta\s+name="athena-token"\s+content="([^"]+)"', page)
         if status != 200 or not match:
             raise ValueError(f"the reader page didn't load (HTTP {status})")
         report.add("server", "GET /", PASS, f"{len(body) // 1024} KB page", seconds=time.perf_counter() - begin)
         begin = time.perf_counter()
-        status, body = _http_get(url.rstrip("/") + "/api/status", {"X-Destiny-Token": match.group(1)})
+        status, body = _http_get(url.rstrip("/") + "/api/status", {"X-Athena-Token": match.group(1)})
         payload = json.loads(body)
         engines = {e.get("name"): bool(e.get("available")) for e in payload.get("engines", [])}
         data = {"url": url, "resolved_engine": payload.get("resolved_engine"), "engines": engines,

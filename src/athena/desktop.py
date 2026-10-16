@@ -58,11 +58,11 @@ LOG_MAX_BYTES = 2 * 1024 * 1024
 LOG_BACKUPS = 3
 STARTING_GRACE_S = 30.0  # how long another copy may take to start before its lock counts as stale
 JUST_STARTED_S = 15.0  # a copy younger than this is still opening its own window
-EXTRA_VOICE_DIRS_ENV = "DESTINY_EXTRA_VOICE_DIRS"
+EXTRA_VOICE_DIRS_ENV = "ATHENA_EXTRA_VOICE_DIRS"
 WEBVIEW2_CLIENT_KEY = r"Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 CREATE_NO_WINDOW = 0x08000000
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]  # the source checkout (src/destiny_bot/desktop.py)
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]  # the source checkout (src/athena/desktop.py)
 _log_stream: _RotatingLog | None = None
 _crash_file: IO[str] | None = None
 _mutex_handle: Any = None
@@ -106,7 +106,7 @@ def bundled_voices_dir() -> Path | None:
 
 
 def use_bundled_voices() -> Path | None:
-    """Add the bundled voices folder to ``DESTINY_EXTRA_VOICE_DIRS`` (searched read-only for voices)."""
+    """Add the bundled voices folder to ``ATHENA_EXTRA_VOICE_DIRS`` (searched read-only for voices)."""
     folder = bundled_voices_dir()
     if folder is None:
         return None
@@ -331,7 +331,7 @@ def _url_answers(url: str, timeout: float = 2.0) -> bool:
         with opener.open(urllib.request.Request(url, headers={"Accept": "text/html"}), timeout=timeout) as response:
             if response.status != 200:
                 return False
-            return b"destiny-token" in response.read(256 * 1024)
+            return b"athena-token" in response.read(256 * 1024)
     except (OSError, ValueError):
         return False
 
@@ -880,10 +880,10 @@ def _launch_target() -> tuple[Path, list[str], dict[str, str]]:
     if is_frozen():
         return Path(sys.executable), [], {}
     env: dict[str, str] = {}
-    home = os.environ.get("DESTINY_HOME")
+    home = os.environ.get("ATHENA_HOME")
     if home:
-        env["DESTINY_HOME"] = str(Path(home).expanduser().resolve())
-    return _gui_python(), ["-m", "destiny_bot", "app"], env
+        env["ATHENA_HOME"] = str(Path(home).expanduser().resolve())
+    return _gui_python(), ["-m", "athena", "app"], env
 
 
 def _working_dir() -> Path:
@@ -893,13 +893,13 @@ def _working_dir() -> Path:
 
 
 def _windows_arguments(args: list[str], env: dict[str, str]) -> str:
-    """Shortcut arguments; a .lnk can't set environment variables, so DESTINY_HOME goes through ``-c``."""
-    if env.get("DESTINY_HOME") and args[:2] == ["-m", "destiny_bot"]:
+    """Shortcut arguments; a .lnk can't set environment variables, so ATHENA_HOME goes through ``-c``."""
+    if env.get("ATHENA_HOME") and args[:2] == ["-m", "athena"]:
         code = (
-            "import os,sys;os.environ['DESTINY_HOME']=sys.argv[1];"
-            "from destiny_bot.cli import main;sys.exit(main(sys.argv[2:]))"
+            "import os,sys;os.environ['ATHENA_HOME']=sys.argv[1];"
+            "from athena.cli import main;sys.exit(main(sys.argv[2:]))"
         )
-        return subprocess.list2cmdline(["-c", code, env["DESTINY_HOME"], *args[2:]])
+        return subprocess.list2cmdline(["-c", code, env["ATHENA_HOME"], *args[2:]])
     return subprocess.list2cmdline(args)
 
 
@@ -973,7 +973,7 @@ def _create_windows_shortcuts(*, desktop: bool, start_menu: bool) -> list[Path]:
 
 def _mac_launcher_script() -> str:
     target, args, env = _launch_target()
-    lines = ["#!/bin/bash", f"# Opens {APP_NAME}. Created by 'destiny shortcut'; safe to delete."]
+    lines = ["#!/bin/bash", f"# Opens {APP_NAME}. Created by 'athena shortcut'; safe to delete."]
     for key, value in env.items():
         lines.append(f"export {key}={shlex.quote(value)}")
     lines.append(f"cd {shlex.quote(str(_working_dir()))} 2>/dev/null")

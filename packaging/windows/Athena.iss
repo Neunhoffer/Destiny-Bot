@@ -1,7 +1,7 @@
 ; Athena installer for Windows (Inno Setup 6).
 ;
 ; packaging/build.py compiles this after PyInstaller has built dist\Athena:
-;   iscc /DAppVersion=0.1.0 /DSourceDir=<repo>\dist\Athena /DOutputDir=<repo>\dist DestinyBot.iss
+;   iscc /DAppVersion=0.1.0 /DSourceDir=<repo>\dist\Athena /DOutputDir=<repo>\dist Athena.iss
 ;
 ; What it does:
 ; - installs for the current user only (no administrator password) into
@@ -32,9 +32,9 @@
 
 #define AppName "Athena"
 #define AppExe "Athena.exe"
-; The data folder that destiny_bot.config.data_dir() uses on Windows.
+; The data folder that athena.config.data_dir() uses on Windows.
 #define DataDirName "Athena"
-; Keep in sync with destiny_bot/desktop.py (APP_MUTEX, APP_ID).
+; Keep in sync with athena/desktop.py (APP_MUTEX, APP_ID).
 #define AppMutexName "AthenaReaderAppMutex"
 #define AppUserModelID "Athena.Reader"
 #define WebView2Url "https://go.microsoft.com/fwlink/p/?LinkId=2124703"

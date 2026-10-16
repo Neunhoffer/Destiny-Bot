@@ -1,7 +1,7 @@
 """Where Athena keeps its files, and the user's settings.
 
 Everything Athena stores lives under one folder (:func:`data_dir`) so that
-deleting that folder removes every trace of it. Set ``DESTINY_HOME`` to put the
+deleting that folder removes every trace of it. Set ``ATHENA_HOME`` to put the
 folder somewhere specific (the launcher scripts point it inside the app folder,
 so deleting the app folder removes the data too).
 
@@ -9,7 +9,7 @@ Privacy from other users of the computer: on macOS and Linux the folder is made
 owner-only (0700) and settings.json, which may hold the API key, is 0600. Windows
 has no such mode bits; there the default folder, %LOCALAPPDATA%\\Athena, is
 readable only by the user (and administrators) through its inherited ACL. A
-``DESTINY_HOME`` elsewhere inherits that folder's ACL instead.
+``ATHENA_HOME`` elsewhere inherits that folder's ACL instead.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ DEFAULT_AI_MODEL = "claude-opus-5-5"
 
 def data_dir() -> Path:
     """Root folder for all Athena data (created on first use)."""
-    override = os.environ.get("DESTINY_HOME")
+    override = os.environ.get("ATHENA_HOME")
     if override:
         root = Path(override).expanduser()
     elif sys.platform == "win32":
@@ -59,7 +59,7 @@ def _make_private(folder: Path) -> None:
         mode = folder.stat().st_mode
         if mode & 0o077:
             folder.chmod(mode & 0o700)
-    except OSError:  # a folder we don't own (e.g. a shared DESTINY_HOME): leave it alone
+    except OSError:  # a folder we don't own (e.g. a shared ATHENA_HOME): leave it alone
         pass
 
 

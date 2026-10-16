@@ -1,12 +1,12 @@
 """End-to-end fixtures: the real Athena server with real voices, driven by Chromium.
 
-These tests start ``python -m destiny_bot serve`` with its own data folder holding
+These tests start ``python -m athena serve`` with its own data folder holding
 the real Piper and Kokoro voices, and drive the web UI with Playwright. They skip
 cleanly when Playwright, Chromium or the voices are missing. Set:
 
-- ``DESTINY_TEST_PIPER_VOICE``: a Piper ``.onnx`` voice (with its ``.onnx.json``)
-- ``DESTINY_TEST_KOKORO_DIR``: a folder with a Kokoro model and ``voices-v1.0.bin``
-- ``DESTINY_E2E_CHROMIUM`` (optional): the Chromium executable to use
+- ``ATHENA_TEST_PIPER_VOICE``: a Piper ``.onnx`` voice (with its ``.onnx.json``)
+- ``ATHENA_TEST_KOKORO_DIR``: a folder with a Kokoro model and ``voices-v1.0.bin``
+- ``ATHENA_E2E_CHROMIUM`` (optional): the Chromium executable to use
 
 The page is opened with ``?debug``, which turns on the app's timing hooks
 (``window.athenaDebug``): scheduler events and a snapshot of playback state.
@@ -32,7 +32,7 @@ def chromium_path() -> str:
         pytest.skip("Playwright isn't installed (pip install playwright)")
     path = chromium_executable()
     if not path:
-        pytest.skip("no Chromium found: set DESTINY_E2E_CHROMIUM or run `playwright install chromium`")
+        pytest.skip("no Chromium found: set ATHENA_E2E_CHROMIUM or run `playwright install chromium`")
     return path
 
 

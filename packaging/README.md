@@ -44,42 +44,42 @@ python packaging/build.py --voice-source ~/voices/piper   # copy the Piper voice
 
 1. **Voices.** Downloads Piper `en_US-lessac-medium` (63 MB) from Hugging Face
    into `packaging/build/voices/piper/`, using
-   `destiny_bot.tts.catalog.download_piper_voice`. It also downloads the Kokoro
+   `athena.tts.catalog.download_piper_voice`. It also downloads the Kokoro
    int8 voice pack (`kokoro-v1.0.int8.onnx`, 92 MB, and `voices-v1.0.bin`, 28 MB)
    from the kokoro-onnx GitHub release into `packaging/build/voices/kokoro/`,
    using `download_kokoro_model(variant="int8")`, which checks the SHA-256 of each
    file. Use `--no-kokoro` or `ATHENA_BUNDLE_KOKORO=0` to leave Kokoro out.
 2. **Icons.** Runs `make_icons.py`, which draws the book, sound waves and laurel
-   icon with Pillow, matching `src/destiny_bot/web/icon.svg`. It writes
+   icon with Pillow, matching `src/athena/web/icon.svg`. It writes
    `icons/icon.ico`, `icon.icns` and `icon-512.png`, which are committed. It also
    writes the installer's wizard images into `build/wizard/`. Sizes of 32 px and
    below use a simpler, bolder drawing so the icon stays readable in the taskbar.
-3. **PyInstaller.** Builds from `destiny.spec`: one folder, no console, named
-   "Athena". The entry point is `destiny_app.py`. The spec collects the reader's
+3. **PyInstaller.** Builds from `athena.spec`: one folder, no console, named
+   "Athena". The entry point is `athena_app.py`. The spec collects the reader's
    web files, the Piper/espeak-ng data, the onnxruntime libraries, PyMuPDF,
    the python-docx/python-pptx templates, certifi, edge-tts, uvicorn's
    dynamically loaded modules, pywebview with this platform's backend
    (pythonnet on Windows), kokoro-onnx, espeakng-loader (its espeak-ng library
    and data) and phonemizer, plus the voices from step 1 (in `_internal/voices`,
-   which the voice engines search read-only through `DESTINY_EXTRA_VOICE_DIRS`).
+   which the voice engines search read-only through `ATHENA_EXTRA_VOICE_DIRS`).
 4. **Smoke test.** Runs the built app with `--self-test-quick` in a throwaway
    data folder. Both bundled voices must speak, or the build stops. The report
    is copied to `dist/self-test-<platform>.json`. For each offline engine it
    records the first-sentence latency cold (`latency_cold_s`, which includes
    loading the voice) and warm (`latency_warm_s`), and the real-time factor
    (`rtf_cold`, `rtf_warm`; below 1 means faster than speech).
-5. **Package.** On Windows, Inno Setup compiles `windows/DestinyBot.iss`. On
+5. **Package.** On Windows, Inno Setup compiles `windows/Athena.iss`. On
    macOS, `hdiutil` makes the `.dmg`. On Linux, it makes a `.tar.gz`.
 
 ## How the app works
 
-- `destiny_app.py` is the frozen entry point. With no arguments it calls
-  `destiny_bot.desktop.run_app()`. With `--self-test` or `--self-test-quick` it
-  runs `destiny_bot.selftest.run_self_test()` and writes
+- `athena_app.py` is the frozen entry point. With no arguments it calls
+  `athena.desktop.run_app()`. With `--self-test` or `--self-test-quick` it
+  runs `athena.selftest.run_self_test()` and writes
   `<data>/logs/self-test.json` and `self-test.txt`.
 - `run_app()` sends stdout and stderr to `<data>/logs/app.log`, which is rotated
   and keeps 3 old copies. Crashes inside native libraries go to
-  `<data>/logs/crash.log`. It points `DESTINY_EXTRA_VOICE_DIRS` at the bundled
+  `<data>/logs/crash.log`. It points `ATHENA_EXTRA_VOICE_DIRS` at the bundled
   voices, starts the server on `127.0.0.1` in a background thread, and shows it
   in a pywebview window. Page storage is kept in `<data>/webview`, so the
   reader's preferences survive restarts. Downloads (exported MP3s) get a normal
@@ -110,7 +110,7 @@ Edge app-mode fallback, because Edge is part of Windows. `run_app()` does the
 same registry check at startup. Without it, pywebview would fall back to the
 old Internet Explorer engine, which can't run the reader.
 
-## The Windows installer (`windows/DestinyBot.iss`)
+## The Windows installer (`windows/Athena.iss`)
 
 - Installs per user (`PrivilegesRequired=lowest`) to
   `%LOCALAPPDATA%\Programs\Athena`, so no admin password is needed.
@@ -145,7 +145,7 @@ The builds aren't signed, so:
 
 - `.github/workflows/tests.yml` runs pytest on Ubuntu and Windows with Python
   3.12, skipping the `e2e` tests. It uses a real Piper voice, and on Windows the
-  real SAPI system-voice code paths. It then runs `destiny self-test` and
+  real SAPI system-voice code paths. It then runs `athena self-test` and
   uploads the report.
 - `.github/workflows/desktop.yml` runs on changes to `packaging/` or `src/`, on
   `v*` tags, and on demand. The Windows job builds the installer and runs the
