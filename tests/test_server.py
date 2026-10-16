@@ -782,8 +782,10 @@ def test_open_book(client, tmp_path):
     assert set(data) == {"book", "toc", "warnings"}
     assert data["book"]["id"] == first["id"]
     assert data["warnings"] == ["Page 2 was read with OCR"]
-    assert data["toc"][0] == {"id": "s0", "title": "Cells", "level": 1, "page_start": 1, "page_end": 1,
-                              "block_count": 3}
+    entry = data["toc"][0]
+    assert entry == {"id": "s0", "title": "Cells", "level": 1, "page_start": 1, "page_end": 1,
+                     "block_count": 3, "char_count": entry["char_count"]}
+    assert entry["char_count"] > 0
     assert [t["id"] for t in data["toc"]] == ["s0", "s1", "s2"]
     # Opening it moved it to the top.
     assert [b["id"] for b in client.get("/api/library").json()["books"]] == [first["id"], second["id"]]

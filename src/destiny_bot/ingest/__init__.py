@@ -123,8 +123,9 @@ def load_document(
     kind = source_type_for(name) or source_type_for(path.name)
     if kind is None:
         raise IngestError(
-            f"Athena can't open '{Path(name).suffix or name}' files yet. "
-            "Supported: " + ", ".join(sorted(SUPPORTED_EXTENSIONS))
+            f"Athena can't open '{Path(name).suffix or name}' files yet. It can read PDFs, EPUB e-books, "
+            "Word documents (.docx), PowerPoint slides (.pptx), web pages, text and Markdown files, "
+            "and photos or scans of pages."
         )
     if not path.is_file():
         raise IngestError(f"File not found: {path}")

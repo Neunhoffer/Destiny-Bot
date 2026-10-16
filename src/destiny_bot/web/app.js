@@ -147,6 +147,17 @@ function formatSize(bytes) {
 }
 
 const formatSpeed = (value) => `${value.toFixed(2)}×`;
+
+/** "a minute", "25 minutes", "2 hours 10 minutes": rough, for estimates. */
+function roughDuration(seconds) {
+  const minutes = Math.max(1, Math.round(seconds / 60));
+  if (minutes < 2) return 'a minute';
+  if (minutes < 60) return `${minutes} minutes`;
+  const rounded = Math.round(minutes / 5) * 5;
+  const hours = Math.floor(rounded / 60);
+  const rest = rounded % 60;
+  return `${plural(hours, 'hour')}${rest ? ` ${rest} minutes` : ''}`;
+}
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const norm = (text) => String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
 
@@ -4078,11 +4089,14 @@ function resetExportForm() {
   $('#export-start').hidden = false;
   $('#export-start').disabled = false;
   $('#export-cancel').textContent = 'Cancel';
-  $('#export-all').checked = true;
+  // Start with the open section: a whole textbook can take hours to record.
+  const openId = state.section?.section?.id;
+  const onlyOpen = Boolean(openId) && state.toc.length > 1;
+  $('#export-all').checked = !onlyOpen;
   const box = $('#export-sections');
   box.replaceChildren(...state.toc.map((entry) => {
     const input = el('input', { type: 'checkbox', value: entry.id });
-    input.checked = true;
+    input.checked = !onlyOpen || entry.id === openId;
     input.addEventListener('change', syncExportAll);
     return el('label', { class: `check level-${Math.min(3, entry.level || 1)}` }, input, el('span', { dir: 'auto', text: entry.title }));
   }));
@@ -4107,12 +4121,31 @@ function resetExportForm() {
     : 'Larger books can take a while. You can keep reading while it works.';
   $('#export-rate').value = String(state.speed);
   $('#export-rate-value').textContent = formatSpeed(state.speed);
+  updateExportEstimate();
 }
 
 function syncExportAll() {
   const boxes = $$('#export-sections input');
   $('#export-all').checked = boxes.every((b) => b.checked);
   $('#export-start').disabled = !boxes.some((b) => b.checked) || $('#export-voice').disabled;
+  updateExportEstimate();
+}
+
+/** How long the chosen sections will play, and how long this voice needs to record them. */
+function updateExportEstimate() {
+  const out = $('#export-estimate');
+  if (!out) return;
+  const chosen = new Set($$('#export-sections input').filter((b) => b.checked).map((b) => b.value));
+  const chars = state.toc.filter((entry) => chosen.has(entry.id)).reduce((n, entry) => n + (entry.char_count || 0), 0);
+  const engine = ($('#export-voice').value || '').split('::')[0];
+  if (!chars || !engine) {
+    out.textContent = '';
+    return;
+  }
+  const rate = Number($('#export-rate').value) || 1;
+  const listening = chars / (clips.charsPerSecond * rate);
+  const making = listening * clips.rtf(engine) * 1.15; // plus pauses and file writing
+  out.textContent = `About ${roughDuration(listening)} of audio. Recording it takes about ${roughDuration(making)} with this voice.`;
 }
 
 function exportDownloadUrl(url) {
@@ -4223,7 +4256,9 @@ function setupExport() {
   });
   $('#export-rate').addEventListener('input', (event) => {
     $('#export-rate-value').textContent = formatSpeed(Number(event.target.value));
+    updateExportEstimate();
   });
+  $('#export-voice').addEventListener('change', updateExportEstimate);
   $('#export-bar-wrap').setAttribute('role', 'progressbar');
   $('#export-bar-wrap').setAttribute('aria-label', 'Saving audio');
   $('#export-bar-wrap').setAttribute('aria-valuemin', '0');

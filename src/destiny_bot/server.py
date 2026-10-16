@@ -595,6 +595,7 @@ def _toc_entry(section: Section) -> dict[str, Any]:
         "page_start": section.page_start,
         "page_end": section.page_end,
         "block_count": len(section.blocks),
+        "char_count": sum(len(block.text) for block in section.blocks),
     }
 
 

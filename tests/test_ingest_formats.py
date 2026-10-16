@@ -1606,3 +1606,23 @@ def test_ocr_reading_quality_measure():
     assert not ocr_module._poorly_read(good)
     assert ocr_module._poorly_read("") and ocr_module._poorly_read(upside_down)
     assert ocr_module._word_count(good) > ocr_module._word_count(upside_down)
+
+
+@pytest.mark.parametrize(
+    ("text", "heading"),
+    [("# Lab steps\n\nMix it. Wait.", "Lab steps"), ("Intro.\n\n# Results\n\nDone.", "Results")],
+)
+def test_pasted_text_with_a_single_heading(text, heading):
+    from destiny_bot.ingest import document_from_text
+
+    doc = document_from_text(text, "Other")
+    blocks = [b for s in doc.sections for b in s.blocks]
+    assert any(b.kind == BlockKind.HEADING and b.text == heading for b in blocks)
+    assert not any(b.text.startswith("#") for b in blocks)
+
+
+def test_pasted_hashtags_are_not_headings():
+    from destiny_bot.ingest import document_from_text
+
+    doc = document_from_text("Our #1 goal is reading.\n\nThen #2.", "Notes")
+    assert all(b.kind != BlockKind.HEADING for s in doc.sections for b in s.blocks)

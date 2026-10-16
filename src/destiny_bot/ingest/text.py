@@ -813,7 +813,10 @@ def document_from_text(text: str, title: str, *, source_type: str = "paste") -> 
     if not text.strip():
         raise IngestError("There's no text to read. Paste some text and try again.")
     title = clean_display_text(title or "")
-    markdown = source_type == "md" or looks_like_markdown(text)
+    # The paste dialog promises that lines starting with "# " become headings, even just one.
+    markdown = (
+        source_type == "md" or looks_like_markdown(text) or (source_type == "paste" and bool(_MD_ATX_ANY.search(text)))
+    )
     first_line = next((clean_display_text(line) for line in text.split("\n") if line.strip()), "")
     fallback = first_line[:80].rstrip() if 0 < len(first_line) <= 80 else "Pasted text"
     return _build_document(

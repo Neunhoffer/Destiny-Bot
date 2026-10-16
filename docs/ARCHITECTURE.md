@@ -71,6 +71,8 @@ src/destiny_bot/
   __main__.py          `python -m destiny_bot`
   web/                 index.html, app.js, styles.css, icon.svg   (no build step, no CDN)
 tests/                 pytest suite (fixtures are generated in code; no binary fixtures committed)
+  e2e/                 drives the real reader in Chromium with the real voices (`pytest -m e2e`);
+                       open the reader with `?debug` to get window.athenaDebug timing hooks
 scripts/               start-windows.bat, start-mac.command, start-linux.sh
 ```
 

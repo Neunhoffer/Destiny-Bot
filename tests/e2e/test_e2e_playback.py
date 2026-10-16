@@ -278,6 +278,8 @@ def test_export_mp3_with_kokoro_plays(server, open_app, tmp_path):
     app.open_book()
     app.page.click("#btn-export")
     assert app.page.eval_on_selector("#export-voice", "s => s.value") == "kokoro::af_heart"
+    assert re.search(r"About .+ of audio\. Recording it takes about .+ with this voice\.",
+                     app.page.text_content("#export-estimate") or "")
     assert app.page.is_checked("input[name='export-format'][value='mp3']")
     app.page.click("#export-start")
     app.wait("document.querySelector('#export-files .file-link')", timeout=120)
@@ -294,4 +296,18 @@ def test_export_mp3_with_kokoro_plays(server, open_app, tmp_path):
             capture_output=True, text=True, check=True,
         ).stdout.split()
         assert probe[0] == "mp3" and float(probe[-1]) > 2.0, probe
+    app.check_no_errors()
+
+
+def test_export_starts_with_the_open_section(server, open_app):
+    text = "# One\n\nFirst chapter text.\n\n# Two\n\nSecond chapter text.\n\n# Three\n\nThird chapter text."
+    book = server.paste("Three chapters", text)
+    app = open_app(server.base, book_id=book["id"])
+    app.open_book()
+    app.page.click("#btn-export")
+    checked = app.page.eval_on_selector_all("#export-sections input", "boxes => boxes.map(b => b.checked)")
+    assert checked.count(True) == 1, checked
+    assert not app.page.is_checked("#export-all")
+    app.page.check("#export-all")
+    assert all(app.page.eval_on_selector_all("#export-sections input", "boxes => boxes.map(b => b.checked)"))
     app.check_no_errors()

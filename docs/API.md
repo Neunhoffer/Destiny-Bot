@@ -28,7 +28,7 @@ the only intended client. All JSON. Errors use FastAPI's shape, `{"detail": "<me
 
 // TocEntry
 {"id": "s3", "title": "Chapter 2: The Chemistry of Life", "level": 1, "page_start": 28, "page_end": 45,
- "block_count": 120}
+ "block_count": 120, "char_count": 48210}
 
 // Block (as displayed)
 {"kind": "heading|paragraph|list_item|quote|caption|figure|table|equation|footnote|code",
