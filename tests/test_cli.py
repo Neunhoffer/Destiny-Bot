@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import os
 import struct
 import subprocess
 import sys
@@ -534,7 +535,7 @@ def test_output_survives_a_windows_code_page_console(monkeypatch):
         print("线性代数 – Zoë")
     cli._make_output_safe()
     print("线性代数 – Zoë")
-    assert raw.getvalue().decode("cp1252").endswith("???? – Zoë\n")
+    assert raw.getvalue().decode("cp1252").endswith("???? – Zoë" + os.linesep)  # text mode writes \r\n on Windows
 
 
 def test_read_waits_in_short_steps_so_ctrl_c_works():

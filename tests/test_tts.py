@@ -667,7 +667,9 @@ def _windows_short_names(monkeypatch, short: str | None) -> list[str]:
 
 
 def test_espeak_data_path_uses_windows_short_names(monkeypatch):
-    assert registry.espeak_data_path(Path("/opt/Zoë/espeak-ng-data")) == "/opt/Zoë/espeak-ng-data"  # UTF-8 is fine here
+    monkeypatch.setattr(registry, "sys", SimpleNamespace(platform="linux"))  # the POSIX rules, on any test machine
+    zoe = Path("/opt/Zoë/espeak-ng-data")
+    assert registry.espeak_data_path(zoe) == str(zoe)  # UTF-8 is fine here
     # espeak-ng 1.52 keeps the folder in a 160-byte buffer (230 on Windows): longer is "missing" + exit(1).
     deep = "/Users/zoe/" + "Study folder/" * 10 + "site-packages/espeakng_loader/espeak-ng-data"
     assert len(deep) > 159 and registry.espeak_data_path(deep) is None
