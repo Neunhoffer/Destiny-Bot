@@ -183,23 +183,25 @@ _WORD = re.compile(r"[^\W\d_]+")
 _COMPOUND = re.compile(r"(?<![^\W\d_])([^\W\d_]+)-(?=([^\W\d_]+))")  # (anchored: linear time)
 
 
-def _line_break_hyphen(left: str, right: str, before: str, evidence: HyphenationEvidence | None) -> str:
+def _line_break_hyphen(
+    left: str, right: str, before: str, after: str, evidence: HyphenationEvidence | None
+) -> str:
     """How to rejoin "left-" at the end of a line with "right" at the start of the next.
 
-    ``before`` is the character before ``left``.
+    ``before`` and ``after`` are the characters around the two parts.
     """
     hyphenated, joined = f"{left}-{right}", left + right
     if left[-1].isdigit() or right[0].isdigit() or before in ("-", "‐", "‑"):
         return hyphenated  # "COVID-19", "3-methyl", "state-of-the-art"
-    if right[0].isupper() and not (left.isupper() and right.isupper()):
-        return hyphenated  # "pre-Columbian", "non-English" ("INFOR-MATION" is still one word)
     lo_left, lo_right = left.lower(), right.lower()
-    if lo_right in _SUSPENDED and len(left) >= 3:
-        return f"{left}- {right}"  # "first- and second-order"
+    if lo_right in _SUSPENDED and len(left) >= 3 and after not in ("-", "‐", "‑"):
+        return f"{left}- {right}"  # "first- and second-order" (but "interpreter-to-trace")
     if evidence is not None:
         keep = evidence.prefers(lo_left, lo_right)
         if keep is not None:
-            return hyphenated if keep else joined
+            return hyphenated if keep else joined  # (the book writes "TraceMonkey" elsewhere)
+    if right[0].isupper() and not (left.isupper() and right.isupper()):
+        return hyphenated  # "pre-Columbian", "non-English" ("INFOR-MATION" is still one word)
     if lo_left in _HYPHEN_PREFIXES:
         return joined if lo_right.startswith(_HYPHEN_PREFIXES[lo_left]) else hyphenated
     if lo_left in _CLOSED_PREFIXES:
@@ -217,8 +219,9 @@ def rejoin_line_breaks(text: str, evidence: HyphenationEvidence | None = None) -
     text = _DASH_BREAK.sub(r"\1", text)
 
     def repl(m: re.Match[str]) -> str:
-        start = m.start(1)
-        return _line_break_hyphen(m.group(1), m.group(2), m.string[start - 1 : start] if start else "", evidence)
+        start, end = m.start(1), m.end(2)
+        before = m.string[start - 1 : start] if start else ""
+        return _line_break_hyphen(m.group(1), m.group(2), before, m.string[end : end + 1], evidence)
 
     return _HYPHEN_BREAK.sub(repl, text)
 

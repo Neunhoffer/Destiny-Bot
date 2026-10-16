@@ -24,3 +24,6 @@ data/
 Thumbs.db
 .idea/
 .vscode/
+
+# Test data folder used by docs/HANDOFF-WINDOWS.md
+.athena-test-data/

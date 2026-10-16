@@ -791,14 +791,14 @@ def _find_tables_and_boxes(page: pymupdf.Page, pg: _Page) -> None:
         words = page.get_text("words", flags=_TEXT_FLAGS) if tables else []
         for tab in tables:
             try:
-                rows = _cell_texts([row.cells for row in tab.rows], words) or tab.extract()
+                rows = _cell_texts(tab.extract(), [row.cells for row in tab.rows], words)
                 header = getattr(tab, "header", None)
                 bbox = tuple(tab.bbox)
                 if header is not None and getattr(header, "external", False):
                     # PyMuPDF may take the line above a table as its header row; keep it
                     # unless it is really a caption ("Table 4. ..."), a heading above the
                     # table (one cell of text) or a sliced text line.
-                    names = (_cell_texts([header.cells], words) or [[n or "" for n in header.names]])[0]
+                    names = _cell_texts([header.names], [header.cells], words)[0]
                     hb = tuple(header.bbox)
                     one_cell = len(names) > 1 and sum(1 for n in names if n.strip()) <= 1
                     caption = _is_caption_text(" ".join(names).strip())
@@ -824,28 +824,33 @@ def _find_tables_and_boxes(page: pymupdf.Page, pg: _Page) -> None:
         pg.figures = _vector_figures(paths, pg, [t.bbox for t in pg.tables] + pg.boxes)
 
 
-def _cell_texts(rows: list[list], words: list[tuple]) -> list[list[str]] | None:
-    """Cell text from the page's words in reading order. (PyMuPDF's own extract() sorts
-    letters by position, which scrambles kerned words: "Active" became "Actvi e".)"""
-    if not words:
-        return None
+def _cell_texts(extracted: list[list], cells: list[list], words: list[tuple]) -> list[list[str]]:
+    """Cell text with its letters in reading order.
+
+    PyMuPDF's extract() sorts a cell's letters by position, which scrambles kerned
+    words ("Active" became "Actvi e"). Where the page's words in a cell hold exactly
+    the same letters, their order is used instead.
+    """
     out: list[list[str]] = []
-    for cells in rows:
-        texts: list[str] = []
-        for cell in cells:
-            if cell is None:
-                texts.append("")
-                continue
-            x0, y0, x1, y1 = cell
-            inside = sorted(
-                (w for w in words if x0 - 1 <= (w[0] + w[2]) / 2 <= x1 + 1 and y0 - 1 <= (w[1] + w[3]) / 2 <= y1 + 1),
-                key=lambda w: (w[5], w[6], w[7]),
-            )
-            lines: dict[tuple[int, int], list[str]] = {}
-            for w in inside:
-                lines.setdefault((w[5], w[6]), []).append(w[4])
-            texts.append("\n".join(" ".join(ws) for ws in lines.values()))
-        out.append(texts)
+    for texts, boxes in zip(extracted, cells):
+        row: list[str] = []
+        for k, text in enumerate(texts):
+            text = text or ""
+            box = boxes[k] if k < len(boxes) else None
+            if box is not None and text.strip():
+                x0, y0, x1, y1 = box
+                inside = sorted(
+                    (w for w in words if x0 - 1 <= (w[0] + w[2]) / 2 <= x1 + 1 and y0 - 1 <= (w[1] + w[3]) / 2 <= y1 + 1),
+                    key=lambda w: (w[5], w[6], w[7]),
+                )
+                lines: dict[tuple[int, int], list[str]] = {}
+                for w in inside:
+                    lines.setdefault((w[5], w[6]), []).append(w[4])
+                ordered = "\n".join(" ".join(ws) for ws in lines.values())
+                if sorted("".join(ordered.split())) == sorted("".join(text.split())):
+                    text = ordered
+            row.append(text)
+        out.append(row)
     return out
 
 
