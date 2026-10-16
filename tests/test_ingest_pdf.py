@@ -1259,3 +1259,120 @@ def test_long_chapter_splits_at_its_outline_sections(tmp_path):
         ("Chapter 3 Short", 2),
     ]
     assert doc.sections[2].blocks[0].text == "2.1 Topic 1"
+
+
+def _schedule_pdf(path: Path, *, weeks: int = 14) -> Path:
+    """A Word-style syllabus: a numbered list, then a class schedule laid out as a table
+    without borders that runs onto the next page, then more text."""
+    rng = random.Random(45)
+    b = PdfBuilder()
+    b.heading("Learning Outcomes", size=14)
+    for n in range(1, 4):
+        b._advance(b.body * 1.3)
+        b.text((b.x0, b.y + b.body), f"{n}.", size=b.body)  # the number is its own text run, as Word writes it
+        b.text((b.x0 + 18, b.y + b.body), f"Outcome {n}: explain cell transport in your own words.", size=b.body)
+        b.y += b.body * 1.3 + 3
+    b.heading("Weekly Schedule", size=14)
+    b.paragraph("The schedule may change; check the course page every week. " + para(rng, 2))
+    cols = (72, 160, 380)
+    for cells in [("Week", "Topic", "Reading")] + [
+        (str(w), f"Topic {w}: membranes, transport|and signaling part {w}", f"Chapter {w}, pages {w * 20}-{w * 20 + 18}")
+        for w in range(1, weeks + 1)
+    ]:
+        lines = [c.split("|") for c in cells]
+        height = len(max(lines, key=len)) * 14 + 10
+        if b.y + height > b.bottom:
+            # the page ends in the middle of a row: its last line goes to the next page
+            if len(lines[1]) > 1:
+                for x, part in zip(cols, lines):
+                    b.text((x, b.y + 11), part[0], size=11)
+                b.new_page()
+                b.text((cols[1], b.y + 11), lines[1][1], size=11)
+                b.y += 24
+                continue
+            b.new_page()
+        for x, part in zip(cols, lines):
+            for k, text in enumerate(part):
+                b.text((x, b.y + 11 + 14 * k), text, size=11)
+        b.y += height
+    b.space(12)
+    b.heading("Policies", size=14)
+    b.paragraph("LATE work loses ten percent per day. " + para(rng, 3))
+    return b.save(path)
+
+
+def test_table_without_borders_is_read_row_by_row(tmp_path):
+    doc = load(_schedule_pdf(tmp_path / "syllabus.pdf"))
+    tables = [bl for bl in blocks(doc) if bl.kind == BlockKind.TABLE]
+    assert len(tables) == 1  # one table, although it runs onto a second page
+    rows = tables[0].rows
+    assert rows[0] == ["Week", "Topic", "Reading"]
+    assert rows[1:] == [
+        [str(w), f"Topic {w}: membranes, transport and signaling part {w}", f"Chapter {w}, pages {w * 20}-{w * 20 + 18}"]
+        for w in range(1, 15)
+    ]
+    ts = texts(doc)
+    assert [t for t in ts if t.startswith(("1.", "2.", "3."))] == [
+        f"{n}. Outcome {n}: explain cell transport in your own words." for n in range(1, 4)
+    ]
+    assert not any(t.startswith(("Topic", "Chapter")) for t in ts)  # no cells left over as paragraphs
+    assert any(t.startswith("LATE work") for t in ts)
+
+
+def test_aligned_text_that_is_not_a_table_stays_text():
+    def line(text: str, x0: float, y0: float, size: float = 10) -> pdf_mod._Line:
+        ln = pdf_mod._Line(page=0, x0=x0, y0=y0, x1=x0 + 5.2 * len(text), y1=y0 + size, spans=[], size=size)
+        ln.text, ln.chars, ln.baseline = text, len(text), y0 + size
+        return ln
+
+    def page(rows: list[tuple[str, ...]], xs: tuple[float, ...]) -> pdf_mod._Page:
+        pg = pdf_mod._Page(index=0, width=612, height=792)
+        pg.lines.append(line("A full-width sentence of ordinary text that runs across the whole page.", 72, 60))
+        for r, row in enumerate(rows):
+            pg.lines.extend(line(text, x, 100 + 14 * r) for text, x in zip(row, xs) if text)
+        return pg
+
+    equations = [(f"f{k}(x) = a{k} + b{k}x", f"({k}.{k + 1})") for k in range(5)]
+    index = [(f"gradient {k}, {100 + k}", f"matrix {k}, {200 + k}, {210 + k}") for k in range(8)]
+    ticks = [(f"{v:.2f}", "") for v in (0.2, 0.15, 0.1, 0.05, 0.0)]
+    ticks[0] = ("0.20", "Density of the mixture model")
+    for rows, xs in [(equations, (150, 480)), (index, (72, 320)), (ticks, (72, 300))]:
+        assert pdf_mod._borderless_tables(page(rows, xs)) == []
+    real = [("Week", "Topic"), ("1", "Cells and membranes"), ("2", "Transport"), ("3", "Energy")]
+    assert pdf_mod._borderless_tables(page(real, (72, 200)))[0].rows == [list(r) for r in real]
+
+
+def test_kerned_table_cells_keep_their_letters_in_order():
+    # PyMuPDF sorts a cell's letters by position: a kerned "i" with no width came out "Actvi e".
+    words = [(79.2, 400, 124.1, 410, "Active", 3, 0, 0), (300, 400, 320, 410, "Yes", 4, 0, 0)]
+    cells = [[(72, 395, 263, 415), (263, 395, 455, 415)]]
+    assert pdf_mod._cell_texts([["Actvi e", "Yes"]], cells, words) == [["Active", "Yes"]]
+    # different letters: PyMuPDF's text is kept (a word merely touching the cell is not pulled in)
+    assert pdf_mod._cell_texts([["Act", "Yes"]], cells, words) == [["Act", "Yes"]]
+
+
+def test_heading_right_above_a_ruled_table_is_not_its_header_row(tmp_path):
+    b = PdfBuilder()
+    b.heading("Grading", size=14, after=0)
+    b.table([["Component", "Weight"], ["Midterm exam", "25%"], ["Final exam", "30%"], ["Labs", "45%"]])
+    b.paragraph("All grades are posted online.")
+    doc = load(b.save(tmp_path / "grading.pdf"))
+    assert [(bl.kind, bl.text) for bl in blocks(doc)][:1] == [(BlockKind.HEADING, "Grading")]
+    table = next(bl for bl in blocks(doc) if bl.kind == BlockKind.TABLE)
+    assert table.rows[0] == ["Component", "Weight"]
+
+
+@pytest.mark.parametrize(
+    ("text", "kept"),
+    [
+        ("(818) 708-8131 TELEX #298949 LINN UR", True),  # a letterhead line: real, though mostly digits
+        ("Yes / No", True),
+        ("Total: 25 pts", True),
+        ("12.5 13.0 14.2", True),
+        ("Cit", False),  # pieces of a logo
+        ("((11////44 44 jf Ad A ddds", False),
+        ("~ |", False),
+    ],
+)
+def test_ocr_noise_filter_keeps_short_real_lines(text, kept):
+    assert pdf_mod._plausible_ocr_text(text) is kept

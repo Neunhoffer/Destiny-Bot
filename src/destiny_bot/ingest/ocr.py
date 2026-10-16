@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import os
+import re
 import shutil
 import sys
 import threading
@@ -194,16 +195,127 @@ def _prepare(image: Image) -> Image:
     return ImageOps.autocontrast(image)
 
 
+# Text that is mostly real words was read the right way up; when it isn't (a photo taken
+# at an angle or sideways), the page is straightened and read again.
+_WORDS = re.compile(r"[A-Za-z]+")
+_VOWEL = re.compile(r"[aeiouyAEIOUY]")
+_CONSONANT_RUN = re.compile(r"[b-df-hj-np-tv-xz]{5,}", re.I)
+_MAX_SKEW_DEGREES = 20
+_DESKEW_DEGREES = 2.5  # Tesseract copes with less
+
+
+# Upside-down text comes out as made-up "words" (INOA, YORE, Sse); real English is full of these.
+_COMMON_WORDS = frozenset(
+    "the of and to a in is it you that he was for on are with as i his they be at one have this from or had "
+    "by not but what some we can out other were all there when up use your how said an each she which do "
+    "their time if will way about many then them would so these her make see him two has more day could go "
+    "come did no most my over know water than call first who may down been now find any new work part take "
+    "get place made where after back only year every our under name very through just how before move right "
+    "same tell does set three want also small end put read large even here must high such follow why ask "
+    "change light need try again point near each between because".split()
+)
+
+
+def _word_count(text: str) -> int:
+    """How much of ``text`` reads as real words (a measure of OCR success)."""
+    plausible = common = 0
+    for w in _WORDS.findall(text):
+        if w.lower() in _COMMON_WORDS:
+            common += 1
+        elif len(w) >= 3 and _VOWEL.search(w) and not _CONSONANT_RUN.search(w) and (
+            w.islower() or w.istitle() or w.isupper()
+        ):
+            plausible += 1
+    return 3 * common + plausible
+
+
+def _common_words(text: str) -> int:
+    return sum(1 for w in _WORDS.findall(text) if w.lower() in _COMMON_WORDS)
+
+
+def _poorly_read(text: str) -> bool:
+    """Nothing read, or hardly a common word (a tilted, sideways or upside-down page)."""
+    tokens = text.split()
+    return len(tokens) < 3 or _common_words(text) < 0.1 * len(tokens)
+
+
+def _skew_angle(gray: Image) -> float:
+    """The rotation (degrees, counter-clockwise) that makes the text lines level."""
+    from PIL import Image as PILImage
+    from PIL import ImageOps
+
+    small = gray.copy()
+    small.thumbnail((500, 500))
+    ink = ImageOps.invert(small).point(lambda v: 255 if v > 100 else 0)
+
+    def sharpness(angle: float) -> float:  # level lines of text: rows alternate ink / paper
+        profile = ink.rotate(angle, resample=PILImage.Resampling.BILINEAR, fillcolor=0)
+        rows = list(profile.resize((1, profile.height), PILImage.Resampling.BOX).tobytes())
+        mean = sum(rows) / len(rows)
+        return sum((v - mean) ** 2 for v in rows)
+
+    best = max(range(-_MAX_SKEW_DEGREES, _MAX_SKEW_DEGREES + 1), key=sharpness)
+    if abs(best) == _MAX_SKEW_DEGREES:
+        return 0.0  # no level found inside the range: a picture, not tilted text
+    return max((best + k / 4 for k in range(-4, 5)), key=sharpness)
+
+
+def _orientation(gray: Image) -> int:
+    """Degrees (90, 180, 270) a sideways or upside-down page must turn clockwise; 0 if upright
+    or unknown (Tesseract's orientation detection; needs its "osd" data)."""
+    import pytesseract
+
+    try:
+        info = pytesseract.image_to_osd(
+            gray, config="--psm 0", output_type=pytesseract.Output.DICT, timeout=_OCR_TIMEOUT_SECONDS
+        )
+        rotate = int(info.get("rotate", 0)) % 360
+        return rotate if rotate in (90, 180, 270) and float(info.get("orientation_conf", 0)) >= 2 else 0
+    except Exception:
+        return 0
+
+
 def ocr_image(image: Image, *, lang: str = "eng") -> str:
-    """Recognise the text in a Pillow image. Raises :class:`IngestError`."""
+    """Recognise the text in a Pillow image. Raises :class:`IngestError`.
+
+    A photo taken at an angle is levelled first. A page that still reads as mostly
+    non-words (sideways or upside down) is turned upright with Tesseract's orientation
+    detection and read again; the reading with the most real words is kept.
+    """
     _require()
     import pytesseract
+    from PIL import Image as PILImage
 
     if image.width < 3 or image.height < 3:
         return ""
     prepared = _prepare(image)
     if hasattr(pytesseract.pytesseract, "environ"):  # the environment pytesseract starts tesseract with
         pytesseract.pytesseract.environ = _tesseract_environment()
+    original = prepared
+    angle = _skew_angle(prepared)
+    if abs(angle) >= _DESKEW_DEGREES:  # a photo taken at an angle: level it first
+        prepared = prepared.rotate(angle, resample=PILImage.Resampling.BICUBIC, expand=True, fillcolor=255)
+    text = _read(prepared, lang)
+    if not _poorly_read(text):
+        return text
+    candidates = [text]
+    if prepared is not original:
+        candidates.append(_read(original, lang))
+    turn = _orientation(original)
+    if turn:
+        upright = original.rotate(-turn, expand=True, fillcolor=255)
+        candidates.append(_read(upright, lang))
+        angle = _skew_angle(upright)
+        if abs(angle) >= _DESKEW_DEGREES:
+            level = upright.rotate(angle, resample=PILImage.Resampling.BICUBIC, expand=True, fillcolor=255)
+            candidates.append(_read(level, lang))
+    return max(candidates, key=_word_count)
+
+
+def _read(prepared: Image, lang: str) -> str:
+    """One Tesseract pass over a prepared image."""
+    import pytesseract
+
     try:
         text = pytesseract.image_to_string(prepared, lang=lang, config="--psm 3", timeout=_OCR_TIMEOUT_SECONDS)
     except pytesseract.TesseractNotFoundError as exc:

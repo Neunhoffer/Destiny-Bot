@@ -54,8 +54,7 @@ def test_kokoro_starts_at_once_fetches_in_order_and_keeps_up(server, open_app):
     time.sleep(9)
     state = app.state()
     rtf = state["rtf"]["kokoro"]
-    assert state["lookahead"] > 40, "a slow voice should be fetched further ahead"
-    assert state["plannedAhead"] > 3, state
+    assert state["plannedAhead"] > 3, f"clips should be fetched beyond the scheduled sentences: {state}"
     rate_at = app.events("rate")[0]["perf"]
     after = [e for e in app.events("schedule") if e["perf"] > rate_at]
     assert after, "nothing was read after the speed change"
@@ -202,15 +201,17 @@ def test_repeated_sentences_play_through(server, open_app):
 def test_slow_voice_shows_loading_and_offers_the_faster_voice(server, open_app):
     """When Kokoro can't keep up, she sees "Loading the voice…" and gets a one-click switch to Piper."""
     server.settings(tts_engine="kokoro", speed=1.0, voices={"kokoro": "af_heart"})
-    book = server.paste("Slow computer", " ".join(f"Step {n} is next." for n in range(1, 40)))
+    book = server.paste("Slow computer", " ".join(f"Step {n} of the experiment is to stir the mixture." for n in range(1, 40)))
     app = open_app(server.base, book_id=book["id"])
     app.open_book()
-    app.js("(athenaDebug.slowTts = 1500, athenaDebug.fastForward = 2)")  # pretend synthesis is slow
+    app.js("(athenaDebug.slowTts = 3000, athenaDebug.fastForward = 2)")  # pretend synthesis is slow
     app.page.click("#btn-play")
     app.wait("document.body.classList.contains('is-loading-voice')", timeout=30)
     assert app.page.text_content("#now-status").startswith("Loading the voice")
     assert app.page.get_attribute("#btn-play", "aria-busy") == "true"
     app.wait("document.querySelector('.toast-offer')", timeout=90)
+    slow = app.state()
+    assert slow["lookahead"] > 60, f"a slow voice should be fetched much further ahead: {slow}"
     offer = app.page.text_content(".toast-offer")
     assert "a bit slow for this voice" in offer and "faster natural voice" in offer
     app.js("(athenaDebug.slowTts = 0)")

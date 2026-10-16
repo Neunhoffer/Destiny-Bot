@@ -1364,6 +1364,8 @@ def test_image_through_load_document(tmp_path, fresh_ocr_cache):
         ("co-\nauthor", "co-author"),
         ("evidence-\nbased", "evidence-based"),
         ("state-of-the-\nart", "state-of-the-art"),
+        ("interpreter-\nto-trace", "interpreter-to-trace"),
+        ("multi-\nple-choice", "multiple-choice"),
         # a capital or a digit after the break: a real hyphen, and no stray space
         ("pre-\nColumbian", "pre-Columbian"),
         ("COVID-\n19", "COVID-19"),
@@ -1389,6 +1391,8 @@ def test_line_break_hyphens_follow_the_documents_own_spelling():
     assert clean_display_text("the co-\nop", evidence=evidence) == "the co-op"  # default would join
     assert clean_display_text("our co-\noperative", evidence=evidence) == "our cooperative"
     assert clean_display_text("well-\nbeing", evidence=evidence) == "well-being"
+    evidence = HyphenationEvidence(["We call it TraceMonkey.", "TraceMonkey records traces."])
+    assert clean_display_text("so Trace-\nMonkey starts", evidence=evidence) == "so TraceMonkey starts"
     evidence = HyphenationEvidence(["The selfesteem score."])  # (odd, but it is the book's spelling)
     assert clean_display_text("self-\nesteem", evidence=evidence) == "selfesteem"
 
@@ -1562,3 +1566,39 @@ def test_picture_descriptions_that_are_file_names_are_not_read(tmp_path, alt, ex
     # web page / EPUB chapter
     blocks, _ = html_to_blocks(f'<p>Cells divide.</p><figure><img src="a.png" alt="{alt}"></figure>')
     assert [b.text for b in blocks if b.kind == K.FIGURE] == figures
+
+
+_HANDOUT = [
+    "Lab 3: Osmosis and Diffusion",
+    "",
+    "Purpose: observe how water moves across a membrane.",
+    "Materials: potato cores, salt water, distilled water, scale.",
+    "",
+    "Weigh each potato core and record the mass in your notebook.",
+    "Place three cores in salt water for thirty minutes.",
+]
+
+
+@requires_tesseract
+@pytest.mark.parametrize("angle", [0, 8, 90, 180])
+def test_photo_taken_at_an_angle_or_sideways_is_read(tmp_path, fresh_ocr_cache, angle):
+    from PIL import Image
+
+    # Before: 8 degrees, 90 and 180 all came out as nothing or as gibberish.
+    photo = render_text_image(_HANDOUT, size=34, width=1500).rotate(
+        angle, expand=True, fillcolor="white", resample=Image.Resampling.BICUBIC
+    )
+    path = tmp_path / "handout.jpg"
+    path.write_bytes(_image_bytes(photo.convert("L"), "JPEG"))
+    text = " ".join(texts(load_document(path)))
+    for line in _HANDOUT:
+        if line:
+            assert line in text, (angle, text)
+
+
+def test_ocr_reading_quality_measure():
+    good = "Purpose: observe how water moves across a membrane."
+    upside_down = "‘saynulty AUIY) JOJ 19M eS Ul $9109 891} Bde} yOoq9e}0U INOA UI] Sse BY} P1ODE1"  # (real output)
+    assert not ocr_module._poorly_read(good)
+    assert ocr_module._poorly_read("") and ocr_module._poorly_read(upside_down)
+    assert ocr_module._word_count(good) > ocr_module._word_count(upside_down)

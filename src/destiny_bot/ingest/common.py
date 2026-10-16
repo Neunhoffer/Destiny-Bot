@@ -208,6 +208,8 @@ def _line_break_hyphen(
         return hyphenated if lo_right.startswith(_CLOSED_PREFIXES[lo_left]) else joined
     if lo_right in _COMPOUND_TAILS and len(left) >= 4:
         return hyphenated  # "evidence-based"
+    if after in ("-", "‐", "‑"):
+        return hyphenated  # "interpreter-to-trace": one link of a longer compound
     return joined
 
 

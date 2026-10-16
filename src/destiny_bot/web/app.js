@@ -745,17 +745,18 @@ const clips = {
   /** Learn how fast this engine synthesizes and how fast it speaks, from a decoded clip. */
   learn(entry, duration) {
     entry.duration = duration;
-    if (entry.learned || !(duration > 0.3) || !entry.fetchSeconds) return;
+    // Headings and other short clips are spoken slowly and are mostly fixed overhead.
+    if (entry.learned || entry.text.length < 40 || !(duration > 0.3) || !entry.fetchSeconds) return;
     entry.learned = true;
+    const cps = entry.text.length / (duration * entry.rate);
+    if (cps > 4 && cps < 40) this.charsPerSecond = this.charsPerSecond * 0.8 + cps * 0.2;
     if (entry.fetchSeconds < 0.02 * duration) return; // came from the server's cache: says nothing about speed
-    // Weighted by audio length (short clips carry a fixed overhead), starting from a guess.
+    // Weighted by audio length, starting from a guess.
     const guess = this.rtf(entry.engine);
     const s = this.synth.get(entry.engine) || { busy: 5 * guess, heard: 5 };
     s.busy = s.busy * 0.9 + Math.min(entry.fetchSeconds, duration * 2); // the first clip also loads the voice
     s.heard = s.heard * 0.9 + duration;
     this.synth.set(entry.engine, s);
-    const cps = entry.text.length / (duration * entry.rate);
-    if (cps > 4 && cps < 40) this.charsPerSecond = this.charsPerSecond * 0.8 + cps * 0.2;
   },
 
   /** Roughly how long until the voice engine finishes the request it is working on. */
@@ -767,7 +768,7 @@ const clips = {
   rtf(engine) {
     const s = this.synth.get(engine);
     if (s) return s.busy / s.heard;
-    return engine === 'kokoro' ? 0.6 : 0.2;
+    return engine === 'kokoro' ? 0.45 : 0.2; // typical of a 4-core laptop
   },
 
   /** Seconds of listening to keep fetched ahead: more when the voice is slow to make. */

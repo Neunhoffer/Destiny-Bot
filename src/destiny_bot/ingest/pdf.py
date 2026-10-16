@@ -161,6 +161,7 @@ class _Line:
 class _Table:
     bbox: tuple[float, float, float, float]
     rows: list[list[str]]
+    starts: tuple[float, ...] = ()  # column positions of a table found without borders
 
 
 @dataclass(slots=True)
@@ -380,18 +381,21 @@ def _read_pages(
     font_weights: Counter[str] = Counter()
     pitch_samples: list[float] = []
     ocr_state: dict[str, object] = {}
+    follows: tuple[float, ...] = ()  # columns of a borderless table running onto the next page
     for i in range(n):
         if progress:
             progress(0.9 * i / n, f"Reading page {i + 1} of {n}")
         try:
             page = doc[i]
-            pg = _extract_page(page, i, size_weights, pitch_samples)
+            pg = _extract_page(page, i, size_weights, pitch_samples, follows)
             for ln in pg.lines:
                 font_weights[_line_font(ln)] += ln.chars
         except Exception:
             report.failed.append(i)
             pages.append(_Page(index=i, width=612, height=792))
+            follows = ()
             continue
+        follows = next((t.starts for t in reversed(pg.tables) if t.starts and t.bbox[3] > 0.7 * pg.height), ())
         garbled = _garbled(pg)
         if garbled or _needs_ocr(page, pg):
             (report.garbled if garbled else report.scanned).append(i)
@@ -522,7 +526,11 @@ def _rotator(direction: tuple[int, int], w: float, h: float) -> Callable[[float,
     return lambda x, y: (w - x, h - y)  # upside down
 
 
-def _extract_page(page: pymupdf.Page, index: int, size_weights: Counter, pitch_samples: list[float]) -> _Page:
+def _extract_page(
+    page: pymupdf.Page, index: int, size_weights: Counter, pitch_samples: list[float], follows: tuple = ()
+) -> _Page:
+    """One page's lines, tables, boxes and pictures. ``follows`` holds the columns of a
+    borderless table that ran to the bottom of the previous page."""
     w, h = _page_dims(page)
     pg = _Page(index=index, width=w, height=h)
     data = page.get_text("dict", flags=_TEXT_FLAGS)
@@ -598,7 +606,7 @@ def _extract_page(page: pymupdf.Page, index: int, size_weights: Counter, pitch_s
     pg.image_rects = _image_rects(page)
     if rot is None:
         _find_tables_and_boxes(page, pg)
-        pg.tables.extend(_borderless_tables(pg))
+        pg.tables.extend(_borderless_tables(pg, follows))
     else:  # sideways page: bring picture positions into reading coordinates (tables are skipped)
         rects = []
         for x0, y0, x1, y1 in pg.image_rects:
@@ -962,9 +970,10 @@ _INDEX_ENTRY_RE = re.compile(r",\s*(?:\d{1,4}|[ivxlc]{1,6})(?:\s*[-–]\s*\d{1,4
 _CELL_MARKER_RE = re.compile(r"^(?:[•●○◦▪■□◆►‣⁃∙·*\-–—]|\(?(?:\d{1,3}|[a-zA-Z]|[ivx]{1,4})[.)])$")
 
 
-def _borderless_tables(pg: _Page) -> list[_Table]:
+def _borderless_tables(pg: _Page, follows: tuple = ()) -> list[_Table]:
     """Tables drawn without lines (a Word table with no borders, a class schedule): rows of
-    short cells starting at the same few x positions, inside single-column text."""
+    short cells starting at the same few x positions, inside single-column text. A table
+    continued from the previous page (columns ``follows``) may be just a row or two."""
     pictures = pg.image_rects + pg.figures
     lines = [
         ln
@@ -996,6 +1005,14 @@ def _borderless_tables(pg: _Page) -> list[_Table]:
             continue
         size = rows[k][0].size
         starts = sorted(ln.x0 for ln in rows[k])
+        continued = (
+            bool(follows)
+            and not tables
+            and rows[k][0].y0 < 0.35 * pg.height
+            and all(any(abs(x - y) <= size for y in follows) for x in starts)
+        )
+        if continued:
+            starts = list(follows)
         run = [rows[k]]
         if k and not tabular(rows[k - 1]) and _wrapped_cell_row(rows[k - 1], rows[k], starts, size):
             run.insert(0, rows[k - 1])  # the end of a cell from the previous page
@@ -1012,13 +1029,34 @@ def _borderless_tables(pg: _Page) -> list[_Table]:
                 break  # a line at the left edge after a gap: text after the table
             run.append(row)
             j += 1
-        table = _grid_table(run, starts, size, tabular, lines)
+        above = rows[k - 1] if k and run[0] is rows[k] else (rows[k - 2] if k >= 2 else None)
+        table = _grid_table(run, starts, size, tabular, lines, continued=continued, above=above)
         if table is not None:
             tables.append(table)
             k = j
         else:
             k += 1
     return tables
+
+
+def _header_cells(row: list[_Line], run: list[list[_Line]], starts: list[float], size: float) -> list[str] | None:
+    """The cells of ``row`` as the header of the table ``run``, or None if it isn't one."""
+    if len(row) < 2 or any(abs(ln.size - size) > 0.6 for ln in row) or run[0][0].y0 - max(ln.y1 for ln in row) > 1.5 * size:
+        return None
+    extents = [[math.inf, -math.inf] for _ in starts]
+    for r in run:
+        for ln in r:
+            c = _column_index(ln, starts, size)
+            if c is not None:
+                extents[c] = [min(extents[c][0], ln.x0), max(extents[c][1], ln.x1)]
+    cells = [""] * len(starts)
+    for ln in row:
+        overlaps = [min(ln.x1, b) - max(ln.x0, a) for a, b in extents]
+        c = max(range(len(starts)), key=lambda j: overlaps[j])
+        if overlaps[c] <= 0 or cells[c]:
+            return None
+        cells[c] = ln.text
+    return cells
 
 
 def _wrapped_cell_row(row: list[_Line], below: list[_Line], starts: list[float], size: float) -> bool:
@@ -1039,10 +1077,21 @@ def _column_index(ln: _Line, starts: list[float], size: float) -> int | None:
 
 
 def _grid_table(
-    run: list[list[_Line]], starts: list[float], size: float, tabular: Callable, lines: list[_Line]
+    run: list[list[_Line]],
+    starts: list[float],
+    size: float,
+    tabular: Callable,
+    lines: list[_Line],
+    *,
+    continued: bool = False,
+    above: list[_Line] | None = None,
 ) -> _Table | None:
-    """Cells of a borderless table candidate, or None when it looks like columns of prose."""
-    if sum(1 for row in run if tabular(row)) < 3:
+    """Cells of a borderless table candidate, or None when it looks like columns of prose.
+
+    ``above`` is the row of text right above the candidate: its header row when its
+    cells sit over the columns (headings of right-aligned numbers start further left)."""
+    min_rows = 1 if continued else 3
+    if sum(1 for row in run if tabular(row)) < min_rows:
         return None
     grid: list[list[str]] = []
     widths: list[list[float]] = [[] for _ in starts]
@@ -1061,13 +1110,20 @@ def _grid_table(
         return None  # every column full of text: a multi-column page, not a table
     x0, x1 = starts[0], max(ln.x1 for row in run for ln in row)
     y0, y1 = min(ln.y0 for ln in run[0]), max(ln.y1 for ln in run[-1])
+    header = _header_cells(above, run, starts, size) if above and not continued else None
+    if header is not None:
+        grid.insert(0, header)
+        y0 = min(ln.y0 for ln in above)
+        x0 = min(x0, min(ln.x0 for ln in above))
+        run = [above] + run
     members = {id(ln) for row in run for ln in row}
-    if not any(id(ln) not in members and ln.x0 < starts[1] - 2 and ln.x1 > starts[1] + 2 for ln in lines):
+    crossing = any(id(ln) not in members and ln.x0 < starts[1] - 2 and ln.x1 > starts[1] + 2 for ln in lines)
+    if not crossing and not continued:
         return None  # nothing on the page crosses the columns: a column layout, not a table in the text
-    rows = _clean_table(grid)
-    if rows is None or len(rows) < 3 or _not_a_table(rows):
+    rows = _clean_table(grid, continued=continued)
+    if rows is None or len(rows) < min_rows or (not continued and _not_a_table(rows)):
         return None
-    return _Table(bbox=(x0 - 1, y0 - 1, x1 + 1, y1 + 1), rows=rows)
+    return _Table(bbox=(x0 - 1, y0 - 1, x1 + 1, y1 + 1), rows=rows, starts=tuple(starts))
 
 
 def _not_a_table(rows: list[list[str]]) -> bool:
@@ -1127,14 +1183,18 @@ def _cuts_through_text(bbox: tuple, lines: list[_Line]) -> bool:
     return False
 
 
-def _clean_table(rows: list[list[str | None]]) -> list[list[str]] | None:
-    """Clean cell text, drop empty rows/columns; None if it isn't really a table."""
+def _clean_table(rows: list[list[str | None]], *, continued: bool = False) -> list[list[str]] | None:
+    """Clean cell text, drop empty rows/columns; None if it isn't really a table.
+
+    ``continued``: the last rows of a table from the previous page (kept as they are)."""
     grid = [[clean_display_text(_CONTROL_RE.sub("", c or "")) for c in row] for row in rows if row]
     grid = [row for row in grid if any(row)]
     if not grid:
         return None
     width = max(len(r) for r in grid)
     grid = [r + [""] * (width - len(r)) for r in grid]
+    if continued:
+        return grid if width >= 2 else None
     keep = [j for j in range(width) if any(r[j] for r in grid)]
     grid = [[r[j] for j in keep] for r in grid]
     if len(grid) < 2 or len(keep) < 2:
@@ -1244,16 +1304,26 @@ def _ocr_paragraphs(text: str) -> list[str]:
     return [p for p in paras if _plausible_ocr_text(p)]
 
 
+_SHORT_WORDS = frozenset(
+    "yes no and the for not but you are was how why who all any can may due end key lab use see one two six "
+    "ten day age red art law set sum".split()
+)
+
+
 def _plausible_ocr_text(text: str) -> bool:
     """Reject OCR noise from pictures (logos, cover art): mostly symbols, or no real word."""
     chars = [c for c in text if not c.isspace()]
     if not chars:
         return False
     letters = sum(1 for c in chars if c.isalpha())
+    words = re.findall(r"[^\W\d_]+", text)
+    real = any(len(w) >= 4 and re.search(r"[aeiouyAEIOUY]", w) for w in words)
     if letters < 0.5 * len(chars):
-        return bool(re.fullmatch(r"[\d\s.,:;%$€£()+\-–/]+", text)) and len(chars) >= 4  # a line of numbers
+        if re.fullmatch(r"[\d\s.,:;%$€£()+\-–/]+", text):
+            return len(chars) >= 4  # a line of numbers
+        return real and len(chars) >= 15  # "(818) 708-8131 TELEX 298949": a phone number with words
     if len(chars) < 15:
-        return bool(re.search(r"[A-Za-z]{4,}", text))
+        return real or any(w.lower() in _SHORT_WORDS for w in words)  # "Yes / No"
     return True
 
 
